@@ -234,6 +234,71 @@ func (s *DeviceStore) GetBinding(ctx context.Context, deviceID string, space can
 	return b, nil
 }
 
+// GetBindingByID loads a binding by its id.
+func (s *DeviceStore) GetBindingByID(ctx context.Context, bindingID string) (device.Binding, error) {
+	var b device.Binding
+	var state string
+	var initialized, lastSync sql.NullString
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, device_id, space_id, state, epoch, applied_revision, received_revision,
+		       max_client_seq, initialized_at, last_sync_at, created_at, updated_at
+		FROM device_space_bindings WHERE id = ?`, bindingID).
+		Scan(&b.ID, &b.DeviceID, &b.SpaceID, &state, &b.Epoch, &b.AppliedRevision, &b.ReceivedRevision,
+			&b.MaxClientSeq, &initialized, &lastSync, &createdAt, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return device.Binding{}, device.ErrBindingNotFound
+	}
+	if err != nil {
+		return device.Binding{}, err
+	}
+	b.State = device.BindingState(state)
+	if initialized.Valid {
+		b.InitializedAt, _ = time.Parse(time.RFC3339Nano, initialized.String)
+	}
+	if lastSync.Valid {
+		b.LastSyncAt, _ = time.Parse(time.RFC3339Nano, lastSync.String)
+	}
+	b.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	b.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	return b, nil
+}
+
+// ListBindingsByDevice returns all bindings of a device.
+func (s *DeviceStore) ListBindingsByDevice(ctx context.Context, deviceID string) ([]device.Binding, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, device_id, space_id, state, epoch, applied_revision, received_revision,
+		       max_client_seq, initialized_at, last_sync_at, created_at, updated_at
+		FROM device_space_bindings WHERE device_id = ? ORDER BY created_at`, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []device.Binding
+	for rows.Next() {
+		var b device.Binding
+		var state string
+		var initialized, lastSync sql.NullString
+		var createdAt, updatedAt string
+		if err := rows.Scan(&b.ID, &b.DeviceID, &b.SpaceID, &state, &b.Epoch, &b.AppliedRevision, &b.ReceivedRevision,
+			&b.MaxClientSeq, &initialized, &lastSync, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		b.State = device.BindingState(state)
+		if initialized.Valid {
+			b.InitializedAt, _ = time.Parse(time.RFC3339Nano, initialized.String)
+		}
+		if lastSync.Valid {
+			b.LastSyncAt, _ = time.Parse(time.RFC3339Nano, lastSync.String)
+		}
+		b.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+		b.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 // ActivateBinding moves a pending binding to active.
 func (s *DeviceStore) ActivateBinding(ctx context.Context, bindingID string, at time.Time) error {
 	res, err := s.db.ExecContext(ctx, `

@@ -6,8 +6,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/google/uuid"
-
 	"pontis/internal/auth"
 )
 
@@ -29,11 +27,6 @@ func (s *AuthStore) CountUsers(ctx context.Context) (int64, error) {
 // CreateUser inserts a user, translating uniqueness violations into
 // domain errors.
 func (s *AuthStore) CreateUser(ctx context.Context, u auth.User, passwordHash string) error {
-	id, err := uuid.NewV7()
-	if err != nil {
-		return err
-	}
-
 	var email, emailNorm any
 	if u.Email != "" {
 		email, emailNorm = u.Email, u.EmailNorm
@@ -63,11 +56,11 @@ func (s *AuthStore) CreateUser(ctx context.Context, u auth.User, passwordHash st
 		}
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO users (id, username, username_normalized, display_name, email, email_normalized,
 			password_hash, role, status, locale, default_space_id, password_changed_at, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id.String(), u.Username, u.UsernameNorm, u.DisplayName, email, emailNorm,
+		u.ID, u.Username, u.UsernameNorm, u.DisplayName, email, emailNorm,
 		passwordHash, string(u.Role), string(u.Status), u.Locale, defaultSpace,
 		formatTime(u.PasswordChangedAt), formatTime(u.CreatedAt), formatTime(u.UpdatedAt))
 	return err

@@ -1,5 +1,5 @@
-// Package app is the composition root: it wires config, storage and the
-// HTTP server together and owns the process lifecycle.
+// Package app is the composition root: it wires config, storage, domain
+// services and the HTTP server together and owns the process lifecycle.
 package app
 
 import (
@@ -10,10 +10,20 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
+	"pontis/internal/auth"
 	"pontis/internal/config"
+	"pontis/internal/device"
+	"pontis/internal/httpapi"
 	"pontis/internal/logging"
+	"pontis/internal/space"
 	"pontis/internal/store/sqlite"
+	"pontis/internal/sync"
 )
+
+// sessionTTL is the web session lifetime.
+const sessionTTL = 24 * time.Hour
 
 // App holds the fully wired runtime dependencies.
 type App struct {
@@ -38,17 +48,43 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 	logger.Info("database ready", "path", cfg.DatabasePath)
 
-	a := &App{Config: cfg, Logger: logger, DB: db}
+	instanceID, err := sqlite.InstanceID(ctx, db)
+	if err != nil {
+		return err
+	}
+
+	api := &httpapi.Server{
+		Auth:       auth.NewService(sqlite.NewAuthStore(db), sessionTTL),
+		Devices:    device.NewService(sqlite.NewDeviceStore(db)),
+		Spaces:     space.NewService(sqlite.NewSpaceStore(db)),
+		Sync:       sync.NewService(sqlite.NewSyncStore(db)),
+		InstanceID: instanceID,
+		Logger:     logger,
+	}
+
+	mux := chi.NewMux()
+	mux.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if err := db.PingContext(r.Context()); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"db_error"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	mux.Mount("/", api.Router())
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           a.routes(),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("server listening", "addr", cfg.Listen, "data_dir", cfg.DataDir)
+		logger.Info("server listening", "addr", cfg.Listen, "data_dir", cfg.DataDir, "instance_id", instanceID)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -68,20 +104,4 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 	logger.Info("server stopped")
 	return nil
-}
-
-func (a *App) routes() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		if err := a.DB.PingContext(r.Context()); err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"status":"db_error"}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-	return mux
 }

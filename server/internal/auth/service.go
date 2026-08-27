@@ -92,6 +92,11 @@ func (s *Service) CreateUser(ctx context.Context, p CreateUserParams) (User, err
 		return User{}, err
 	}
 
+	userID, err := uuid.NewV7()
+	if err != nil {
+		return User{}, err
+	}
+
 	displayName := p.DisplayName
 	if displayName == "" {
 		displayName = p.Username
@@ -99,6 +104,7 @@ func (s *Service) CreateUser(ctx context.Context, p CreateUserParams) (User, err
 
 	now := time.Now().UTC()
 	u := User{
+		ID:                userID.String(),
 		Username:          p.Username,
 		UsernameNorm:      NormalizeUsername(p.Username),
 		DisplayName:       displayName,

@@ -39,6 +39,12 @@ type Store interface {
 	// GetBinding loads the binding of a device for a space.
 	GetBinding(ctx context.Context, deviceID string, space canonical.SpaceID) (Binding, error)
 
+	// GetBindingByID loads a binding by its id.
+	GetBindingByID(ctx context.Context, bindingID string) (Binding, error)
+
+	// ListBindingsByDevice returns all bindings of a device.
+	ListBindingsByDevice(ctx context.Context, deviceID string) ([]Binding, error)
+
 	// ActivateBinding moves a pending binding to active and stamps
 	// initialized_at.
 	ActivateBinding(ctx context.Context, bindingID string, at time.Time) error
@@ -46,6 +52,22 @@ type Store interface {
 	// UpdateBindingSync advances the binding watermarks after a successful
 	// sync round.
 	UpdateBindingSync(ctx context.Context, bindingID string, appliedRevision, receivedRevision, maxClientSeq int64, lastSyncAt time.Time) error
+}
+
+// GetBindingByID loads a binding by its id.
+func (s *Service) GetBindingByID(ctx context.Context, bindingID string) (Binding, error) {
+	return s.store.GetBindingByID(ctx, bindingID)
+}
+
+// ListBindings returns all bindings of a device.
+func (s *Service) ListBindings(ctx context.Context, deviceID string) ([]Binding, error) {
+	return s.store.ListBindingsByDevice(ctx, deviceID)
+}
+
+// ActivateBinding moves a pending binding to active. In production this
+// happens after initial sync verification; exposed for the sync flow.
+func (s *Service) ActivateBinding(ctx context.Context, bindingID string) error {
+	return s.store.ActivateBinding(ctx, bindingID, time.Now().UTC())
 }
 
 // Service implements device and binding lifecycle.
