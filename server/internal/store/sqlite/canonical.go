@@ -35,13 +35,14 @@ type canonTx struct {
 func (t *canonTx) Commit(ctx context.Context) error   { return t.tx.Commit() }
 func (t *canonTx) Rollback(ctx context.Context) error { return t.tx.Rollback() }
 
-func (t *canonTx) LoadSpace(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error) {
+const spaceColumns = `
+	SELECT id, owner_user_id, name, epoch, current_revision, journal_floor_revision, created_at, updated_at
+	FROM sync_spaces WHERE id = ?`
+
+func scanSpace(row interface{ Scan(dest ...any) error }) (canonical.SyncSpace, error) {
 	var s canonical.SyncSpace
 	var createdAt, updatedAt string
-	err := t.tx.QueryRowContext(ctx, `
-		SELECT id, owner_user_id, name, epoch, current_revision, journal_floor_revision, created_at, updated_at
-		FROM sync_spaces WHERE id = ?`, string(id)).
-		Scan(&s.ID, &s.OwnerUserID, &s.Name, &s.Epoch, &s.CurrentRevision, &s.JournalFloorRevision, &createdAt, &updatedAt)
+	err := row.Scan(&s.ID, &s.OwnerUserID, &s.Name, &s.Epoch, &s.CurrentRevision, &s.JournalFloorRevision, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return canonical.SyncSpace{}, canonical.ErrSpaceNotFound
 	}
@@ -51,6 +52,10 @@ func (t *canonTx) LoadSpace(ctx context.Context, id canonical.SpaceID) (canonica
 	s.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 	s.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
 	return s, nil
+}
+
+func (t *canonTx) LoadSpace(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error) {
+	return scanSpace(t.tx.QueryRowContext(ctx, spaceColumns, string(id)))
 }
 
 func (t *canonTx) LoadNode(ctx context.Context, space canonical.SpaceID, id canonical.NodeID) (canonical.Node, error) {

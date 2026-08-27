@@ -83,16 +83,26 @@ func (e *Executor) Execute(ctx context.Context, store Store, origin Origin, cmds
 		}
 	}()
 
-	for _, cmd := range cmds {
-		if err := e.apply(ctx, tx, cmd, origin); err != nil {
-			return err
-		}
+	if err := e.ApplyTx(ctx, tx, origin, cmds...); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	committed = true
+	return nil
+}
+
+// ApplyTx applies commands within a caller-managed transaction. The caller
+// owns commit/rollback; the sync engine uses this to interleave its own
+// decision logic and receipt writes in the same atomic unit.
+func (e *Executor) ApplyTx(ctx context.Context, tx Tx, origin Origin, cmds ...Command) error {
+	for _, cmd := range cmds {
+		if err := e.apply(ctx, tx, cmd, origin); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
