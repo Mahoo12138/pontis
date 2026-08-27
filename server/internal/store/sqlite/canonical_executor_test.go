@@ -30,7 +30,7 @@ func setupCanonicalTest(t *testing.T) (*canonical.Executor, *Store, canonical.Sp
 
 func mustExec(t *testing.T, e *canonical.Executor, store *Store, cmds ...canonical.Command) {
 	t.Helper()
-	if err := e.Execute(context.Background(), store, cmds...); err != nil {
+	if err := e.Execute(context.Background(), store, canonical.Origin{Type: canonical.OriginSystem}, cmds...); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 }
@@ -119,14 +119,15 @@ func TestMoveCycleRejected(t *testing.T) {
 	)
 	revBefore := currentRevision(t, store, space)
 
-	err := e.Execute(context.Background(), store, canonical.MoveNode{
+	sysOrigin := canonical.Origin{Type: canonical.OriginSystem}
+	err := e.Execute(context.Background(), store, sysOrigin, canonical.MoveNode{
 		SpaceID: space, NodeID: a, Parent: canonical.NewNodeParent(b),
 	})
 	if !errors.Is(err, canonical.ErrTreeCycle) {
 		t.Errorf("move folder under descendant: err = %v, want ErrTreeCycle", err)
 	}
 
-	err = e.Execute(context.Background(), store, canonical.MoveNode{
+	err = e.Execute(context.Background(), store, sysOrigin, canonical.MoveNode{
 		SpaceID: space, NodeID: a, Parent: canonical.NewNodeParent(a),
 	})
 	if !errors.Is(err, canonical.ErrNodeIsSelf) {
@@ -227,7 +228,8 @@ func TestValidationErrors(t *testing.T) {
 
 	// Bookmark cannot become a parent.
 	folder := canonical.NodeID("fld")
-	err := e.Execute(context.Background(), store, canonical.CreateNode{
+	sysOrigin := canonical.Origin{Type: canonical.OriginSystem}
+	err := e.Execute(context.Background(), store, sysOrigin, canonical.CreateNode{
 		SpaceID: space, NodeID: folder, Type: canonical.NodeTypeFolder, Title: "F", Parent: canonical.NewNodeParent(bookmark),
 	})
 	if !errors.Is(err, canonical.ErrParentNotFolder) {
@@ -235,7 +237,7 @@ func TestValidationErrors(t *testing.T) {
 	}
 
 	// Empty title.
-	err = e.Execute(context.Background(), store, canonical.CreateNode{
+	err = e.Execute(context.Background(), store, sysOrigin, canonical.CreateNode{
 		SpaceID: space, NodeID: folder, Type: canonical.NodeTypeFolder, Title: "", Parent: main,
 	})
 	if !errors.Is(err, canonical.ErrTitleRequired) {
@@ -243,7 +245,7 @@ func TestValidationErrors(t *testing.T) {
 	}
 
 	// Bookmark without URL.
-	err = e.Execute(context.Background(), store, canonical.CreateNode{
+	err = e.Execute(context.Background(), store, sysOrigin, canonical.CreateNode{
 		SpaceID: space, NodeID: "bm2", Type: canonical.NodeTypeBookmark, Title: "BM2", Parent: main,
 	})
 	if !errors.Is(err, canonical.ErrURLRequired) {
@@ -251,7 +253,7 @@ func TestValidationErrors(t *testing.T) {
 	}
 
 	// Folder with URL.
-	err = e.Execute(context.Background(), store, canonical.CreateNode{
+	err = e.Execute(context.Background(), store, sysOrigin, canonical.CreateNode{
 		SpaceID: space, NodeID: folder, Type: canonical.NodeTypeFolder, Title: "F", URL: "https://x", Parent: main,
 	})
 	if !errors.Is(err, canonical.ErrURLNotAllowed) {
@@ -262,13 +264,13 @@ func TestValidationErrors(t *testing.T) {
 	mustExec(t, e, store, canonical.CreateNode{
 		SpaceID: space, NodeID: folder, Type: canonical.NodeTypeFolder, Title: "F", Parent: main,
 	})
-	err = e.Execute(context.Background(), store, canonical.UpdateNodeURL{SpaceID: space, NodeID: folder, URL: "https://x"})
+	err = e.Execute(context.Background(), store, sysOrigin, canonical.UpdateNodeURL{SpaceID: space, NodeID: folder, URL: "https://x"})
 	if !errors.Is(err, canonical.ErrURLNotAllowed) {
 		t.Errorf("url on folder: err = %v, want ErrURLNotAllowed", err)
 	}
 
 	// Unknown root slot.
-	err = e.Execute(context.Background(), store, canonical.CreateNode{
+	err = e.Execute(context.Background(), store, sysOrigin, canonical.CreateNode{
 		SpaceID: space, NodeID: "x", Type: canonical.NodeTypeBookmark, Title: "X", URL: "https://x", Parent: canonical.NewRootParent("nope"),
 	})
 	if !errors.Is(err, canonical.ErrRootSlotNotFound) {
@@ -276,7 +278,7 @@ func TestValidationErrors(t *testing.T) {
 	}
 
 	// Unknown node.
-	err = e.Execute(context.Background(), store, canonical.DeleteNode{SpaceID: space, NodeID: "ghost"})
+	err = e.Execute(context.Background(), store, sysOrigin, canonical.DeleteNode{SpaceID: space, NodeID: "ghost"})
 	if !errors.Is(err, canonical.ErrNodeNotFound) {
 		t.Errorf("unknown node: err = %v, want ErrNodeNotFound", err)
 	}
@@ -287,7 +289,7 @@ func TestExecuteAtomicRollback(t *testing.T) {
 	main := canonical.NewRootParent("main")
 
 	// A valid create followed by an invalid one must roll back both.
-	err := e.Execute(context.Background(), store,
+	err := e.Execute(context.Background(), store, canonical.Origin{Type: canonical.OriginSystem},
 		canonical.CreateNode{SpaceID: space, NodeID: "ok", Type: canonical.NodeTypeBookmark, Title: "OK", URL: "https://ok", Parent: main},
 		canonical.CreateNode{SpaceID: space, NodeID: "bad", Type: canonical.NodeTypeBookmark, Title: "Bad", Parent: main}, // missing URL
 	)

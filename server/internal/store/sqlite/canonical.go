@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -261,6 +262,129 @@ func (t *canonTx) DeleteNodes(ctx context.Context, space canonical.SpaceID, ids 
 		}
 	}
 	return nil
+}
+
+func (t *canonTx) AppendJournal(ctx context.Context, ch canonical.Change) error {
+	payload, err := marshalChangePayload(ch)
+	if err != nil {
+		return err
+	}
+
+	var nodeID any
+	if ch.NodeID != "" {
+		nodeID = string(ch.NodeID)
+	}
+	var userID, deviceID, bindingID, opID, changeSetID, requestID any
+	var clientSeq any
+	o := ch.Origin
+	if o.UserID != "" {
+		userID = string(o.UserID)
+	}
+	if o.DeviceID != "" {
+		deviceID = string(o.DeviceID)
+	}
+	if o.BindingID != "" {
+		bindingID = string(o.BindingID)
+	}
+	if o.ClientSeq != nil {
+		clientSeq = *o.ClientSeq
+	}
+	if o.OpID != "" {
+		opID = o.OpID
+	}
+	if o.ChangeSetID != "" {
+		changeSetID = o.ChangeSetID
+	}
+	if o.RequestID != "" {
+		requestID = o.RequestID
+	}
+
+	_, err = t.tx.ExecContext(ctx, `
+		INSERT INTO journal (space_id, epoch, revision, change_type, node_id, payload,
+			origin_type, origin_user_id, origin_device_id, origin_binding_id, origin_client_seq,
+			op_id, change_set_id, request_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		string(ch.SpaceID), ch.Epoch, ch.Revision, string(ch.Type), nodeID, payload,
+		string(o.Type), userID, deviceID, bindingID, clientSeq,
+		opID, changeSetID, requestID, formatTime(ch.CreatedAt))
+	return err
+}
+
+func (t *canonTx) InsertTombstones(ctx context.Context, space canonical.SpaceID, epoch, revision int64, ids []canonical.NodeID, deletedAt time.Time) error {
+	for _, id := range ids {
+		if _, err := t.tx.ExecContext(ctx, `
+			INSERT OR REPLACE INTO tombstones (space_id, node_id, deleted_epoch, deleted_revision, deleted_at)
+			VALUES (?, ?, ?, ?, ?)`,
+			string(space), string(id), epoch, revision, formatTime(deletedAt)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// journalParent is the wire representation of a ParentRef:
+// {"type":"node","id":"..."} or {"type":"root","key":"..."}.
+type journalParent struct {
+	Type string `json:"type"`
+	ID   string `json:"id,omitempty"`
+	Key  string `json:"key,omitempty"`
+}
+
+func toJournalParent(p canonical.ParentRef) journalParent {
+	if p.Type == canonical.ParentTypeNode {
+		return journalParent{Type: "node", ID: string(p.NodeID)}
+	}
+	return journalParent{Type: "root", Key: p.RootKey}
+}
+
+// marshalChangePayload serializes a typed change payload into the journal
+// JSON wire format. Storage concern: canonical domain types stay tag-free.
+func marshalChangePayload(ch canonical.Change) (string, error) {
+	var v any
+	switch p := ch.Payload.(type) {
+	case canonical.CreatePayload:
+		url := p.URL
+		if url == "" {
+			v = struct {
+				Type     string        `json:"type"`
+				Title    string        `json:"title"`
+				Parent   journalParent `json:"parent"`
+				Position int64         `json:"position"`
+			}{string(p.Type), p.Title, toJournalParent(p.Parent), p.Position}
+		} else {
+			v = struct {
+				Type     string        `json:"type"`
+				Title    string        `json:"title"`
+				URL      string        `json:"url"`
+				Parent   journalParent `json:"parent"`
+				Position int64         `json:"position"`
+			}{string(p.Type), p.Title, url, toJournalParent(p.Parent), p.Position}
+		}
+	case canonical.UpdateTitlePayload:
+		v = struct {
+			Title string `json:"title"`
+		}{p.Title}
+	case canonical.UpdateURLPayload:
+		v = struct {
+			URL string `json:"url"`
+		}{p.URL}
+	case canonical.MovePayload:
+		v = struct {
+			Parent   journalParent `json:"parent"`
+			Position int64         `json:"position"`
+		}{toJournalParent(p.Parent), p.Position}
+	case canonical.DeletePayload:
+		v = struct {
+			Count int64 `json:"count"`
+		}{p.Count}
+	default:
+		return "", fmt.Errorf("marshal journal payload: unknown payload %T", ch.Payload)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("marshal journal payload: %w", err)
+	}
+	return string(b), nil
 }
 
 func formatTime(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }

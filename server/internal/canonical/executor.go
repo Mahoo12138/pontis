@@ -51,23 +51,24 @@ type DeleteNode struct {
 	NodeID  NodeID
 }
 
-func (CreateNode) command()       {}
-func (UpdateNodeTitle) command()  {}
-func (UpdateNodeURL) command()    {}
-func (MoveNode) command()         {}
-func (DeleteNode) command()       {}
+func (CreateNode) command()      {}
+func (UpdateNodeTitle) command() {}
+func (UpdateNodeURL) command()   {}
+func (MoveNode) command()        {}
+func (DeleteNode) command()      {}
 
 // Executor validates and applies canonical commands inside a single
 // transaction. Every module that mutates the bookmark tree must go through
-// the executor.
+// the executor. Node changes, revision allocation, journal and tombstones
+// commit atomically.
 type Executor struct{}
 
 // NewExecutor returns a canonical executor.
 func NewExecutor() *Executor { return &Executor{} }
 
-// Execute applies all commands atomically: either every command commits or
-// nothing does.
-func (e *Executor) Execute(ctx context.Context, store Store, cmds ...Command) error {
+// Execute applies all commands atomically under the given origin: either
+// every command commits or nothing does.
+func (e *Executor) Execute(ctx context.Context, store Store, origin Origin, cmds ...Command) error {
 	if len(cmds) == 0 {
 		return nil
 	}
@@ -83,7 +84,7 @@ func (e *Executor) Execute(ctx context.Context, store Store, cmds ...Command) er
 	}()
 
 	for _, cmd := range cmds {
-		if err := e.apply(ctx, tx, cmd); err != nil {
+		if err := e.apply(ctx, tx, cmd, origin); err != nil {
 			return err
 		}
 	}
@@ -95,31 +96,32 @@ func (e *Executor) Execute(ctx context.Context, store Store, cmds ...Command) er
 	return nil
 }
 
-func (e *Executor) apply(ctx context.Context, tx Tx, cmd Command) error {
+func (e *Executor) apply(ctx context.Context, tx Tx, cmd Command, origin Origin) error {
 	switch c := cmd.(type) {
 	case CreateNode:
-		return e.create(ctx, tx, c)
+		return e.create(ctx, tx, c, origin)
 	case UpdateNodeTitle:
-		return e.updateTitle(ctx, tx, c)
+		return e.updateTitle(ctx, tx, c, origin)
 	case UpdateNodeURL:
-		return e.updateURL(ctx, tx, c)
+		return e.updateURL(ctx, tx, c, origin)
 	case MoveNode:
-		return e.move(ctx, tx, c)
+		return e.move(ctx, tx, c, origin)
 	case DeleteNode:
-		return e.delete(ctx, tx, c)
+		return e.delete(ctx, tx, c, origin)
 	default:
 		return fmt.Errorf("canonical: unknown command %T", cmd)
 	}
 }
 
-func (e *Executor) create(ctx context.Context, tx Tx, c CreateNode) error {
+func (e *Executor) create(ctx context.Context, tx Tx, c CreateNode, origin Origin) error {
 	if c.Title == "" {
 		return ErrTitleRequired
 	}
 	if err := checkTypeURL(c.Type, c.URL); err != nil {
 		return err
 	}
-	if _, err := tx.LoadSpace(ctx, c.SpaceID); err != nil {
+	space, err := tx.LoadSpace(ctx, c.SpaceID)
+	if err != nil {
 		return err
 	}
 	if err := validateParent(ctx, tx, c.SpaceID, c.Parent); err != nil {
@@ -166,12 +168,28 @@ func (e *Executor) create(ctx context.Context, tx Tx, c CreateNode) error {
 		updates[children[i].ID] = int64(i) + 1
 	}
 	if len(updates) > 0 {
-		return tx.SetSiblingPositions(ctx, c.SpaceID, updates)
+		if err := tx.SetSiblingPositions(ctx, c.SpaceID, updates); err != nil {
+			return err
+		}
 	}
-	return nil
+
+	return tx.AppendJournal(ctx, Change{
+		SpaceID:   c.SpaceID,
+		Epoch:     space.Epoch,
+		Revision:  rev,
+		Type:      ChangeTypeCreate,
+		NodeID:    c.NodeID,
+		Payload:   CreatePayload{Type: c.Type, Title: c.Title, URL: c.URL, Parent: c.Parent, Position: int64(idx)},
+		Origin:    origin,
+		CreatedAt: now,
+	})
 }
 
-func (e *Executor) updateTitle(ctx context.Context, tx Tx, c UpdateNodeTitle) error {
+func (e *Executor) updateTitle(ctx context.Context, tx Tx, c UpdateNodeTitle, origin Origin) error {
+	space, err := tx.LoadSpace(ctx, c.SpaceID)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.LoadNode(ctx, c.SpaceID, c.NodeID); err != nil {
 		return err
 	}
@@ -182,10 +200,27 @@ func (e *Executor) updateTitle(ctx context.Context, tx Tx, c UpdateNodeTitle) er
 	if err != nil {
 		return err
 	}
-	return tx.SetNodeTitle(ctx, c.SpaceID, c.NodeID, c.Title, rev, time.Now().UTC())
+	now := time.Now().UTC()
+	if err := tx.SetNodeTitle(ctx, c.SpaceID, c.NodeID, c.Title, rev, now); err != nil {
+		return err
+	}
+	return tx.AppendJournal(ctx, Change{
+		SpaceID:   c.SpaceID,
+		Epoch:     space.Epoch,
+		Revision:  rev,
+		Type:      ChangeTypeUpdateTitle,
+		NodeID:    c.NodeID,
+		Payload:   UpdateTitlePayload{Title: c.Title},
+		Origin:    origin,
+		CreatedAt: now,
+	})
 }
 
-func (e *Executor) updateURL(ctx context.Context, tx Tx, c UpdateNodeURL) error {
+func (e *Executor) updateURL(ctx context.Context, tx Tx, c UpdateNodeURL, origin Origin) error {
+	space, err := tx.LoadSpace(ctx, c.SpaceID)
+	if err != nil {
+		return err
+	}
 	node, err := tx.LoadNode(ctx, c.SpaceID, c.NodeID)
 	if err != nil {
 		return err
@@ -200,10 +235,27 @@ func (e *Executor) updateURL(ctx context.Context, tx Tx, c UpdateNodeURL) error 
 	if err != nil {
 		return err
 	}
-	return tx.SetNodeURL(ctx, c.SpaceID, c.NodeID, c.URL, rev, time.Now().UTC())
+	now := time.Now().UTC()
+	if err := tx.SetNodeURL(ctx, c.SpaceID, c.NodeID, c.URL, rev, now); err != nil {
+		return err
+	}
+	return tx.AppendJournal(ctx, Change{
+		SpaceID:   c.SpaceID,
+		Epoch:     space.Epoch,
+		Revision:  rev,
+		Type:      ChangeTypeUpdateURL,
+		NodeID:    c.NodeID,
+		Payload:   UpdateURLPayload{URL: c.URL},
+		Origin:    origin,
+		CreatedAt: now,
+	})
 }
 
-func (e *Executor) move(ctx context.Context, tx Tx, c MoveNode) error {
+func (e *Executor) move(ctx context.Context, tx Tx, c MoveNode, origin Origin) error {
+	space, err := tx.LoadSpace(ctx, c.SpaceID)
+	if err != nil {
+		return err
+	}
 	node, err := tx.LoadNode(ctx, c.SpaceID, c.NodeID)
 	if err != nil {
 		return err
@@ -230,13 +282,13 @@ func (e *Executor) move(ctx context.Context, tx Tx, c MoveNode) error {
 	}
 
 	if sameParent(node.Parent, c.Parent) {
-		return e.reorder(ctx, tx, node, c.BeforeID)
+		return e.reorder(ctx, tx, node, c.BeforeID, space, origin)
 	}
-	return e.reparent(ctx, tx, node, c.Parent, c.BeforeID)
+	return e.reparent(ctx, tx, node, c.Parent, c.BeforeID, space, origin)
 }
 
 // reorder handles a MOVE within the same parent.
-func (e *Executor) reorder(ctx context.Context, tx Tx, node Node, beforeID *NodeID) error {
+func (e *Executor) reorder(ctx context.Context, tx Tx, node Node, beforeID *NodeID, space SyncSpace, origin Origin) error {
 	children, err := tx.Children(ctx, node.SpaceID, node.Parent)
 	if err != nil {
 		return err
@@ -254,7 +306,7 @@ func (e *Executor) reorder(ctx context.Context, tx Tx, node Node, beforeID *Node
 		return err
 	}
 	if int64(idx) == node.Position {
-		return nil // already in place
+		return nil // already in place, no canonical change
 	}
 
 	rev, err := tx.AllocateRevision(ctx, node.SpaceID)
@@ -280,11 +332,23 @@ func (e *Executor) reorder(ctx context.Context, tx Tx, node Node, beforeID *Node
 			return err
 		}
 	}
-	return tx.SetNodeParent(ctx, node.SpaceID, node.ID, node.Parent, int64(idx), rev, now)
+	if err := tx.SetNodeParent(ctx, node.SpaceID, node.ID, node.Parent, int64(idx), rev, now); err != nil {
+		return err
+	}
+	return tx.AppendJournal(ctx, Change{
+		SpaceID:   node.SpaceID,
+		Epoch:     space.Epoch,
+		Revision:  rev,
+		Type:      ChangeTypeMove,
+		NodeID:    node.ID,
+		Payload:   MovePayload{Parent: node.Parent, Position: int64(idx)},
+		Origin:    origin,
+		CreatedAt: now,
+	})
 }
 
 // reparent handles a MOVE across parents.
-func (e *Executor) reparent(ctx context.Context, tx Tx, node Node, parent ParentRef, beforeID *NodeID) error {
+func (e *Executor) reparent(ctx context.Context, tx Tx, node Node, parent ParentRef, beforeID *NodeID, space SyncSpace, origin Origin) error {
 	oldChildren, err := tx.Children(ctx, node.SpaceID, node.Parent)
 	if err != nil {
 		return err
@@ -332,12 +396,28 @@ func (e *Executor) reparent(ctx context.Context, tx Tx, node Node, parent Parent
 		newUpdates[newChildren[i].ID] = int64(i) + 1
 	}
 	if len(newUpdates) > 0 {
-		return tx.SetSiblingPositions(ctx, node.SpaceID, newUpdates)
+		if err := tx.SetSiblingPositions(ctx, node.SpaceID, newUpdates); err != nil {
+			return err
+		}
 	}
-	return nil
+
+	return tx.AppendJournal(ctx, Change{
+		SpaceID:   node.SpaceID,
+		Epoch:     space.Epoch,
+		Revision:  rev,
+		Type:      ChangeTypeMove,
+		NodeID:    node.ID,
+		Payload:   MovePayload{Parent: parent, Position: int64(idx)},
+		Origin:    origin,
+		CreatedAt: now,
+	})
 }
 
-func (e *Executor) delete(ctx context.Context, tx Tx, c DeleteNode) error {
+func (e *Executor) delete(ctx context.Context, tx Tx, c DeleteNode, origin Origin) error {
+	space, err := tx.LoadSpace(ctx, c.SpaceID)
+	if err != nil {
+		return err
+	}
 	node, err := tx.LoadNode(ctx, c.SpaceID, c.NodeID)
 	if err != nil {
 		return err
@@ -348,10 +428,15 @@ func (e *Executor) delete(ctx context.Context, tx Tx, c DeleteNode) error {
 		return err
 	}
 
-	if _, err := tx.AllocateRevision(ctx, c.SpaceID); err != nil {
+	rev, err := tx.AllocateRevision(ctx, c.SpaceID)
+	if err != nil {
 		return err
 	}
+	now := time.Now().UTC()
 	if err := tx.DeleteNodes(ctx, c.SpaceID, ids); err != nil {
+		return err
+	}
+	if err := tx.InsertTombstones(ctx, c.SpaceID, space.Epoch, rev, ids, now); err != nil {
 		return err
 	}
 
@@ -367,9 +452,22 @@ func (e *Executor) delete(ctx context.Context, tx Tx, c DeleteNode) error {
 		}
 	}
 	if len(updates) > 0 {
-		return tx.SetSiblingPositions(ctx, c.SpaceID, updates)
+		if err := tx.SetSiblingPositions(ctx, c.SpaceID, updates); err != nil {
+			return err
+		}
 	}
-	return nil
+
+	// One top-level DELETE canonical change for the whole subtree.
+	return tx.AppendJournal(ctx, Change{
+		SpaceID:   c.SpaceID,
+		Epoch:     space.Epoch,
+		Revision:  rev,
+		Type:      ChangeTypeDelete,
+		NodeID:    c.NodeID,
+		Payload:   DeletePayload{Count: int64(len(ids))},
+		Origin:    origin,
+		CreatedAt: now,
+	})
 }
 
 func validateParent(ctx context.Context, tx Tx, space SpaceID, parent ParentRef) error {

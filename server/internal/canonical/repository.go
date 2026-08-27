@@ -45,4 +45,11 @@ type Tx interface {
 	// (inclusive), deepest first.
 	SubtreeIDs(ctx context.Context, space SpaceID, id NodeID) ([]NodeID, error)
 	DeleteNodes(ctx context.Context, space SpaceID, ids []NodeID) error
+
+	// AppendJournal records a committed Canonical Change.
+	AppendJournal(ctx context.Context, ch Change) error
+
+	// InsertTombstones records deleted node identity for all ids at the
+	// given epoch/revision.
+	InsertTombstones(ctx context.Context, space SpaceID, epoch, revision int64, ids []NodeID, deletedAt time.Time) error
 }
