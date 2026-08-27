@@ -1,0 +1,30 @@
+{
+  "title": "自托管跨浏览器书签同步平台：设计文档集",
+  "generated_at": "2026-08-27",
+  "documents": [
+    "00-overview.md",
+    "01-system-architecture.md",
+    "02-domain-model.md",
+    "03-sync-space-and-mounts.md",
+    "04-sync-protocol.md",
+    "05-client-replica-and-extension.md",
+    "06-initial-resync-recovery.md",
+    "07-reconciliation-engine.md",
+    "08-api-contract.md",
+    "09-multi-user-auth-permissions.md",
+    "10-publication-plaza.md",
+    "11-import-export.md",
+    "12-organizer-and-search.md",
+    "13-background-jobs.md",
+    "14-backup-retention-gc.md",
+    "15-undo-activity.md",
+    "16-diagnostics-observability.md",
+    "17-security.md",
+    "18-database-schema.md",
+    "19-tech-stack-and-monorepo.md",
+    "20-go-module-architecture.md",
+    "21-development-and-testing.md",
+    "22-decisions-and-invariants.md",
+    "README.md"
+  ]
+}
