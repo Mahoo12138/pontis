@@ -56,8 +56,8 @@ func TestMigrateAppliesAndIsIdempotent(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 {
-		t.Errorf("schema_migrations count = %d, want 1", count)
+	if count != 2 {
+		t.Errorf("schema_migrations count = %d, want 2", count)
 	}
 }
 
@@ -98,11 +98,71 @@ func TestSystemTablesExist(t *testing.T) {
 		t.Fatalf("Migrate: %v", err)
 	}
 
-	for _, table := range []string{"server_meta", "system_settings", "system_secrets"} {
+	for _, table := range []string{
+		"server_meta", "system_settings", "system_secrets",
+		"sync_spaces", "root_slots", "nodes",
+	} {
 		var name string
 		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
 		if err != nil {
 			t.Errorf("table %s missing: %v", table, err)
 		}
+	}
+}
+
+func TestNodeParentConstraint(t *testing.T) {
+	db := openTestDB(t)
+	if err := Migrate(context.Background(), db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	// Seed a space and a root slot.
+	if _, err := db.Exec(`INSERT INTO sync_spaces (id, owner_user_id, name, created_at, updated_at)
+		VALUES ('s1', 'u1', 'Main', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO root_slots (space_id, key, display_name, position, created_at)
+		VALUES ('s1', 'main', 'Main', 0, '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both parent_id and root_key set must be rejected.
+	_, err := db.Exec(`INSERT INTO nodes (space_id, id, type, title, url, parent_id, root_key, position,
+		created_revision, title_revision, url_revision, structure_revision, created_at, updated_at)
+		VALUES ('s1', 'n1', 'bookmark', 'x', 'https://x', 'n0', 'main', 0, 1, 1, 1, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+	if err == nil {
+		t.Error("expected CHECK failure when both parent_id and root_key are set")
+	}
+
+	// Neither parent_id nor root_key set must be rejected.
+	_, err = db.Exec(`INSERT INTO nodes (space_id, id, type, title, url, parent_id, root_key, position,
+		created_revision, title_revision, url_revision, structure_revision, created_at, updated_at)
+		VALUES ('s1', 'n1', 'bookmark', 'x', 'https://x', NULL, NULL, 0, 1, 1, 1, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+	if err == nil {
+		t.Error("expected CHECK failure when neither parent_id nor root_key is set")
+	}
+
+	// Folder with URL must be rejected.
+	_, err = db.Exec(`INSERT INTO nodes (space_id, id, type, title, url, parent_id, root_key, position,
+		created_revision, title_revision, url_revision, structure_revision, created_at, updated_at)
+		VALUES ('s1', 'n1', 'folder', 'x', 'https://x', NULL, 'main', 0, 1, 1, 1, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+	if err == nil {
+		t.Error("expected CHECK failure for folder with url")
+	}
+
+	// Bookmark without URL must be rejected.
+	_, err = db.Exec(`INSERT INTO nodes (space_id, id, type, title, url, parent_id, root_key, position,
+		created_revision, title_revision, url_revision, structure_revision, created_at, updated_at)
+		VALUES ('s1', 'n1', 'bookmark', 'x', NULL, NULL, 'main', 0, 1, 1, 1, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+	if err == nil {
+		t.Error("expected CHECK failure for bookmark without url")
+	}
+
+	// Valid bookmark under a root slot must succeed.
+	_, err = db.Exec(`INSERT INTO nodes (space_id, id, type, title, url, parent_id, root_key, position,
+		created_revision, title_revision, url_revision, structure_revision, created_at, updated_at)
+		VALUES ('s1', 'n1', 'bookmark', 'x', 'https://x', NULL, 'main', 0, 1, 1, 1, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+	if err != nil {
+		t.Errorf("valid node rejected: %v", err)
 	}
 }
