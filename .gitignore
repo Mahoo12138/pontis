@@ -1,0 +1,14 @@
+# data dir
+data/
+server/data/
+
+# databases
+*.db
+*.db-wal
+*.db-shm
+
+# build output
+server/pontis
+server/pontis.exe
+server/cmd/server/server
+server/cmd/server/server.exe
