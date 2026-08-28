@@ -1,0 +1,8 @@
+{
+  "devices": [
+    { "id": "d001", "name": "Edge on Windows", "client_type": "extension", "browser": "edge", "platform": "windows", "sync_mode": "full", "created_at": "2026-08-20T08:00:00Z" },
+    { "id": "d002", "name": "Firefox on Mac", "client_type": "extension", "browser": "firefox", "platform": "mac", "sync_mode": "partial", "created_at": "2026-08-22T10:00:00Z" },
+    { "id": "d003", "name": "Chrome on Linux", "client_type": "extension", "browser": "chrome", "platform": "linux", "sync_mode": "partial", "created_at": "2026-08-25T14:00:00Z" },
+    { "id": "d004", "name": "Safari on iPhone", "client_type": "extension", "browser": "safari", "platform": "ios", "sync_mode": "", "created_at": "2026-08-27T09:00:00Z" }
+  ]
+}
