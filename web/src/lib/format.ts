@@ -25,6 +25,17 @@ export function formatShortTime(dateStr: string): string {
   return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 }
 
+/** Label a date as 今天 / 昨天 / M月D日 for day-grouped lists. */
+export function formatDayLabel(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const diffDays = Math.round((startOfDay(now) - startOfDay(date)) / 86_400_000);
+  if (diffDays === 0) return '今天';
+  if (diffDays === 1) return '昨天';
+  return date.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
+}
+
 /** Extract hostname from a URL string. */
 export function extractHost(url: string): string {
   try {

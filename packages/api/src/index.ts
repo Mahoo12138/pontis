@@ -29,4 +29,7 @@ export type {
   CreateNodeRequest,
   UpdateNodeRequest,
   MoveNodeRequest,
+  ActivityAction,
+  ActivityEntry,
+  ActivityListResponse,
 } from './types';

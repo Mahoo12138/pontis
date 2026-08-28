@@ -214,3 +214,20 @@ export interface MoveNodeRequest {
   parent: ParentRef;
   before_id?: string;
 }
+
+// ─── Activity (gap endpoint — mock only) ──────────────────
+
+export type ActivityAction = 'create' | 'update' | 'move' | 'delete';
+
+export interface ActivityEntry {
+  id: string;
+  timestamp: string;
+  actor: string;
+  action: ActivityAction;
+  summary: string;
+  undoable: boolean;
+}
+
+export interface ActivityListResponse {
+  activity: ActivityEntry[];
+}

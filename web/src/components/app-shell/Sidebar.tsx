@@ -77,6 +77,11 @@ export default function Sidebar() {
 
   const currentPath = location.pathname;
 
+  // 最近活动 is per-space: follow the open space, else the first one.
+  const spaceMatch = currentPath.match(/^\/spaces\/([^/]+)/);
+  const activitySpaceId = spaceMatch?.[1] ?? spaces[0]?.id;
+  const activityPath = activitySpaceId ? `/spaces/${activitySpaceId}/activity` : null;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Logo */}
@@ -116,7 +121,11 @@ export default function Sidebar() {
           <IconLayoutGrid size={16} stroke={1.5} className={sidebarItemIcon} />
           广场
         </div>
-        <div className={`${sidebarItem} ${currentPath === '/activity' ? sidebarItemSelected : ''}`}>
+        <div
+          className={`${sidebarItem} ${activityPath && currentPath === activityPath ? sidebarItemSelected : ''}`}
+          style={{ cursor: activityPath ? 'pointer' : undefined, color: activityPath ? undefined : tokens.textDisabled }}
+          onClick={() => activityPath && navigate(activityPath)}
+        >
           <IconClock size={16} stroke={1.5} className={sidebarItemIcon} />
           最近活动
         </div>
