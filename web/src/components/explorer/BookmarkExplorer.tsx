@@ -31,6 +31,7 @@ interface BookmarkExplorerProps {
   onStartRename: (id: string | null) => void;
   onCommitRename: (id: string, title: string) => void;
   onDeleteKey: () => void;
+  onContextMenu: (clientX: number, clientY: number, id: string) => void;
 }
 
 const INDENT_PX = 16;
@@ -43,6 +44,7 @@ export default function BookmarkExplorer({
   onStartRename,
   onCommitRename,
   onDeleteKey,
+  onContextMenu,
 }: BookmarkExplorerProps) {
   const { rows, expanded, selected, focusId, toggleExpand, handleClick, handleKeyDown } = state;
 
@@ -133,6 +135,11 @@ export default function BookmarkExplorer({
             onDoubleClick={() => {
               if (node.type === 'folder') toggleExpand(node.id);
               else onStartRename(node.id);
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              if (!selected.has(node.id)) handleClick(e, node.id);
+              onContextMenu(e.clientX, e.clientY, node.id);
             }}
           >
             {node.type === 'folder' ? (

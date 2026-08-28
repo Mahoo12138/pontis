@@ -1,12 +1,18 @@
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import type { ParentRef } from '@pontis/api';
+import { Text } from '@mantine/core';
+import { notifications } from '@mantine/notifications';
+import type { Node, ParentRef } from '@pontis/api';
 import Header from '../components/app-shell/Header';
 import Toolbar from '../components/app-shell/Toolbar';
 import BookmarkExplorer from '../components/explorer/BookmarkExplorer';
+import NodeContextMenu from '../components/explorer/NodeContextMenu';
+import type { ContextMenuPos } from '../components/explorer/NodeContextMenu';
 import { NewNodeModal, ConfirmDeleteDialog } from '../components/explorer/node-modals';
 import type { NewNodeMode } from '../components/explorer/node-modals';
+import Inspector from '../components/inspector/Inspector';
 import { contentRegion } from '../styles/app-shell.css';
+import { tokens } from '../styles/semantic-tokens.css';
 import { useNodes, useRootSlots } from '../hooks/use-nodes';
 import { useSpaces } from '../hooks/use-spaces';
 import { useNodeCrud } from '../hooks/use-node-crud';
@@ -27,32 +33,53 @@ export default function SpaceExplorerPage() {
   const crud = useNodeCrud(spaceId);
 
   const [createMode, setCreateMode] = useState<NewNodeMode | null>(null);
+  const [createParent, setCreateParent] = useState<Node | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [menu, setMenu] = useState<(ContextMenuPos & { nodeId: string }) | null>(null);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
 
   const spaceName = spacesData?.spaces?.find((s) => s.id === spaceId)?.name ?? '空间';
 
-  // New nodes land in the single selected folder, else the first root slot.
+  // Breadcrumb: space name plus the focused node's path to root.
+  const breadcrumb = useMemo(() => {
+    const parts: string[] = [];
+    let cur = state.focusId ? index.byId.get(state.focusId) : undefined;
+    while (cur) {
+      parts.unshift(cur.title);
+      cur = index.parentOf.get(cur.id) ?? undefined;
+    }
+    return parts.length ? [spaceName, ...parts].join(' / ') : spaceName;
+  }, [state.focusId, index, spaceName]);
+
+  // New nodes land in the explicit context-menu folder, else the single
+  // selected folder, else the first root slot.
   const selectedIds = useMemo(() => [...state.selected], [state.selected]);
   const singleId = selectedIds.length === 1 ? selectedIds[0] : undefined;
   const singleSelected = singleId ? index.byId.get(singleId) : undefined;
-  const parentFolder = singleSelected?.type === 'folder' ? singleSelected : undefined;
+  const selectedFolder = singleSelected?.type === 'folder' ? singleSelected : undefined;
+  const effectiveParent = createParent ?? selectedFolder;
   const rootSlot = slotsData?.root_slots?.[0];
-  const parentRef: ParentRef = parentFolder
-    ? { type: 'node', id: parentFolder.id }
+  const parentRef: ParentRef = effectiveParent
+    ? { type: 'node', id: effectiveParent.id }
     : { type: 'root', key: rootSlot?.key ?? 'main' };
-  const parentLabel = parentFolder?.title ?? rootSlot?.display_name ?? '根目录';
+  const parentLabel = effectiveParent?.title ?? rootSlot?.display_name ?? '根目录';
+
+  const closeCreate = () => {
+    setCreateMode(null);
+    setCreateParent(null);
+  };
 
   const handleCreate = (values: { title: string; url?: string }) => {
     if (!createMode) return;
+    const parent = effectiveParent;
     crud.create.mutate(
       { type: createMode, title: values.title, url: values.url, parent: parentRef },
       {
         onSuccess: () => {
-          setCreateMode(null);
-          if (createMode === 'folder' && parentFolder) {
-            // reveal the new folder's contents context
-            if (!state.expanded.has(parentFolder.id)) state.toggleExpand(parentFolder.id);
+          closeCreate();
+          if (createMode === 'folder' && parent && !state.expanded.has(parent.id)) {
+            state.toggleExpand(parent.id);
           }
         },
       },
@@ -86,32 +113,82 @@ export default function SpaceExplorerPage() {
     crud.update.mutate({ nodeId: id, params: { title } });
   };
 
+  const copyUrl = (node: Node) => {
+    if (!node.url) return;
+    navigator.clipboard
+      .writeText(node.url)
+      .then(() => notifications.show({ title: '已复制', message: node.url, color: 'healthyGreen' }))
+      .catch(() => notifications.show({ title: '复制失败', message: '浏览器拒绝了剪贴板访问', color: 'errorRed' }));
+  };
+
+  const menuNode = menu ? (index.byId.get(menu.nodeId) ?? null) : null;
+
   return (
     <>
       <Header
-        breadcrumb={spaceName}
+        breadcrumb={breadcrumb}
         onNewBookmark={() => setCreateMode('bookmark')}
         onNewFolder={() => setCreateMode('folder')}
       />
-      <Toolbar filter={filter} onFilterChange={setFilter} />
-      <div className={contentRegion}>
-        <BookmarkExplorer
-          isLoading={isLoading}
-          index={index}
-          state={state}
-          renamingId={renamingId}
-          onStartRename={setRenamingId}
-          onCommitRename={handleCommitRename}
-          onDeleteKey={() => setDeleteOpen(true)}
-        />
+      <Toolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        inspectorOpen={inspectorOpen}
+        onToggleInspector={() => setInspectorOpen((v) => !v)}
+      />
+      <div className={contentRegion} style={{ display: 'flex' }}>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <BookmarkExplorer
+            isLoading={isLoading}
+            index={index}
+            state={state}
+            renamingId={renamingId}
+            onStartRename={setRenamingId}
+            onCommitRename={handleCommitRename}
+            onDeleteKey={() => setDeleteOpen(true)}
+            onContextMenu={(x, y, id) => setMenu({ x, y, nodeId: id })}
+          />
+        </div>
+
+        {inspectorOpen &&
+          (singleSelected ? (
+            <Inspector node={singleSelected} onClose={() => setInspectorOpen(false)} onCopyUrl={copyUrl} />
+          ) : (
+            <aside
+              style={{
+                width: tokens.inspectorWidth,
+                flexShrink: 0,
+                borderLeft: `1px solid ${tokens.subtleBorder}`,
+                backgroundColor: tokens.workspaceBg,
+                padding: '16px',
+              }}
+            >
+              <Text fz="xs" c={tokens.textSecondary}>
+                选中单个项目后查看详情。
+              </Text>
+            </aside>
+          ))}
       </div>
+
+      <NodeContextMenu
+        pos={menu}
+        node={menuNode}
+        onClose={() => setMenu(null)}
+        onCopyUrl={copyUrl}
+        onRename={(n) => setRenamingId(n.id)}
+        onCreateInside={(n, mode) => {
+          setCreateParent(n);
+          setCreateMode(mode);
+        }}
+        onDelete={() => setDeleteOpen(true)}
+      />
 
       <NewNodeModal
         opened={createMode !== null}
         mode={createMode ?? 'bookmark'}
         parentLabel={parentLabel}
         pending={crud.create.isPending}
-        onClose={() => setCreateMode(null)}
+        onClose={closeCreate}
         onSubmit={handleCreate}
       />
 
