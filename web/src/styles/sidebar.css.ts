@@ -1,5 +1,5 @@
 import { style } from '@vanilla-extract/css';
-import { pontisTokens } from './semantic-tokens.css';
+import { tokens } from './semantic-tokens.css';
 
 /** Sidebar-specific styles. */
 
@@ -10,7 +10,7 @@ export const sidebarLogo = style({
   padding: '12px 16px 8px',
   fontSize: '18px',
   fontWeight: 600,
-  color: 'var(--mantine-color-coolGray-8)',
+  color: tokens.textPrimary,
   letterSpacing: '-0.01em',
   userSelect: 'none',
 });
@@ -23,7 +23,7 @@ export const sidebarSectionLabel = style({
   padding: '4px 8px',
   fontSize: '11px',
   fontWeight: 500,
-  color: 'var(--mantine-color-coolGray-5)',
+  color: tokens.textSecondary,
   textTransform: 'uppercase',
   letterSpacing: '0.04em',
   userSelect: 'none',
@@ -36,18 +36,18 @@ export const sidebarItem = style({
   padding: '6px 8px',
   borderRadius: '5px',
   fontSize: '13px',
-  color: 'var(--mantine-color-coolGray-8)',
+  color: tokens.textPrimary,
   cursor: 'pointer',
   transition: 'background-color 100ms',
   selectors: {
     '&:hover': {
-      backgroundColor: pontisTokens.hoverBg,
+      backgroundColor: tokens.hoverBg,
     },
   },
 });
 
 export const sidebarItemSelected = style({
-  backgroundColor: pontisTokens.selectedBg,
+  backgroundColor: tokens.selectedBg,
   color: 'var(--mantine-color-accentBlue-7)',
   fontWeight: 500,
 });
@@ -55,21 +55,21 @@ export const sidebarItemSelected = style({
 export const sidebarDivider = style({
   margin: '6px 16px',
   border: 'none',
-  borderTop: `1px solid ${pontisTokens.subtleBorder}`,
+  borderTop: `1px solid ${tokens.subtleBorder}`,
 });
 
 export const sidebarUser = style({
   marginTop: 'auto',
   padding: '8px 16px',
-  borderTop: `1px solid ${pontisTokens.subtleBorder}`,
+  borderTop: `1px solid ${tokens.subtleBorder}`,
   display: 'flex',
   alignItems: 'center',
   gap: '8px',
   fontSize: '13px',
-  color: 'var(--mantine-color-coolGray-5)',
+  color: tokens.textSecondary,
 });
 
 export const sidebarItemIcon = style({
-  color: 'var(--mantine-color-coolGray-5)',
+  color: tokens.textSecondary,
   flexShrink: 0,
 });

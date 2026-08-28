@@ -1,50 +1,23 @@
-import { useState } from 'react';
-import {
-  MantineProvider,
-  ColorSchemeProvider,
-  type ColorScheme,
-  createTheme,
-  mergeMantineTheme,
-} from '@mantine/core';
+import { MantineProvider } from '@mantine/core';
 import { pontisTheme } from './pontis-theme';
-import { darkColorOverrides } from './pontis-dark';
-
-/** Merged theme with dark mode color overrides baked in. */
-const theme = mergeMantineTheme(
-  pontisTheme,
-  createTheme({
-    colors: darkColorOverrides,
-  }),
-);
 
 interface PontisProviderProps {
   children: React.ReactNode;
 }
 
+/**
+ * Pontis theme provider.
+ *
+ * Color scheme is managed by Mantine's built-in localStorage-backed
+ * manager: `useMantineColorScheme()` toggles it and persists automatically.
+ * Scheme-specific colors (Graphite Dark) are handled by the semantic token
+ * layer in styles/semantic-tokens.css.ts, keyed on
+ * `[data-mantine-color-scheme='dark']`.
+ */
 export function PontisProvider({ children }: PontisProviderProps) {
-  const [colorScheme, setColorScheme] = useState<ColorScheme>(
-    () =>
-      (localStorage.getItem('pontis-color-scheme') as ColorScheme) ?? 'light',
-  );
-
-  const toggleColorScheme = (value?: ColorScheme) => {
-    const next = value ?? (colorScheme === 'dark' ? 'light' : 'dark');
-    setColorScheme(next);
-    localStorage.setItem('pontis-color-scheme', next);
-  };
-
   return (
-    <ColorSchemeProvider
-      colorScheme={colorScheme}
-      toggleColorScheme={toggleColorScheme}
-    >
-      <MantineProvider
-        theme={theme}
-        defaultColorScheme="light"
-        forceColorScheme={colorScheme}
-      >
-        {children}
-      </MantineProvider>
-    </ColorSchemeProvider>
+    <MantineProvider theme={pontisTheme} defaultColorScheme="auto">
+      {children}
+    </MantineProvider>
   );
 }

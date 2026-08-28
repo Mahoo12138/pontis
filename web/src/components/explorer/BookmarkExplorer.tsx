@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Group, Text, ActionIcon } from '@mantine/core';
+import { Group, Text, ActionIcon, Skeleton } from '@mantine/core';
 import {
   IconChevronRight,
   IconFolder,
@@ -22,6 +22,7 @@ import {
   explorerRowActions,
   favicon,
 } from '../../styles/explorer.css';
+import { tokens } from '../../styles/semantic-tokens.css';
 import type { Node } from '@pontis/api';
 
 interface BookmarkExplorerProps {
@@ -112,7 +113,7 @@ export default function BookmarkExplorer({ spaceId, filter }: BookmarkExplorerPr
         alignItems: 'center',
         justifyContent: 'center',
         height: '100%',
-        color: 'var(--mantine-color-coolGray-5)',
+        color: tokens.textSecondary,
         gap: '8px',
       }}>
         <IconFolder size={32} stroke={1.2} />

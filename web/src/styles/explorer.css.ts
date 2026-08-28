@@ -1,5 +1,5 @@
 import { style } from '@vanilla-extract/css';
-import { pontisTokens } from './semantic-tokens.css';
+import { tokens } from './semantic-tokens.css';
 
 /** Bookmark Explorer styles — file-manager-style list. */
 
@@ -12,43 +12,42 @@ export const explorerContainer = style({
 export const explorerColumnHeader = style({
   display: 'flex',
   alignItems: 'center',
-  height: '36px',
+  height: tokens.explorerColumnHeader,
   padding: '0 16px',
   fontSize: '12px',
   fontWeight: 500,
-  color: 'var(--mantine-color-coolGray-5)',
-  borderBottom: `1px solid ${pontisTokens.subtleBorder}`,
+  color: tokens.textSecondary,
+  borderBottom: `1px solid ${tokens.subtleBorder}`,
   userSelect: 'none',
 });
 
 export const explorerRow = style({
   display: 'flex',
   alignItems: 'center',
-  height: pontisTokens.explorerRow,
+  height: tokens.explorerRow,
   padding: '0 16px',
   fontSize: '14px',
-  color: 'var(--mantine-color-coolGray-8)',
+  color: tokens.textPrimary,
   cursor: 'pointer',
   transition: 'background-color 100ms',
-  borderBottom: `1px solid transparent`,
   selectors: {
     '&:hover': {
-      backgroundColor: pontisTokens.hoverBg,
+      backgroundColor: tokens.hoverBg,
     },
   },
 });
 
 export const explorerRowSelected = style({
-  backgroundColor: pontisTokens.selectedBg,
+  backgroundColor: tokens.selectedBg,
 });
 
 export const explorerRowFocused = style({
-  backgroundColor: 'var(--mantine-color-accentBlue-1)',
+  backgroundColor: tokens.focusBg,
 });
 
 export const explorerRowIcon = style({
   flexShrink: 0,
-  color: 'var(--mantine-color-coolGray-5)',
+  color: tokens.textSecondary,
   marginRight: '8px',
 });
 
@@ -67,7 +66,7 @@ export const explorerRowTitleFolder = style({
 export const explorerRowMeta = style({
   flexShrink: 0,
   fontSize: '12px',
-  color: 'var(--mantine-color-coolGray-5)',
+  color: tokens.textSecondary,
   marginLeft: '16px',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
@@ -77,7 +76,7 @@ export const explorerRowMeta = style({
 export const explorerRowTime = style({
   flexShrink: 0,
   fontSize: '12px',
-  color: 'var(--mantine-color-coolGray-5)',
+  color: tokens.textSecondary,
   marginLeft: '16px',
   width: '60px',
   textAlign: 'right',

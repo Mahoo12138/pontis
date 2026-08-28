@@ -1,6 +1,7 @@
 import { TextInput, Group, Badge } from '@mantine/core';
 import { IconSearch, IconPlus, IconCloudCheck } from '@tabler/icons-react';
 import { headerRegion } from '../../styles/app-shell.css';
+import { tokens } from '../../styles/semantic-tokens.css';
 
 interface HeaderProps {
   breadcrumb?: string;
@@ -12,7 +13,7 @@ export default function Header({ breadcrumb, onNewBookmark }: HeaderProps) {
     <div className={headerRegion}>
       <Group gap="xs" style={{ flex: 1 }}>
         {breadcrumb && (
-          <span style={{ fontSize: '14px', color: 'var(--mantine-color-coolGray-5)' }}>
+          <span style={{ fontSize: '14px', color: tokens.textSecondary }}>
             {breadcrumb}
           </span>
         )}
@@ -45,7 +46,7 @@ export default function Header({ breadcrumb, onNewBookmark }: HeaderProps) {
             fontSize: '13px',
             fontWeight: 500,
             color: 'white',
-            backgroundColor: 'var(--mantine-color-accentBlue-6)',
+            backgroundColor: tokens.accent,
             border: 'none',
             borderRadius: '6px',
             cursor: 'pointer',

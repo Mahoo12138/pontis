@@ -20,6 +20,7 @@ import {
   sidebarUser,
   sidebarItemIcon,
 } from '../../styles/sidebar.css';
+import { tokens } from '../../styles/semantic-tokens.css';
 import { useSpaces } from '../../hooks/use-spaces';
 
 export default function Sidebar() {
@@ -36,7 +37,7 @@ export default function Sidebar() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Logo */}
       <div className={sidebarLogo}>
-        <IconLayoutGrid size={20} stroke={1.5} style={{ color: 'var(--mantine-color-accentBlue-6)' }} />
+        <IconLayoutGrid size={20} stroke={1.5} style={{ color: tokens.accent }} />
         Pontis
       </div>
 
@@ -53,7 +54,7 @@ export default function Sidebar() {
             {space.name}
           </div>
         ))}
-        <div className={sidebarItem} style={{ color: 'var(--mantine-color-coolGray-5)' }}>
+        <div className={sidebarItem} style={{ color: tokens.textSecondary }}>
           <IconPlus size={16} stroke={1.5} className={sidebarItemIcon} />
           新建空间
         </div>
@@ -94,6 +95,7 @@ export default function Sidebar() {
             variant="subtle"
             size="sm"
             onClick={() => toggleColorScheme()}
+            aria-label="Toggle color scheme"
           >
             {colorScheme === 'dark' ? <IconSun size={16} /> : <IconMoon size={16} />}
           </ActionIcon>

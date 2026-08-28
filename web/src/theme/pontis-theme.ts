@@ -1,4 +1,12 @@
 import { createTheme, type MantineColorsTuple } from '@mantine/core';
+import {
+  graphite,
+  accentBlueDark,
+  healthyGreenDark,
+  warningAmberDark,
+  recoveryOrangeDark,
+  errorRedDark,
+} from './pontis-dark';
 
 // ─── Color tuples (10 shades each) ──────────────────────────
 
@@ -66,6 +74,13 @@ export const pontisTheme = createTheme({
     warningAmber,
     recoveryOrange,
     errorRed,
+    // Graphite Dark palettes — mapped by the semantic token layer in dark mode
+    graphite,
+    accentBlueDark,
+    healthyGreenDark,
+    warningAmberDark,
+    recoveryOrangeDark,
+    errorRedDark,
   },
 
   // Typography

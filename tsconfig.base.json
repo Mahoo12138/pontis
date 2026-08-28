@@ -12,9 +12,6 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
     "esModuleInterop": true,
     "paths": {
       "@pontis/api": ["./packages/api/src"],

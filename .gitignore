@@ -12,3 +12,13 @@ server/pontis
 server/pontis.exe
 server/cmd/server/server
 server/cmd/server/server.exe
+
+# node
+node_modules/
+
+# frontend build output
+web/dist/
+web/test-results/
+
+# os
+.DS_Store
