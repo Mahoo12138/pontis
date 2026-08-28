@@ -1,0 +1,20 @@
+{
+  "app_name": "Pontis",
+  "loading": "加载中…",
+  "save": "保存",
+  "cancel": "取消",
+  "delete": "删除",
+  "create": "新建",
+  "edit": "编辑",
+  "rename": "重命名",
+  "move": "移动",
+  "copy": "复制",
+  "close": "关闭",
+  "confirm": "确认",
+  "search": "搜索",
+  "no_results": "无结果",
+  "error_generic": "发生错误",
+  "retry": "重试",
+  "undo": "撤销",
+  "more": "更多"
+}

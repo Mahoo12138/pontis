@@ -1,0 +1,22 @@
+{
+  "new_bookmark": "新建书签",
+  "new_folder": "新建文件夹",
+  "empty_space": "这个空间还是空的",
+  "empty_space_hint": "你可以从浏览器同步现有书签，或创建第一个书签。",
+  "import_bookmarks": "导入书签",
+  "name_column": "名称",
+  "url_column": "链接",
+  "updated_column": "更新时间",
+  "filter_all": "全部",
+  "filter_folders": "文件夹",
+  "filter_bookmarks": "书签",
+  "sort_by": "排序",
+  "delete_confirm_title": "删除「{{name}}」？",
+  "delete_folder_confirm": "其中包含 {{bookmarkCount}} 个书签和 {{folderCount}} 个文件夹。",
+  "rename_title": "重命名",
+  "move_title": "移动到…",
+  "copy_url": "复制链接",
+  "open_url": "打开链接",
+  "check_link_health": "检查失效链接",
+  "item_count": "{{count}} 项"
+}

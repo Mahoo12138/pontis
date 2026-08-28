@@ -1,0 +1,22 @@
+{
+  "new_bookmark": "New bookmark",
+  "new_folder": "New folder",
+  "empty_space": "This space is empty",
+  "empty_space_hint": "You can sync existing bookmarks from your browser, or create your first bookmark.",
+  "import_bookmarks": "Import bookmarks",
+  "name_column": "Name",
+  "url_column": "URL",
+  "updated_column": "Updated",
+  "filter_all": "All",
+  "filter_folders": "Folders",
+  "filter_bookmarks": "Bookmarks",
+  "sort_by": "Sort",
+  "delete_confirm_title": "Delete \"{{name}}\"?",
+  "delete_folder_confirm": "It contains {{bookmarkCount}} bookmarks and {{folderCount}} folders.",
+  "rename_title": "Rename",
+  "move_title": "Move to…",
+  "copy_url": "Copy URL",
+  "open_url": "Open URL",
+  "check_link_health": "Check dead links",
+  "item_count": "{{count}} items"
+}
