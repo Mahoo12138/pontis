@@ -29,6 +29,10 @@ export const FOCUS_NODE_EVENT = 'pontis:focus-node';
  */
 let pendingFocusId: string | null = null;
 
+export function requestFocusNode(nodeId: string) {
+  pendingFocusId = nodeId;
+}
+
 export function consumePendingFocus(): string | null {
   const id = pendingFocusId;
   pendingFocusId = null;
@@ -143,7 +147,7 @@ export default function CommandPalette({ opened, onClose }: CommandPaletteProps)
         label: n.title,
         hint: extractHost(n.url ?? ''),
         run: () => {
-          pendingFocusId = n.id;
+          requestFocusNode(n.id);
           navigate(`/spaces/${n.space_id}`);
           window.dispatchEvent(new CustomEvent(FOCUS_NODE_EVENT, { detail: { nodeId: n.id } }));
         },

@@ -3,6 +3,7 @@ import AppShell from './components/app-shell/AppShell';
 import LoginPage from './routes/login';
 import SetupPage from './routes/setup';
 import SpaceExplorerPage from './routes/space-explorer';
+import SearchPage from './routes/search';
 import SpacesIndexPage from './routes/spaces-index';
 import { RequireAuth, RequirePublic } from './features/auth/auth-guard';
 
@@ -34,6 +35,7 @@ export default function App() {
                 <Routes>
                   <Route path="/" element={<SpacesIndexPage />} />
                   <Route path="/spaces/:spaceId" element={<SpaceExplorerPage />} />
+                  <Route path="/search" element={<SearchPage />} />
                 </Routes>
               </AppShell>
             </RequireAuth>
