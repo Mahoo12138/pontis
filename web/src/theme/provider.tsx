@@ -1,4 +1,5 @@
 import { MantineProvider } from '@mantine/core';
+import { Notifications } from '@mantine/notifications';
 import { pontisTheme } from './pontis-theme';
 
 interface PontisProviderProps {
@@ -17,6 +18,7 @@ interface PontisProviderProps {
 export function PontisProvider({ children }: PontisProviderProps) {
   return (
     <MantineProvider theme={pontisTheme} defaultColorScheme="auto">
+      <Notifications position="bottom-right" />
       {children}
     </MantineProvider>
   );

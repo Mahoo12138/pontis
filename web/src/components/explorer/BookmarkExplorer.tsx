@@ -1,16 +1,12 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Text, ActionIcon, Skeleton } from '@mantine/core';
 import {
   IconChevronRight,
   IconFolder,
   IconDots,
 } from '@tabler/icons-react';
-import { useNodes } from '../../hooks/use-nodes';
 import { formatShortTime, extractHost } from '../../lib/format';
-import { openUrlSafely } from '../../lib/safe-url';
-import { buildTreeIndex } from '../../features/explorer/tree';
-import type { ExplorerFilter } from '../../features/explorer/tree';
-import { useExplorerState } from '../../features/explorer/use-explorer-state';
+import type { ExplorerState, TreeIndex } from '../../features/explorer';
 import {
   explorerContainer,
   explorerColumnHeader,
@@ -28,26 +24,27 @@ import {
 import { tokens } from '../../styles/semantic-tokens.css';
 
 interface BookmarkExplorerProps {
-  spaceId?: string;
-  filter: ExplorerFilter;
+  isLoading: boolean;
+  index: TreeIndex;
+  state: ExplorerState;
+  renamingId: string | null;
+  onStartRename: (id: string | null) => void;
+  onCommitRename: (id: string, title: string) => void;
+  onDeleteKey: () => void;
 }
 
 const INDENT_PX = 16;
 
-export default function BookmarkExplorer({ spaceId, filter }: BookmarkExplorerProps) {
-  const { data: nodesData, isLoading } = useNodes(spaceId);
-  const nodes = useMemo(() => nodesData?.nodes ?? [], [nodesData]);
-  const index = useMemo(() => buildTreeIndex(nodes), [nodes]);
-
-  const {
-    rows,
-    expanded,
-    selected,
-    focusId,
-    toggleExpand,
-    handleClick,
-    handleKeyDown,
-  } = useExplorerState(index, filter);
+export default function BookmarkExplorer({
+  isLoading,
+  index,
+  state,
+  renamingId,
+  onStartRename,
+  onCommitRename,
+  onDeleteKey,
+}: BookmarkExplorerProps) {
+  const { rows, expanded, selected, focusId, toggleExpand, handleClick, handleKeyDown } = state;
 
   // Keep the keyboard cursor visible.
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
@@ -89,7 +86,13 @@ export default function BookmarkExplorer({ spaceId, filter }: BookmarkExplorerPr
     <div
       className={explorerContainer}
       tabIndex={0}
-      onKeyDown={handleKeyDown}
+      onKeyDown={(e) => {
+        handleKeyDown(e);
+        if ((e.key === 'Delete' || e.key === 'Backspace') && selected.size > 0) {
+          e.preventDefault();
+          onDeleteKey();
+        }
+      }}
       role="listbox"
       aria-multiselectable
       aria-label="书签列表"
@@ -107,6 +110,7 @@ export default function BookmarkExplorer({ spaceId, filter }: BookmarkExplorerPr
         const isSelected = selected.has(node.id);
         const isFocused = node.id === focusId;
         const isExpanded = expanded.has(node.id);
+        const isRenaming = renamingId === node.id;
 
         return (
           <div
@@ -123,10 +127,12 @@ export default function BookmarkExplorer({ spaceId, filter }: BookmarkExplorerPr
               isFocused ? explorerRowFocused : '',
             ].join(' ')}
             style={{ paddingLeft: 16 + depth * INDENT_PX }}
-            onClick={(e) => handleClick(e, node.id)}
+            onClick={(e) => {
+              if (!isRenaming) handleClick(e, node.id);
+            }}
             onDoubleClick={() => {
               if (node.type === 'folder') toggleExpand(node.id);
-              else if (node.url) openUrlSafely(node.url);
+              else onStartRename(node.id);
             }}
           >
             {node.type === 'folder' ? (
@@ -139,7 +145,15 @@ export default function BookmarkExplorer({ spaceId, filter }: BookmarkExplorerPr
                   onClick={(e) => { e.stopPropagation(); toggleExpand(node.id); }}
                 />
                 <IconFolder size={16} stroke={1.5} className={explorerRowIcon} />
-                <span className={`${explorerRowTitle} ${explorerRowTitleFolder}`}>{node.title}</span>
+                {isRenaming ? (
+                  <RenameInput
+                    initial={node.title}
+                    onCommit={(title) => onCommitRename(node.id, title)}
+                    onCancel={() => onStartRename(null)}
+                  />
+                ) : (
+                  <span className={`${explorerRowTitle} ${explorerRowTitleFolder}`}>{node.title}</span>
+                )}
                 <span style={{ width: '200px', flexShrink: 0 }} />
                 <span className={explorerRowTime}>{childCount} 项</span>
               </>
@@ -151,7 +165,15 @@ export default function BookmarkExplorer({ spaceId, filter }: BookmarkExplorerPr
                   src={`https://www.google.com/s2/favicons?domain=${extractHost(node.url ?? '')}&sz=16`}
                   alt=""
                 />
-                <span className={explorerRowTitle}>{node.title}</span>
+                {isRenaming ? (
+                  <RenameInput
+                    initial={node.title}
+                    onCommit={(title) => onCommitRename(node.id, title)}
+                    onCancel={() => onStartRename(null)}
+                  />
+                ) : (
+                  <span className={explorerRowTitle}>{node.title}</span>
+                )}
                 <span className={explorerRowMeta}>{extractHost(node.url ?? '')}</span>
                 <span className={explorerRowTime}>{formatShortTime(node.updated_at)}</span>
               </>
@@ -167,5 +189,53 @@ export default function BookmarkExplorer({ spaceId, filter }: BookmarkExplorerPr
         );
       })}
     </div>
+  );
+}
+
+/** Inline rename field: Enter/blur commits, Escape cancels. */
+function RenameInput({
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  initial: string;
+  onCommit: (title: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+
+  const commit = () => {
+    const title = value.trim();
+    if (title && title !== initial) onCommit(title);
+    else onCancel();
+  };
+
+  return (
+    <input
+      autoFocus
+      value={value}
+      onChange={(e) => setValue(e.currentTarget.value)}
+      onFocus={(e) => e.currentTarget.select()}
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') commit();
+        if (e.key === 'Escape') onCancel();
+      }}
+      onBlur={commit}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        height: '26px',
+        fontSize: '14px',
+        color: tokens.textPrimary,
+        backgroundColor: tokens.workspaceBg,
+        border: `1px solid ${tokens.accent}`,
+        borderRadius: '4px',
+        padding: '0 6px',
+        outline: 'none',
+      }}
+    />
   );
 }

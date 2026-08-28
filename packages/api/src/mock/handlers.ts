@@ -1,8 +1,12 @@
 import { http, HttpResponse } from 'msw';
 import metaJson from './data/meta.json';
 import spacesJson from './data/spaces.json';
-import nodesJson from './data/nodes.json';
+import nodesJsonRaw from './data/nodes.json';
 import devicesJson from './data/devices.json';
+import type { Node, RootSlot } from '../types';
+
+// Typed, mutable view of the fixture so session-stateful CRUD compiles.
+const nodesJson = nodesJsonRaw as { nodes: Node[]; root_slots: RootSlot[] };
 
 const BASE = '/api/v1';
 
@@ -21,16 +25,24 @@ export const gapHandlers = [
     return HttpResponse.json({ root_slots });
   }),
 
-  http.post(`${BASE}/spaces/:spaceId/nodes`, async ({ request }) => {
-    const body = (await request.json()) as Record<string, unknown>;
+  // Session-stateful CRUD: mutations update the in-memory fixture so
+  // the explorer sees created/renamed/deleted nodes after invalidation.
+  http.post(`${BASE}/spaces/:spaceId/nodes`, async ({ request, params }) => {
+    const body = (await request.json()) as {
+      type?: string;
+      title?: string;
+      url?: string | null;
+      parent?: { type?: string; id?: string; key?: string };
+    };
+    const parent = body.parent ?? {};
     const newNode = {
       id: `n${Date.now()}`,
-      space_id: '0192a3f4-0001-7d8e-9f0a-1b2c3d4e5f01',
-      type: body.type,
+      space_id: params.spaceId as string,
+      type: (body.type ?? 'bookmark') as Node['type'],
       title: body.title ?? 'New item',
       url: body.url ?? null,
-      parent_id: (body.parent as Record<string, string>)?.id ?? null,
-      root_key: (body.parent as Record<string, string>)?.key ?? null,
+      parent_id: parent.type === 'node' ? (parent.id ?? null) : null,
+      root_key: parent.type === 'root' ? (parent.key ?? null) : null,
       position: 999,
       created_revision: 100,
       title_revision: 100,
@@ -39,6 +51,7 @@ export const gapHandlers = [
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
+    nodesJson.nodes.push(newNode);
     return HttpResponse.json(newNode, { status: 201 });
   }),
 
@@ -48,10 +61,24 @@ export const gapHandlers = [
     if (!existing) {
       return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'node not found', request_id: 'req_mock' } }, { status: 404 });
     }
-    return HttpResponse.json({ ...existing, ...body, updated_at: new Date().toISOString() });
+    Object.assign(existing, body, { updated_at: new Date().toISOString() });
+    return HttpResponse.json(existing);
   }),
 
-  http.delete(`${BASE}/spaces/:spaceId/nodes/:nodeId`, () => {
+  http.delete(`${BASE}/spaces/:spaceId/nodes/:nodeId`, ({ params }) => {
+    // Cascade like the real backend will: a folder deletes its subtree.
+    const doomed = new Set<string>([params.nodeId as string]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const n of nodesJson.nodes) {
+        if (n.parent_id && doomed.has(n.parent_id) && !doomed.has(n.id)) {
+          doomed.add(n.id);
+          grew = true;
+        }
+      }
+    }
+    nodesJson.nodes = nodesJson.nodes.filter((n) => !doomed.has(n.id));
     return new HttpResponse(null, { status: 204 });
   }),
 
