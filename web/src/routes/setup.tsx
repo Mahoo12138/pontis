@@ -30,7 +30,8 @@ export default function SetupPage() {
     setError(null);
     try {
       await setupMutation.mutateAsync(values);
-      navigate('/');
+      // Backend setup does not issue a session cookie; log in next.
+      navigate('/login');
     } catch (e: any) {
       setError(e?.message ?? '创建失败');
     }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { TextInput, PasswordInput, Button, Stack, Paper, Text, Alert } from '@mantine/core';
+import { Link, useNavigate } from 'react-router-dom';
+import { TextInput, PasswordInput, Button, Stack, Paper, Text, Alert, Anchor } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { IconAlertCircle } from '@tabler/icons-react';
 import { useLogin } from '../hooks/use-auth';
@@ -64,6 +64,10 @@ export default function LoginPage() {
               </Button>
             </Stack>
           </form>
+
+          <Text fz="xs" c="dimmed" ta="center">
+            首次使用？<Anchor fz="xs" component={Link} to="/setup">初始化新实例</Anchor>
+          </Text>
         </Stack>
       </Paper>
     </div>
