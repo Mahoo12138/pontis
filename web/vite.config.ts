@@ -18,8 +18,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // :8081 — :8080 is commonly taken by OrbStack on dev machines.
       '/api': {
-        target: 'http://localhost:8080',
+        target: process.env.PONTIS_API_URL ?? 'http://localhost:8081',
         changeOrigin: true,
       },
     },
