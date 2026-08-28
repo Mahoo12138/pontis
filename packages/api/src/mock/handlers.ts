@@ -19,7 +19,7 @@ export const gapHandlers = [
     return HttpResponse.json({ nodes });
   }),
 
-  http.get(`${BASE}/spaces/:spaceId/root-slot`, ({ params }) => {
+  http.get(`${BASE}/spaces/:spaceId/root-slots`, ({ params }) => {
     const spaceId = params.spaceId as string;
     const root_slots = nodesJson.root_slots.filter((s) => s.space_id === spaceId);
     return HttpResponse.json({ root_slots });

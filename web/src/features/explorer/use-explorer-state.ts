@@ -60,6 +60,15 @@ export function useExplorerState(index: TreeIndex, filter: ExplorerFilter) {
     });
   }, []);
 
+  const expand = useCallback((id: string) => {
+    setExpanded((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
+
   const selectRange = useCallback(
     (fromId: string, toId: string) => {
       const from = rowIds.indexOf(fromId);
@@ -207,6 +216,8 @@ export function useExplorerState(index: TreeIndex, filter: ExplorerFilter) {
     focusId,
     toggleExpand,
     collapse,
+    expand,
+    focusRow,
     handleClick,
     handleKeyDown,
     clearSelection,

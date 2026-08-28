@@ -9,6 +9,7 @@ import {
 } from '@tabler/icons-react';
 import { headerRegion } from '../../styles/app-shell.css';
 import { tokens } from '../../styles/semantic-tokens.css';
+import { OPEN_PALETTE_EVENT } from '../command-palette/CommandPalette';
 
 interface HeaderProps {
   breadcrumb?: string;
@@ -32,7 +33,13 @@ export default function Header({ breadcrumb, onNewBookmark, onNewFolder }: Heade
           placeholder="搜索书签、文件夹… ⌘K"
           leftSection={<IconSearch size={14} stroke={1.5} />}
           w={320}
-          styles={{ input: { height: '34px', fontSize: '13px' } }}
+          readOnly
+          aria-label="打开命令面板"
+          onFocus={(e) => {
+            e.currentTarget.blur();
+            window.dispatchEvent(new CustomEvent(OPEN_PALETTE_EVENT));
+          }}
+          styles={{ input: { height: '34px', fontSize: '13px', cursor: 'pointer' } }}
         />
 
         <Badge

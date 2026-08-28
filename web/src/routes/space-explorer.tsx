@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
@@ -11,6 +11,11 @@ import type { ContextMenuPos } from '../components/explorer/NodeContextMenu';
 import { NewNodeModal, ConfirmDeleteDialog } from '../components/explorer/node-modals';
 import type { NewNodeMode } from '../components/explorer/node-modals';
 import Inspector from '../components/inspector/Inspector';
+import {
+  CREATE_NODE_EVENT,
+  FOCUS_NODE_EVENT,
+  consumePendingFocus,
+} from '../components/command-palette/CommandPalette';
 import { contentRegion } from '../styles/app-shell.css';
 import { tokens } from '../styles/semantic-tokens.css';
 import { useNodes, useRootSlots } from '../hooks/use-nodes';
@@ -40,6 +45,46 @@ export default function SpaceExplorerPage() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
 
   const spaceName = spacesData?.spaces?.find((s) => s.id === spaceId)?.name ?? '空间';
+
+  // Command palette handoffs: create-node opens the modal at root;
+  // focus-node expands the ancestor chain and moves the cursor there.
+  useEffect(() => {
+    const onCreate = (e: Event) => {
+      const mode = (e as CustomEvent<{ mode?: NewNodeMode }>).detail?.mode;
+      setCreateParent(null);
+      setCreateMode(mode === 'folder' ? 'folder' : 'bookmark');
+    };
+    window.addEventListener(CREATE_NODE_EVENT, onCreate);
+    return () => window.removeEventListener(CREATE_NODE_EVENT, onCreate);
+  }, []);
+
+  const focusNodeById = useCallback(
+    (nodeId: string) => {
+      let parent = index.parentOf.get(nodeId);
+      while (parent) {
+        state.expand(parent.id);
+        parent = index.parentOf.get(parent.id);
+      }
+      state.focusRow(nodeId);
+    },
+    [index, state.expand, state.focusRow],
+  );
+
+  useEffect(() => {
+    const onFocus = (e: Event) => {
+      consumePendingFocus(); // same-page navigation: event is enough
+      const nodeId = (e as CustomEvent<{ nodeId?: string }>).detail?.nodeId;
+      if (nodeId && index.byId.has(nodeId)) focusNodeById(nodeId);
+    };
+    window.addEventListener(FOCUS_NODE_EVENT, onFocus);
+    return () => window.removeEventListener(FOCUS_NODE_EVENT, onFocus);
+  }, [index, focusNodeById]);
+
+  // Cross-space navigation: the target explorer mounted after the event.
+  useEffect(() => {
+    const pending = consumePendingFocus();
+    if (pending && index.byId.has(pending)) focusNodeById(pending);
+  }, [index, focusNodeById]);
 
   // Breadcrumb: space name plus the focused node's path to root.
   const breadcrumb = useMemo(() => {
