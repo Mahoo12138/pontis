@@ -29,6 +29,7 @@ export const explorerRow = style({
   fontSize: '14px',
   color: tokens.textPrimary,
   cursor: 'pointer',
+  userSelect: 'none',
   transition: 'background-color 100ms',
   selectors: {
     '&:hover': {
@@ -65,6 +66,7 @@ export const explorerRowTitleFolder = style({
 
 export const explorerRowMeta = style({
   flexShrink: 0,
+  width: '200px',
   fontSize: '12px',
   color: tokens.textSecondary,
   marginLeft: '16px',
