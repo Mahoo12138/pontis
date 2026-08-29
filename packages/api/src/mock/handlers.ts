@@ -7,7 +7,9 @@ import deviceOverviewJsonRaw from './data/device-overview.json';
 import publicationsJsonRaw from './data/publications.json';
 import type {
   DeviceOverviewResponse,
+  DuplicateGroup,
   ImportPlanEntry,
+  LinkCheckResult,
   Node,
   PublicationDetail,
   PublicationSummary,
@@ -392,8 +394,7 @@ export const gapHandlers = [
     );
   }),
 
-  http.post(`${BASE}/spaces/:spaceId/export`, async ({ request, params }) => {
-    const body = (await request.json()) as { format?: string; root_key?: string };
+  http.post(`${BASE}/spaces/:spaceId/export`, async ({ request, params }) => {    const body = (await request.json()) as { format?: string; root_key?: string };
     const spaceId = params.spaceId as string;
     const spaceName =
       spacesJson.spaces.find((s) => s.id === spaceId)?.name ?? 'space';
@@ -474,6 +475,129 @@ export const gapHandlers = [
       content_type: 'text/html',
       content: html,
     });
+  }),
+
+  // ─── Organizer (gap) ────────────────────────────────────
+  http.post(`${BASE}/spaces/:spaceId/organizer/link-check`, ({ params }) => {
+    const spaceId = params.spaceId as string;
+    const total = nodesJson.nodes.filter((n) => n.space_id === spaceId && n.type === 'bookmark').length;
+    return HttpResponse.json({ job_id: `job-link-${Date.now()}`, total });
+  }),
+
+  http.get(`${BASE}/spaces/:spaceId/organizer/link-check/results`, ({ params }) => {
+    const spaceId = params.spaceId as string;
+    // Deterministic per-URL outcomes; the real backend runs a bounded
+    // concurrent LinkCheckJob (HEAD first, GET fallback, per-host limits).
+    const classify = (url: string) => {
+      const latency = 120 + ((url.length * 37) % 900);
+      if (url.includes('wal.html')) {
+        return { status_class: 'client_4xx' as const, http_status: 404, latency_ms: latency };
+      }
+      if (url.includes('dribbble')) {
+        return { status_class: 'server_5xx' as const, http_status: 503, latency_ms: latency };
+      }
+      if (url.includes('caniuse')) {
+        return { status_class: 'timeout' as const, error_type: 'timeout', latency_ms: 8000 };
+      }
+      if (url.includes('vanilla-extract')) {
+        return { status_class: 'network_error' as const, error_type: 'dns_resolution_failed', latency_ms: latency };
+      }
+      return { status_class: 'ok_2xx' as const, http_status: 200, latency_ms: latency };
+    };
+    const now = new Date().toISOString();
+    const results = nodesJson.nodes
+      .filter((n) => n.space_id === spaceId && n.type === 'bookmark')
+      .map((n) => ({
+        node_id: n.id,
+        title: n.title,
+        checked_url: n.url ?? '',
+        checked_at: now,
+        ...classify(n.url ?? ''),
+      }));
+    return HttpResponse.json({ job_id: 'job-link-latest', finished_at: now, results });
+  }),
+
+  http.get(`${BASE}/spaces/:spaceId/organizer/duplicates`, ({ params }) => {
+    const spaceId = params.spaceId as string;
+    const bookmarks = nodesJson.nodes.filter(
+      (n) => n.space_id === spaceId && n.type === 'bookmark' && n.url,
+    );
+
+    const pathOf = (nodeId: string): string => {
+      const parts: string[] = [];
+      let cur = nodesJson.nodes.find((n) => n.id === nodeId);
+      while (cur) {
+        parts.unshift(cur.title);
+        cur = cur.parent_id ? nodesJson.nodes.find((n) => n.id === cur?.parent_id) : undefined;
+      }
+      return parts.join(' / ');
+    };
+
+    // Exact duplicates: identical raw URL. Title is irrelevant.
+    const byRaw = new Map<string, typeof bookmarks>();
+    for (const b of bookmarks) {
+      const list = byRaw.get(b.url!) ?? [];
+      list.push(b);
+      byRaw.set(b.url!, list);
+    }
+    const exactKeys = new Set<string>();
+    const groups: DuplicateGroup[] = [];
+    for (const [url, list] of byRaw) {
+      if (list.length > 1) {
+        exactKeys.add(url);
+        groups.push({
+          id: `exact-${url}`,
+          kind: 'exact',
+          items: list.map((b) => ({ node_id: b.id, title: b.title, url, path: pathOf(b.id) })),
+        });
+      }
+    }
+
+    // Suspected duplicates: conservative normalization with reasons.
+    const normalize = (raw: string) => {
+      try {
+        const u = new URL(raw);
+        const reasons: string[] = [];
+        const tracking = [...u.searchParams.keys()].filter((k) => k.startsWith('utm_') || k === 'fbclid' || k === 'gclid');
+        for (const k of tracking) u.searchParams.delete(k);
+        if (tracking.length > 0) reasons.push('tracking_params_only');
+        if (u.pathname.length > 1 && u.pathname.endsWith('/')) {
+          u.pathname = u.pathname.replace(/\/+$/, '');
+          reasons.push('trailing_slash_only');
+        }
+        if (u.port && ((u.protocol === 'https:' && u.port === '443') || (u.protocol === 'http:' && u.port === '80'))) {
+          u.port = '';
+          reasons.push('default_port_only');
+        }
+        return { key: `${u.protocol}//${u.host}${u.pathname}${u.search}`, reasons };
+      } catch {
+        return { key: raw, reasons: [] as string[] };
+      }
+    };
+
+    const byNorm = new Map<string, { items: DuplicateGroup['items']; reasons: Set<string>; raws: Set<string> }>();
+    for (const b of bookmarks) {
+      const { key, reasons } = normalize(b.url!);
+      const entry = byNorm.get(key) ?? { items: [], reasons: new Set<string>(), raws: new Set<string>() };
+      entry.items.push({ node_id: b.id, title: b.title, url: b.url!, path: pathOf(b.id) });
+      entry.raws.add(b.url!);
+      for (const r of reasons) entry.reasons.add(r);
+      byNorm.set(key, entry);
+    }
+    for (const [key, entry] of byNorm) {
+      const firstRaw = [...entry.raws][0];
+      const isExact = entry.raws.size === 1 && firstRaw !== undefined && exactKeys.has(firstRaw);
+      if (entry.items.length > 1 && !isExact) {
+        groups.push({
+          id: `suspected-${key}`,
+          kind: 'suspected',
+          reason: [...entry.reasons].join(', ') || 'url_normalization',
+          items: entry.items,
+        });
+      }
+    }
+
+    return HttpResponse.json({ groups });
   }),
 ];
 

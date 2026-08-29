@@ -396,3 +396,46 @@ export interface ExportResponse {
   content_type: string;
   content: string;
 }
+
+// ─── Organizer (gap endpoint — mock only) ────────────────────
+
+export type LinkStatusClass = 'ok_2xx' | 'client_4xx' | 'server_5xx' | 'timeout' | 'network_error';
+
+export interface LinkCheckResult {
+  node_id: string;
+  title: string;
+  checked_url: string;
+  status_class: LinkStatusClass;
+  http_status?: number;
+  error_type?: string;
+  latency_ms: number;
+  final_url?: string;
+  checked_at: string;
+}
+
+export interface LinkCheckRunResponse {
+  job_id: string;
+  total: number;
+}
+
+export interface LinkCheckResultsResponse {
+  job_id: string;
+  finished_at: string;
+  results: LinkCheckResult[];
+}
+
+export interface DuplicateGroup {
+  id: string;
+  kind: 'exact' | 'suspected';
+  reason?: string;
+  items: {
+    node_id: string;
+    title: string;
+    url: string;
+    path: string;
+  }[];
+}
+
+export interface DuplicatesResponse {
+  groups: DuplicateGroup[];
+}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import type { Node, ParentRef } from '@pontis/api';
@@ -29,6 +29,7 @@ import type { ExplorerFilter } from '../features/explorer';
 
 export default function SpaceExplorerPage() {
   const { spaceId } = useParams();
+  const navigate = useNavigate();
   const [filter, setFilter] = useState<ExplorerFilter>('all');
 
   const { data: nodesData, isLoading, isError, refetch } = useNodes(spaceId);
@@ -187,6 +188,7 @@ export default function SpaceExplorerPage() {
         onToggleInspector={() => setInspectorOpen((v) => !v)}
         onImport={() => setImportOpen(true)}
         onExport={() => setExportOpen(true)}
+        onCheckLinks={() => navigate(`/spaces/${spaceId}/organizer`)}
       />
       <div className={contentRegion} style={{ display: 'flex' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>

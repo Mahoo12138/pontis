@@ -10,6 +10,7 @@ interface ToolbarProps {
   onToggleInspector?: () => void;
   onImport?: () => void;
   onExport?: () => void;
+  onCheckLinks?: () => void;
 }
 
 export default function Toolbar({
@@ -19,6 +20,7 @@ export default function Toolbar({
   onToggleInspector,
   onImport,
   onExport,
+  onCheckLinks,
 }: ToolbarProps) {
   return (
     <div className={toolbarRegion}>
@@ -87,7 +89,11 @@ export default function Toolbar({
           <IconArrowsSort size={14} stroke={1.5} />
           排序
         </Group>
-        <Group gap={4} style={{ fontSize: '12px', color: tokens.textSecondary, cursor: 'pointer' }}>
+        <Group
+          gap={4}
+          onClick={onCheckLinks}
+          style={{ fontSize: '12px', color: tokens.textSecondary, cursor: 'pointer' }}
+        >
           <IconLink size={14} stroke={1.5} />
           检查失效链接
         </Group>

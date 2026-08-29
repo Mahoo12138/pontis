@@ -54,4 +54,10 @@ export type {
   ImportApplyResponse,
   ExportRequest,
   ExportResponse,
+  LinkStatusClass,
+  LinkCheckResult,
+  LinkCheckRunResponse,
+  LinkCheckResultsResponse,
+  DuplicateGroup,
+  DuplicatesResponse,
 } from './types';
