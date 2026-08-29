@@ -60,4 +60,8 @@ export type {
   LinkCheckResultsResponse,
   DuplicateGroup,
   DuplicatesResponse,
+  BackupKind,
+  Backup,
+  BackupListResponse,
+  RestoreBackupResponse,
 } from './types';

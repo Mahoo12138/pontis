@@ -5,7 +5,9 @@ import nodesJsonRaw from './data/nodes.json';
 import devicesJson from './data/devices.json';
 import deviceOverviewJsonRaw from './data/device-overview.json';
 import publicationsJsonRaw from './data/publications.json';
+import backupsJsonRaw from './data/backups.json';
 import type {
+  Backup,
   DeviceOverviewResponse,
   DuplicateGroup,
   ImportPlanEntry,
@@ -21,6 +23,7 @@ import type {
 const nodesJson = nodesJsonRaw as { nodes: Node[]; root_slots: RootSlot[] };
 const deviceOverview = deviceOverviewJsonRaw as DeviceOverviewResponse;
 const publications = publicationsJsonRaw.publications as PublicationDetail[];
+const backups = backupsJsonRaw.backups as Backup[];
 const revokedDevices = new Set<string>();
 
 const BASE = '/api/v1';
@@ -598,6 +601,80 @@ export const gapHandlers = [
     }
 
     return HttpResponse.json({ groups });
+  }),
+
+  // ─── Backups (gap) ──────────────────────────────────────
+  http.get(`${BASE}/spaces/:spaceId/backups`, ({ params }) => {
+    const spaceId = params.spaceId as string;
+    const list = backups
+      .filter((b) => b.space_id === spaceId)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return HttpResponse.json({ backups: list });
+  }),
+
+  http.post(`${BASE}/spaces/:spaceId/backups`, async ({ params }) => {
+    const spaceId = params.spaceId as string;
+    const spaceName = spacesJson.spaces.find((s) => s.id === spaceId)?.name ?? 'space';
+    const nodesInSpace = nodesJson.nodes.filter((n) => n.space_id === spaceId);
+    const now = new Date();
+    const stamp = now.toISOString().slice(0, 10).replace(/-/g, '');
+    const backup: Backup = {
+      id: `bk-${Date.now()}`,
+      space_id: spaceId,
+      kind: 'manual',
+      filename: `${spaceName}-${stamp}-full.tar.zst`,
+      size_bytes: nodesInSpace.length * 17_311 + 12_400,
+      node_count: nodesInSpace.length,
+      bookmark_count: nodesInSpace.filter((n) => n.type === 'bookmark').length,
+      created_at: now.toISOString(),
+      protected: false,
+    };
+    backups.push(backup);
+    return HttpResponse.json(backup, { status: 201 });
+  }),
+
+  http.post(`${BASE}/spaces/:spaceId/backups/:backupId/restore`, async ({ request, params }) => {
+    const spaceId = params.spaceId as string;
+    const spaceName = spacesJson.spaces.find((s) => s.id === spaceId)?.name ?? 'space';
+    // Restore flow: create pre-restore safety backup → replace baseline →
+    // epoch++ → revision=0 → bindings require resync (docs/14 §12).
+    const safety: Backup = {
+      id: `bk-safety-${Date.now()}`,
+      space_id: spaceId,
+      kind: 'safety',
+      filename: `${spaceName}-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-presafety.tar.zst`,
+      size_bytes: 455_233,
+      node_count: nodesJson.nodes.filter((n) => n.space_id === spaceId).length,
+      bookmark_count: nodesJson.nodes.filter((n) => n.space_id === spaceId && n.type === 'bookmark').length,
+      created_at: new Date().toISOString(),
+      protected: false,
+    };
+    backups.push(safety);
+    const epoch = 2 + (spaceId.length % 3);
+    return HttpResponse.json({ safety_backup_id: safety.id, new_epoch: epoch });
+  }),
+
+  http.patch(`${BASE}/spaces/:spaceId/backups/:backupId`, async ({ request, params }) => {
+    const body = (await request.json()) as { protected?: boolean };
+    const backup = backups.find(
+      (b) => b.id === params.backupId && b.space_id === params.spaceId,
+    );
+    if (!backup) {
+      return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'backup not found', request_id: 'req_mock' } }, { status: 404 });
+    }
+    if (typeof body.protected === 'boolean') backup.protected = body.protected;
+    return HttpResponse.json(backup);
+  }),
+
+  http.delete(`${BASE}/spaces/:spaceId/backups/:backupId`, ({ params }) => {
+    const idx = backups.findIndex(
+      (b) => b.id === params.backupId && b.space_id === params.spaceId,
+    );
+    if (idx < 0) {
+      return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'backup not found', request_id: 'req_mock' } }, { status: 404 });
+    }
+    backups.splice(idx, 1);
+    return new HttpResponse(null, { status: 204 });
   }),
 ];
 

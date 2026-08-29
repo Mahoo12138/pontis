@@ -439,3 +439,28 @@ export interface DuplicateGroup {
 export interface DuplicatesResponse {
   groups: DuplicateGroup[];
 }
+
+// ─── Backups (gap endpoint — mock only) ──────────────────────
+
+export type BackupKind = 'manual' | 'scheduled' | 'safety';
+
+export interface Backup {
+  id: string;
+  space_id: string;
+  kind: BackupKind;
+  filename: string;
+  size_bytes: number;
+  node_count: number;
+  bookmark_count: number;
+  created_at: string;
+  protected: boolean;
+}
+
+export interface BackupListResponse {
+  backups: Backup[];
+}
+
+export interface RestoreBackupResponse {
+  safety_backup_id: string;
+  new_epoch: number;
+}

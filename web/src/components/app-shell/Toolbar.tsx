@@ -1,5 +1,5 @@
 import { Group, SegmentedControl, Tooltip } from '@mantine/core';
-import { IconArrowsSort, IconLink, IconInfoCircle, IconFileImport, IconFileExport } from '@tabler/icons-react';
+import { IconArrowsSort, IconLink, IconInfoCircle, IconFileImport, IconFileExport, IconArchive } from '@tabler/icons-react';
 import { toolbarRegion } from '../../styles/app-shell.css';
 import { tokens } from '../../styles/semantic-tokens.css';
 
@@ -11,6 +11,7 @@ interface ToolbarProps {
   onImport?: () => void;
   onExport?: () => void;
   onCheckLinks?: () => void;
+  onBackups?: () => void;
 }
 
 export default function Toolbar({
@@ -21,6 +22,7 @@ export default function Toolbar({
   onImport,
   onExport,
   onCheckLinks,
+  onBackups,
 }: ToolbarProps) {
   return (
     <div className={toolbarRegion}>
@@ -89,6 +91,16 @@ export default function Toolbar({
           <IconArrowsSort size={14} stroke={1.5} />
           排序
         </Group>
+        {onBackups && (
+          <Group
+            gap={4}
+            onClick={onBackups}
+            style={{ fontSize: '12px', color: tokens.textSecondary, cursor: 'pointer' }}
+          >
+            <IconArchive size={14} stroke={1.5} />
+            备份
+          </Group>
+        )}
         <Group
           gap={4}
           onClick={onCheckLinks}

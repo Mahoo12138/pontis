@@ -189,6 +189,7 @@ export default function SpaceExplorerPage() {
         onImport={() => setImportOpen(true)}
         onExport={() => setExportOpen(true)}
         onCheckLinks={() => navigate(`/spaces/${spaceId}/organizer`)}
+        onBackups={() => navigate(`/spaces/${spaceId}/backups`)}
       />
       <div className={contentRegion} style={{ display: 'flex' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
