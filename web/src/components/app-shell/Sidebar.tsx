@@ -119,7 +119,11 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <div className={sidebarSection}>
-        <div className={`${sidebarItem} ${currentPath === '/plaza' ? sidebarItemSelected : ''}`}>
+        <div
+          className={`${sidebarItem} ${currentPath.startsWith('/plaza') ? sidebarItemSelected : ''}`}
+          style={{ cursor: 'pointer' }}
+          onClick={() => navigate('/plaza')}
+        >
           <IconLayoutGrid size={16} stroke={1.5} className={sidebarItemIcon} />
           {t('sidebar:plaza')}
         </div>

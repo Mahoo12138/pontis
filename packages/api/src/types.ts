@@ -271,3 +271,64 @@ export interface ActivityEntry {
 export interface ActivityListResponse {
   activity: ActivityEntry[];
 }
+
+// ─── Plaza / Publications (gap endpoint — mock only) ────────
+
+export type PublicationVisibility = 'private' | 'plaza';
+
+/**
+ * Node inside a published share tree. `id` is a stable publication_node_id,
+ * deliberately unrelated to any canonical UUID.
+ */
+export interface PublicationNodeDTO {
+  id: string;
+  type: NodeType;
+  title: string;
+  url?: string;
+  children?: PublicationNodeDTO[];
+}
+
+export interface PublicationSummary {
+  id: string;
+  slug: string;
+  title: string;
+  description: string;
+  publisher: string;
+  version: number;
+  visibility: PublicationVisibility;
+  bookmark_count: number;
+  folder_count: number;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  is_mine: boolean;
+}
+
+export interface PublicationDetail extends PublicationSummary {
+  tree: PublicationNodeDTO;
+}
+
+export interface PublicationListResponse {
+  publications: PublicationSummary[];
+}
+
+export interface PublishRequest {
+  space_id: string;
+  /** Omitted = whole space; a node id publishes that subtree. */
+  root_node_id?: string;
+  title: string;
+  description?: string;
+  tags?: string[];
+}
+
+export interface ApplyPublicationRequest {
+  space_id: string;
+  parent: ParentRef;
+  strategy: 'merge' | 'replace';
+}
+
+export interface ApplyPublicationResponse {
+  created: number;
+  updated: number;
+  kept: number;
+}

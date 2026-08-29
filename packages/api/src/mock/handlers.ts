@@ -4,11 +4,20 @@ import spacesJson from './data/spaces.json';
 import nodesJsonRaw from './data/nodes.json';
 import devicesJson from './data/devices.json';
 import deviceOverviewJsonRaw from './data/device-overview.json';
-import type { DeviceOverviewResponse, Node, RootSlot } from '../types';
+import publicationsJsonRaw from './data/publications.json';
+import type {
+  DeviceOverviewResponse,
+  Node,
+  PublicationDetail,
+  PublicationSummary,
+  PublicationNodeDTO,
+  RootSlot,
+} from '../types';
 
 // Typed, mutable view of the fixture so session-stateful CRUD compiles.
 const nodesJson = nodesJsonRaw as { nodes: Node[]; root_slots: RootSlot[] };
 const deviceOverview = deviceOverviewJsonRaw as DeviceOverviewResponse;
+const publications = publicationsJsonRaw.publications as PublicationDetail[];
 const revokedDevices = new Set<string>();
 
 const BASE = '/api/v1';
@@ -190,6 +199,120 @@ export const gapHandlers = [
         max_spaces_per_user: 16,
       },
     });
+  }),
+
+  // ─── Plaza / Publications (gap) ─────────────────────────
+  http.get(`${BASE}/plaza/publications`, ({ request }) => {
+    const url = new URL(request.url);
+    const q = (url.searchParams.get('q') ?? '').trim().toLowerCase();
+    // Only plaza-visible publications enter the plaza index.
+    const visible = publications.filter((p) => p.visibility === 'plaza');
+    const matched = !q
+      ? visible
+      : visible.filter(
+          (p) =>
+            p.title.toLowerCase().includes(q) ||
+            p.description.toLowerCase().includes(q) ||
+            p.publisher.toLowerCase().includes(q) ||
+            p.tags.some((t) => t.toLowerCase().includes(q)),
+        );
+    const summaries: PublicationSummary[] = matched.map(({ tree: _tree, ...rest }) => rest);
+    return HttpResponse.json({ publications: summaries });
+  }),
+
+  http.get(`${BASE}/publications/:pubId`, ({ params }) => {
+    const pub = publications.find((p) => p.id === params.pubId);
+    if (!pub) {
+      return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'publication not found', request_id: 'req_mock' } }, { status: 404 });
+    }
+    return HttpResponse.json(pub);
+  }),
+
+  http.post(`${BASE}/publications`, async ({ request }) => {
+    const body = (await request.json()) as {
+      space_id: string;
+      root_node_id?: string;
+      title: string;
+      description?: string;
+      tags?: string[];
+    };
+    // Publish from the in-memory node fixture when the subtree exists there.
+    const source = body.root_node_id
+      ? nodesJson.nodes.find((n) => n.id === body.root_node_id)
+      : undefined;
+    const now = new Date().toISOString();
+    const tree: PublicationNodeDTO = source
+      ? {
+          id: 'pn-root',
+          type: 'folder',
+          title: body.title,
+          children: nodesJson.nodes
+            .filter((n) => n.parent_id === source.id)
+            .map((n) =>
+              n.type === 'folder'
+                ? { id: `pn-${n.id}`, type: 'folder' as const, title: n.title, children: [] }
+                : { id: `pn-${n.id}`, type: 'bookmark' as const, title: n.title, url: n.url ?? undefined },
+            ),
+        }
+      : { id: 'pn-root', type: 'folder', title: body.title, children: [] };
+
+    const countNodes = (node: PublicationNodeDTO): { bookmarks: number; folders: number } => {
+      let bookmarks = node.type === 'bookmark' ? 1 : 0;
+      let folders = node.type === 'folder' ? 1 : 0;
+      for (const child of node.children ?? []) {
+        const sub = countNodes(child);
+        bookmarks += sub.bookmarks;
+        folders += sub.folders;
+      }
+      return { bookmarks, folders };
+    };
+    const counts = countNodes(tree);
+
+    const pub: PublicationDetail = {
+      id: `pub-${Date.now()}`,
+      slug: body.title.toLowerCase().replace(/\s+/g, '-').slice(0, 32),
+      title: body.title,
+      description: body.description ?? '',
+      publisher: 'Mahoo',
+      version: 1,
+      visibility: 'plaza',
+      bookmark_count: Math.max(0, counts.bookmarks),
+      folder_count: Math.max(0, counts.folders - 1),
+      tags: body.tags ?? [],
+      created_at: now,
+      updated_at: now,
+      is_mine: true,
+      tree,
+    };
+    publications.unshift(pub);
+    const { tree: _t, ...summary } = pub;
+    return HttpResponse.json(summary, { status: 201 });
+  }),
+
+  http.post(`${BASE}/publications/:pubId/apply`, async ({ request, params }) => {
+    const body = (await request.json()) as {
+      space_id: string;
+      strategy: 'merge' | 'replace';
+    };
+    const pub = publications.find((p) => p.id === params.pubId);
+    if (!pub) {
+      return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'publication not found', request_id: 'req_mock' } }, { status: 404 });
+    }
+    // Merge keeps matched content (reported as kept/updated); replace
+    // recreates the whole subtree (all created). Deep creation is left to
+    // the real backend; the mock returns plausible counters.
+    const base = pub.bookmark_count + pub.folder_count;
+    return HttpResponse.json(
+      body.strategy === 'merge'
+        ? { created: Math.ceil(base * 0.6), updated: 2, kept: Math.floor(base * 0.4) }
+        : { created: base, updated: 0, kept: 0 },
+    );
+  }),
+
+  http.delete(`${BASE}/publications/:pubId`, ({ params }) => {
+    const idx = publications.findIndex((p) => p.id === params.pubId);
+    if (idx >= 0) publications.splice(idx, 1);
+    return new HttpResponse(null, { status: 204 });
   }),
 ];
 

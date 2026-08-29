@@ -36,4 +36,12 @@ export type {
   ActivityAction,
   ActivityEntry,
   ActivityListResponse,
+  PublicationVisibility,
+  PublicationNodeDTO,
+  PublicationSummary,
+  PublicationDetail,
+  PublicationListResponse,
+  PublishRequest,
+  ApplyPublicationRequest,
+  ApplyPublicationResponse,
 } from './types';

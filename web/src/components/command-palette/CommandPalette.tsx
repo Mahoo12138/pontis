@@ -12,6 +12,7 @@ import {
   IconFolder,
   IconClock,
   IconDeviceDesktop,
+  IconLayoutGrid,
 } from '@tabler/icons-react';
 import { useMantineColorScheme } from '@mantine/core';
 import { useSpaces } from '../../hooks/use-spaces';
@@ -119,6 +120,13 @@ export default function CommandPalette({ opened, onClose }: CommandPaletteProps)
           run: () => navigate(`/spaces/${currentSpaceId}/activity`),
         });
       }
+      out.push({
+        id: 'act-plaza',
+        section: '导航',
+        icon: <IconLayoutGrid size={15} />,
+        label: '打开广场',
+        run: () => navigate('/plaza'),
+      });
       out.push({
         id: 'act-devices',
         section: '导航',
