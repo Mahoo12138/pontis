@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -139,5 +138,4 @@ func TestTransferExportImportRoundTrip(t *testing.T) {
 	if titles["will be wiped"] {
 		t.Fatalf("replace left the old child behind")
 	}
-	fmt.Sprint() // keep fmt imported for future assertions
 }

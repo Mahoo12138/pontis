@@ -3,24 +3,15 @@ import { http, HttpResponse } from 'msw';
 const BASE = '/api/v1';
 
 /**
- * Remaining backend gaps. Everything else is served by the real Go
- * server; only the background job system is still mock-only. Remove as
- * the backend catches up.
+ * No remaining backend gaps: every endpoint the web UI uses is served by
+ * the Go server. Keep the module for offline development ('all' mode),
+ * where a minimal in-memory auth backs the shell.
  */
-export const gapHandlers = [
-  // ─── Background jobs (not implemented server-side yet) ────
-  http.get(`${BASE}/admin/jobs`, () => {
-    return HttpResponse.json({ jobs: [] });
-  }),
-
-  http.post(`${BASE}/admin/jobs/:jobId/cancel`, () => {
-    return HttpResponse.json({ status: 'ok' });
-  }),
-];
+export const gapHandlers = [];
 
 /**
- * Handlers for a fully-mocked session ('all' mode): the gap endpoints plus
- * a minimal in-memory auth so the UI can run without the Go server.
+ * Handlers for a fully-mocked session ('all' mode): a minimal in-memory
+ * auth so the UI can run without the Go server.
  */
 const SESSION_KEY = 'pontis-mock-session';
 
