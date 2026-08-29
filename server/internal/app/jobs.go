@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -27,17 +26,14 @@ func buildJobService(
 
 	// backup: capture one space's tree (payload {"space_id": "..."}).
 	svc.Register(jobs.TypeBackup, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
-		var payload struct {
-			SpaceID string `json:"space_id"`
-		}
-		if err := unmarshalPayload(job.Payload, &payload); err != nil {
-			return fmt.Errorf("%w: bad payload", jobs.FatalError)
+		if job.SpaceID == "" {
+			return fmt.Errorf("%w: job has no space", jobs.FatalError)
 		}
 		err := report("捕获空间快照", nil, nil)
 		if err != nil {
 			return err
 		}
-		b, err := backups.Create(ctx, canonical.SpaceID(payload.SpaceID), backup.KindScheduled)
+		b, err := backups.Create(ctx, canonical.SpaceID(job.SpaceID), backup.KindScheduled)
 		if err != nil {
 			return fmt.Errorf("%w: %v", jobs.FatalError, err)
 		}
@@ -55,13 +51,10 @@ func buildJobService(
 
 	// link_check: delegate to the organizer's per-space checker.
 	svc.Register(jobs.TypeLinkCheck, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
-		var payload struct {
-			SpaceID string `json:"space_id"`
+		if job.SpaceID == "" {
+			return fmt.Errorf("%w: job has no space", jobs.FatalError)
 		}
-		if err := unmarshalPayload(job.Payload, &payload); err != nil {
-			return fmt.Errorf("%w: bad payload", jobs.FatalError)
-		}
-		if _, total, err := organizer.RunLinkCheck(ctx, canonical.SpaceID(payload.SpaceID)); err != nil {
+		if _, total, err := organizer.RunLinkCheck(ctx, canonical.SpaceID(job.SpaceID)); err != nil {
 			return err
 		} else if total == 0 {
 			err := report("没有需要检查的书签", nil, nil)
@@ -69,7 +62,7 @@ func buildJobService(
 		}
 		// Poll the organizer's run registry until the scan completes.
 		for {
-			run, ok := organizer.LinkResults(ctx, canonical.SpaceID(payload.SpaceID))
+			run, ok := organizer.LinkResults(ctx, canonical.SpaceID(job.SpaceID))
 			if !ok {
 				return fmt.Errorf("link check run vanished")
 			}
@@ -99,9 +92,3 @@ func buildJobService(
 	return svc, nil
 }
 
-func unmarshalPayload(payload string, dst any) error {
-	if payload == "" {
-		return nil
-	}
-	return json.Unmarshal([]byte(payload), dst)
-}
