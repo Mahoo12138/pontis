@@ -21,6 +21,7 @@ import (
 	"pontis/internal/library"
 	"pontis/internal/organizer"
 	"pontis/internal/plaza"
+	"pontis/internal/transfer"
 	"pontis/internal/logging"
 	"pontis/internal/space"
 	"pontis/internal/store/sqlite"
@@ -73,6 +74,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Library:    library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
 		Tokens:     token.NewService(sqlite.NewTokenStore(db)),
 		Organizer:  organizer.NewService(sqlite.NewLibraryStore(db)),
+		Transfer:  transfer.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
 		Plaza:      plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)), sqlite.NewStore(db)),
 		Backups:    backupSvc,
 		Accounts:   accountStore,

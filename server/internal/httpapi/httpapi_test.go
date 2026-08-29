@@ -19,6 +19,7 @@ import (
 	"pontis/internal/library"
 	"pontis/internal/organizer"
 	"pontis/internal/plaza"
+	"pontis/internal/transfer"
 	"pontis/internal/space"
 	"pontis/internal/store/sqlite"
 	"pontis/internal/sync"
@@ -53,6 +54,7 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 		Library:    library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
 		Tokens:     token.NewService(sqlite.NewTokenStore(db)),
 		Organizer:  organizer.NewService(sqlite.NewLibraryStore(db)),
+		Transfer:  transfer.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
 		Plaza:      plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)), sqlite.NewStore(db)),
 		Backups:    backupSvc,
 		Accounts:   sqlite.NewAccountStore(db),

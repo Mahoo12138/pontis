@@ -20,6 +20,7 @@ import (
 	"pontis/internal/plaza"
 	"pontis/internal/space"
 	"pontis/internal/store/sqlite"
+	"pontis/internal/transfer"
 	"pontis/internal/sync"
 	"pontis/internal/token"
 )
@@ -44,6 +45,7 @@ type Server struct {
 	Backups   *backup.Service
 	Organizer *organizer.Service
 	Plaza     *plaza.Service
+	Transfer  *transfer.Service
 	Accounts  *sqlite.AccountStore
 
 	// InstanceID identifies this server installation across URL changes.
@@ -132,6 +134,9 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/v1/spaces/{spaceID}/organizer/link-check", s.handleRunLinkCheck)
 		r.Get("/api/v1/spaces/{spaceID}/organizer/link-check/results", s.handleLinkCheckResults)
 		r.Get("/api/v1/spaces/{spaceID}/organizer/duplicates", s.handleDuplicates)
+		r.Post("/api/v1/spaces/{spaceID}/export", s.handleExport)
+		r.Post("/api/v1/spaces/{spaceID}/import/preview", s.handleImportPreview)
+		r.Post("/api/v1/spaces/{spaceID}/import/apply", s.handleImportApply)
 		r.Get("/api/v1/spaces/{spaceID}/backups", s.handleListBackups)
 		r.Post("/api/v1/spaces/{spaceID}/backups", s.handleCreateBackup)
 		r.Post("/api/v1/spaces/{spaceID}/backups/{backupID}/restore", s.handleRestoreBackup)
