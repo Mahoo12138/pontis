@@ -18,6 +18,7 @@ import (
 	"pontis/internal/space"
 	"pontis/internal/store/sqlite"
 	"pontis/internal/sync"
+	"pontis/internal/token"
 )
 
 // ProductVersion is the server product version reported by /meta.
@@ -36,6 +37,7 @@ type Server struct {
 	Spaces   *space.Service
 	Sync     *sync.Service
 	Library  *library.Service
+	Tokens   *token.Service
 	Accounts *sqlite.AccountStore
 
 	// InstanceID identifies this server installation across URL changes.
@@ -90,6 +92,9 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/api/v1/devices/{deviceID}", s.handleRevokeDevice)
 		r.Get("/api/v1/settings", s.handleGetSettings)
 		r.Patch("/api/v1/settings", s.handleUpdateSettings)
+		r.Get("/api/v1/tokens", s.handleListTokens)
+		r.Post("/api/v1/tokens", s.handleCreateToken)
+		r.Delete("/api/v1/tokens/{tokenID}", s.handleRevokeToken)
 	})
 
 	// Spaces (web session).

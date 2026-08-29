@@ -21,6 +21,7 @@ import (
 	"pontis/internal/space"
 	"pontis/internal/store/sqlite"
 	"pontis/internal/sync"
+	"pontis/internal/token"
 )
 
 // sessionTTL is the web session lifetime.
@@ -61,6 +62,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Spaces:     space.NewService(sqlite.NewSpaceStore(db)),
 		Sync:       sync.NewService(sqlite.NewSyncStore(db)),
 		Library:    library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
+		Tokens:     token.NewService(sqlite.NewTokenStore(db)),
 		Accounts:   accountStore,
 		InstanceID: instanceID,
 		Logger:     logger,
