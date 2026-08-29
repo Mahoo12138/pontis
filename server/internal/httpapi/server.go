@@ -17,6 +17,7 @@ import (
 	"pontis/internal/device"
 	"pontis/internal/library"
 	"pontis/internal/organizer"
+	"pontis/internal/plaza"
 	"pontis/internal/space"
 	"pontis/internal/store/sqlite"
 	"pontis/internal/sync"
@@ -42,6 +43,7 @@ type Server struct {
 	Tokens    *token.Service
 	Backups   *backup.Service
 	Organizer *organizer.Service
+	Plaza     *plaza.Service
 	Accounts  *sqlite.AccountStore
 
 	// InstanceID identifies this server installation across URL changes.
@@ -126,6 +128,17 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/v1/spaces/{spaceID}/backups/{backupID}/restore", s.handleRestoreBackup)
 		r.Patch("/api/v1/spaces/{spaceID}/backups/{backupID}", s.handleUpdateBackup)
 		r.Delete("/api/v1/spaces/{spaceID}/backups/{backupID}", s.handleDeleteBackup)
+	})
+
+	// Plaza / publications (web session).
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireSession)
+		r.Get("/api/v1/plaza/publications", s.handleListPlaza)
+		r.Post("/api/v1/publications", s.handlePublish)
+		r.Get("/api/v1/publications/{publicationID}", s.handleGetPublication)
+		r.Patch("/api/v1/publications/{publicationID}", s.handleUpdatePublication)
+		r.Delete("/api/v1/publications/{publicationID}", s.handleUnpublish)
+		r.Post("/api/v1/publications/{publicationID}/apply", s.handleApplyPublication)
 	})
 
 	// Device registration (web session): returns the one-time device secret.
