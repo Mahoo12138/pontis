@@ -61,8 +61,15 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	accountStore := sqlite.NewAccountStore(db)
-	backupSvc, err := backup.NewService(sqlite.NewBackupStore(db), sqlite.NewLibraryStore(db),
+	libraryStore := sqlite.NewLibraryStore(db)
+	canonicalStore := sqlite.NewStore(db)
+	backupSvc, err := backup.NewService(sqlite.NewBackupStore(db), libraryStore,
 		filepath.Join(cfg.DataDir, "backups"))
+	if err != nil {
+		return err
+	}
+	organizerSvc := organizer.NewService(libraryStore)
+	jobSvc, err := buildJobService(db, backupSvc, organizerSvc, accountStore)
 	if err != nil {
 		return err
 	}
@@ -71,16 +78,20 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Devices:    device.NewService(sqlite.NewDeviceStore(db)),
 		Spaces:     space.NewService(sqlite.NewSpaceStore(db)),
 		Sync:       sync.NewService(sqlite.NewSyncStore(db)),
-		Library:    library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
+		Library:    library.NewService(libraryStore, canonicalStore),
 		Tokens:     token.NewService(sqlite.NewTokenStore(db)),
-		Organizer:  organizer.NewService(sqlite.NewLibraryStore(db)),
-		Transfer:  transfer.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
-		Plaza:      plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)), sqlite.NewStore(db)),
+		Organizer:  organizerSvc,
+		Transfer:   transfer.NewService(libraryStore, canonicalStore),
+		Plaza:      plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(libraryStore, canonicalStore), canonicalStore),
 		Backups:    backupSvc,
+		Jobs:       jobSvc,
 		Accounts:   accountStore,
 		InstanceID: instanceID,
 		Logger:     logger,
 	}
+
+	jobSvc.Start(ctx)
+	defer jobSvc.Stop()
 
 	mux := chi.NewMux()
 	mux.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {

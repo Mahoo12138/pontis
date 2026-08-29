@@ -1,0 +1,305 @@
+// Package jobs implements the SQLite persistent job queue with claim+lease
+// workers, bounded exponential backoff and cooperative cancellation
+// (doc 13). Handlers are idempotent by contract; the queue guarantees
+// at-least-once execution.
+package jobs
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+
+	"pontis/internal/canonical"
+)
+
+// Type enumerates the built-in job kinds.
+type Type string
+
+const (
+	TypeLinkCheck   Type = "link_check"
+	TypeBackup      Type = "backup"
+	TypeMaintenance Type = "maintenance"
+	TypeEmail       Type = "email"
+	TypeImport      Type = "import"
+)
+
+// Status is the job lifecycle state.
+type Status string
+
+const (
+	StatusQueued     Status = "queued"
+	StatusRunning    Status = "running"
+	StatusRetryWait  Status = "retry_wait"
+	StatusSucceeded  Status = "succeeded"
+	StatusFailed     Status = "failed"
+	StatusCancelled  Status = "cancelled"
+)
+
+// Errors.
+var (
+	ErrNotFound = errors.New("jobs: not found")
+	// FatalError marks a handler failure as non-retryable.
+	FatalError = errors.New("jobs: fatal")
+)
+
+// Job is one queue entry.
+type Job struct {
+	ID          string
+	Type        Type
+	Status      Status
+	OwnerUserID string
+	SpaceID     string
+	Payload     string
+	Error       string
+	Phase       string
+	ProgressCur *int64
+	ProgressTot *int64
+	Attempt     int
+	MaxAttempts int
+	CancelRequested bool
+	ScheduledAt time.Time
+	StartedAt   *time.Time
+	FinishedAt  *time.Time
+}
+
+// Retryable wraps an error to force a retry despite being non-fatal.
+type Retryable struct{ Err error }
+
+func (r Retryable) Error() string { return r.Err.Error() }
+
+// Handler executes one job. Long handlers must check ctx (cooperative
+// cancellation) and report progress through the callback.
+type Handler func(ctx context.Context, job Job, report ReportFunc) error
+
+// ReportFunc persists coarse progress: phase text beats fake percentages
+// (doc 13 §13).
+type ReportFunc func(phase string, current, total *int64) error
+
+// Store is the persistence contract.
+type Store interface {
+	Enqueue(ctx context.Context, j Job) error
+	// Claim atomically moves one due job to running with a lease.
+	Claim(ctx context.Context, workerID string, leaseUntil time.Time) (Job, error)
+	// UpdateProgress rewrites phase/progress while running.
+	UpdateProgress(ctx context.Context, id, phase string, current, total *int64) error
+	// Finish marks the terminal state.
+	Finish(ctx context.Context, id string, status Status, jobErr string, at time.Time) error
+	// ScheduleRetry puts a job back to retry_wait with backoff.
+	ScheduleRetry(ctx context.Context, id string, attempt int, nextRunAt time.Time, jobErr string) error
+	// RequestCancel flags cooperative cancellation.
+	RequestCancel(ctx context.Context, id string, at time.Time) error
+	// Get loads one job.
+	Get(ctx context.Context, id string) (Job, error)
+	// List returns recent jobs, newest first.
+	List(ctx context.Context, limit int) ([]Job, error)
+	// RecoverExpiredLeases requeues jobs whose worker died.
+	RecoverExpiredLeases(ctx context.Context, at time.Time) error
+}
+
+// Service runs the queue: a poll loop claims due jobs and executes them on
+// a small worker pool.
+type Service struct {
+	store    Store
+	handlers map[Type]Handler
+	workers  int
+
+	mu      sync.Mutex
+	started bool
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+}
+
+// NewService returns a job service with the given worker count.
+func NewService(store Store, workers int) *Service {
+	if workers < 1 {
+		workers = 2
+	}
+	return &Service{store: store, handlers: map[Type]Handler{}, workers: workers}
+}
+
+// Register installs a handler for a job type.
+func (s *Service) Register(t Type, h Handler) {
+	s.handlers[t] = h
+}
+
+// Enqueue creates a job that is due immediately.
+func (s *Service) Enqueue(ctx context.Context, t Type, owner canonical.UserID, spaceID string, payload string) (Job, error) {
+	if _, ok := s.handlers[t]; !ok {
+		return Job{}, fmt.Errorf("jobs: no handler for %s", t)
+	}
+	id, err := uuid.NewV7()
+	if err != nil {
+		return Job{}, err
+	}
+	now := time.Now().UTC()
+	j := Job{
+		ID:          id.String(),
+		Type:        t,
+		Status:      StatusQueued,
+		OwnerUserID: string(owner),
+		SpaceID:     spaceID,
+		Payload:     payload,
+		MaxAttempts: 3,
+		ScheduledAt: now,
+	}
+	if err := s.store.Enqueue(ctx, j); err != nil {
+		return Job{}, err
+	}
+	return j, nil
+}
+
+// Start launches the poll loop and workers; safe to call once.
+func (s *Service) Start(ctx context.Context) {
+	s.mu.Lock()
+	if s.started {
+		s.mu.Unlock()
+		return
+	}
+	s.started = true
+	ctx, s.cancel = context.WithCancel(ctx)
+	s.mu.Unlock()
+
+	for i := 0; i < s.workers; i++ {
+		s.wg.Add(1)
+		go s.workerLoop(ctx, fmt.Sprintf("worker-%d", i))
+	}
+}
+
+// Stop signals the workers and waits for the current jobs to finish.
+func (s *Service) Stop() {
+	s.mu.Lock()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.mu.Unlock()
+	s.wg.Wait()
+}
+
+func (s *Service) workerLoop(ctx context.Context, workerID string) {
+	defer s.wg.Done()
+	poll := time.NewTicker(500 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		// Recover leases from dead workers opportunistically.
+		_ = s.store.RecoverExpiredLeases(ctx, time.Now().UTC())
+
+		job, err := s.store.Claim(ctx, workerID, time.Now().UTC().Add(10*time.Minute))
+		switch {
+		case err == nil:
+			s.run(ctx, workerID, job)
+			continue
+		case errors.Is(err, ErrNotFound):
+			// nothing due
+		default:
+			// Transient store failure: back off the poll loop.
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-poll.C:
+		}
+	}
+}
+
+func (s *Service) run(ctx context.Context, workerID string, job Job) {
+	handler, ok := s.handlers[job.Type]
+	if !ok {
+		_ = s.store.Finish(ctx, job.ID, StatusFailed, "no handler registered", time.Now().UTC())
+		return
+	}
+	// Cancellation-aware context: a watcher polls the cancel flag and
+	// releases cooperative handlers (doc 13 §12).
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				latest, err := s.store.Get(context.Background(), job.ID)
+				if err == nil && latest.CancelRequested {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
+	report := func(phase string, current, total *int64) error {
+		return s.store.UpdateProgress(runCtx, job.ID, phase, current, total)
+	}
+	err := handler(runCtx, job, report)
+
+	// Re-read cancel flag: handlers may finish despite a cancel request.
+	latest, gerr := s.store.Get(context.Background(), job.ID)
+	if gerr == nil && latest.CancelRequested {
+		_ = s.store.Finish(context.Background(), job.ID, StatusCancelled, "", time.Now().UTC())
+		return
+	}
+
+	now := time.Now().UTC()
+	switch {
+	case err == nil:
+		_ = s.store.Finish(ctx, job.ID, StatusSucceeded, "", now)
+	case errors.Is(err, FatalError):
+		_ = s.store.Finish(ctx, job.ID, StatusFailed, err.Error(), now)
+	default:
+		attempt := job.Attempt + 1
+		if attempt >= job.MaxAttempts {
+			_ = s.store.Finish(ctx, job.ID, StatusFailed, err.Error(), now)
+			return
+		}
+		// Bounded exponential backoff, capped at 15 minutes.
+		backoff := 2 * time.Second
+		for i := 1; i < attempt; i++ {
+			backoff *= 4
+			if backoff >= 15*time.Minute {
+				backoff = 15 * time.Minute
+				break
+			}
+		}
+		if _, retryable := err.(Retryable); !retryable && !isRetryableKind(err) {
+			_ = s.store.Finish(ctx, job.ID, StatusFailed, err.Error(), now)
+			return
+		}
+		_ = s.store.ScheduleRetry(ctx, job.ID, attempt, now.Add(backoff), err.Error())
+	}
+	_ = workerID
+}
+
+// isRetryableKind keeps the default policy: transport-ish failures retry,
+// everything else fails fast unless wrapped in Retryable.
+func isRetryableKind(err error) bool {
+	type retryable interface{ Retryable() bool }
+	if r, ok := err.(retryable); ok {
+		return r.Retryable()
+	}
+	return false
+}
+
+// Cancel flags a job for cooperative cancellation.
+func (s *Service) Cancel(ctx context.Context, id string) error {
+	j, err := s.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if j.Status == StatusSucceeded || j.Status == StatusFailed || j.Status == StatusCancelled {
+		return nil // terminal; nothing to cancel
+	}
+	return s.store.RequestCancel(ctx, id, time.Now().UTC())
+}
+
+// List returns recent jobs for the admin view.
+func (s *Service) List(ctx context.Context, limit int) ([]Job, error) {
+	return s.store.List(ctx, limit)
+}

@@ -16,6 +16,7 @@ import (
 	"pontis/internal/auth"
 	"pontis/internal/backup"
 	"pontis/internal/device"
+	"pontis/internal/jobs"
 	"pontis/internal/library"
 	"pontis/internal/organizer"
 	"pontis/internal/plaza"
@@ -58,6 +59,7 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 		Plaza:      plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)), sqlite.NewStore(db)),
 		Backups:    backupSvc,
 		Accounts:   sqlite.NewAccountStore(db),
+		Jobs:       jobs.NewService(sqlite.NewJobStore(db), 1),
 		InstanceID: instanceID,
 		Logger:     slog.New(slog.DiscardHandler),
 	}

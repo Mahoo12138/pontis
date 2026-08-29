@@ -16,6 +16,7 @@ import (
 	"pontis/internal/backup"
 	"pontis/internal/device"
 	"pontis/internal/library"
+	"pontis/internal/jobs"
 	"pontis/internal/organizer"
 	"pontis/internal/plaza"
 	"pontis/internal/space"
@@ -45,6 +46,7 @@ type Server struct {
 	Backups   *backup.Service
 	Organizer *organizer.Service
 	Plaza     *plaza.Service
+	Jobs      *jobs.Service
 	Transfer  *transfer.Service
 	Accounts  *sqlite.AccountStore
 
@@ -109,6 +111,8 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/api/v1/devices/{deviceID}", s.handleRevokeDevice)
 		r.Get("/api/v1/settings", s.handleGetSettings)
 		r.Patch("/api/v1/settings", s.handleUpdateSettings)
+		r.Get("/api/v1/admin/jobs", s.handleListJobs)
+		r.Post("/api/v1/admin/jobs/{jobID}/cancel", s.handleCancelJob)
 		r.Get("/api/v1/tokens", s.handleListTokens)
 		r.Post("/api/v1/tokens", s.handleCreateToken)
 		r.Delete("/api/v1/tokens/{tokenID}", s.handleRevokeToken)

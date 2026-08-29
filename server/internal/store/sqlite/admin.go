@@ -161,3 +161,24 @@ func (s *AccountStore) DeleteUserSessions(ctx context.Context, userID string) er
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID)
 	return err
 }
+
+// PurgeExpiredResetTokens removes consumed and expired reset tokens.
+func (s *AccountStore) PurgeExpiredResetTokens(ctx context.Context, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM password_reset_tokens
+		WHERE used_at IS NOT NULL OR expires_at < ?`, formatTime(at))
+	return err
+}
+
+// UserName returns the account's display name, empty when unknown.
+func (s *AccountStore) UserName(ctx context.Context, id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	var name string
+	err := s.db.QueryRowContext(ctx, `SELECT display_name FROM users WHERE id = ?`, id).Scan(&name)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return name, err
+}
