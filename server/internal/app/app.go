@@ -54,12 +54,14 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 
+	accountStore := sqlite.NewAccountStore(db)
 	api := &httpapi.Server{
 		Auth:       auth.NewService(sqlite.NewAuthStore(db), sessionTTL),
 		Devices:    device.NewService(sqlite.NewDeviceStore(db)),
 		Spaces:     space.NewService(sqlite.NewSpaceStore(db)),
 		Sync:       sync.NewService(sqlite.NewSyncStore(db)),
 		Library:    library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
+		Accounts:   accountStore,
 		InstanceID: instanceID,
 		Logger:     logger,
 	}

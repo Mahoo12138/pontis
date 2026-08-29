@@ -189,3 +189,8 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	}
 	return s.store.DeleteSession(ctx, session.ID)
 }
+
+// UserByID returns one account by id.
+func (s *Service) UserByID(ctx context.Context, id string) (User, error) {
+	return s.store.GetUser(ctx, id)
+}

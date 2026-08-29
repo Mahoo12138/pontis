@@ -99,3 +99,8 @@ func ValidateUsername(username string) bool {
 func ValidatePassword(password string) bool {
 	return len(password) >= 8 && len(password) <= 256
 }
+
+// NormalizeEmail folds an email address for uniqueness checks.
+func NormalizeEmail(email string) string {
+	return foldASCII(email)
+}

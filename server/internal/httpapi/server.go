@@ -16,6 +16,7 @@ import (
 	"pontis/internal/device"
 	"pontis/internal/library"
 	"pontis/internal/space"
+	"pontis/internal/store/sqlite"
 	"pontis/internal/sync"
 )
 
@@ -30,11 +31,12 @@ const SessionCookie = "pontis_session"
 
 // Server wires the HTTP API onto the domain services.
 type Server struct {
-	Auth    *auth.Service
-	Devices *device.Service
-	Spaces  *space.Service
-	Sync    *sync.Service
-	Library *library.Service
+	Auth     *auth.Service
+	Devices  *device.Service
+	Spaces   *space.Service
+	Sync     *sync.Service
+	Library  *library.Service
+	Accounts *sqlite.AccountStore
 
 	// InstanceID identifies this server installation across URL changes.
 	InstanceID string
@@ -48,6 +50,7 @@ type ctxKey int
 const (
 	ctxUser ctxKey = iota
 	ctxSessionToken
+	ctxSessionID
 	ctxDevice
 )
 
@@ -76,6 +79,17 @@ func (s *Server) Router() http.Handler {
 		r.Use(s.requireSession)
 		r.Post("/api/v1/auth/logout", s.handleLogout)
 		r.Get("/api/v1/auth/me", s.handleMe)
+		r.Patch("/api/v1/auth/me", s.handleUpdateProfile)
+		r.Post("/api/v1/auth/password", s.handleChangePassword)
+	})
+
+	// Account management (web session).
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireSession)
+		r.Get("/api/v1/devices/overview", s.handleDeviceOverview)
+		r.Delete("/api/v1/devices/{deviceID}", s.handleRevokeDevice)
+		r.Get("/api/v1/settings", s.handleGetSettings)
+		r.Patch("/api/v1/settings", s.handleUpdateSettings)
 	})
 
 	// Spaces (web session).
@@ -334,13 +348,14 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			s.writeError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "session required")
 			return
 		}
-		_, user, err := s.Auth.VerifySession(r.Context(), token)
+		sess, user, err := s.Auth.VerifySession(r.Context(), token)
 		if err != nil {
 			s.writeError(w, r, http.StatusUnauthorized, "SESSION_INVALID", "invalid or expired session")
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxUser, user)
 		ctx = context.WithValue(ctx, ctxSessionToken, token)
+		ctx = context.WithValue(ctx, ctxSessionID, sess.ID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

@@ -37,11 +37,12 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	}
 
 	srv := &Server{
-		Auth:       auth.NewService(sqlite.NewAuthStore(db), 24*time.Hour),
-		Devices:    device.NewService(sqlite.NewDeviceStore(db)),
-		Spaces:     space.NewService(sqlite.NewSpaceStore(db)),
-		Sync:       sync.NewService(sqlite.NewSyncStore(db)),
-		Library:    library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
+		Auth:     auth.NewService(sqlite.NewAuthStore(db), 24*time.Hour),
+		Devices:  device.NewService(sqlite.NewDeviceStore(db)),
+		Spaces:   space.NewService(sqlite.NewSpaceStore(db)),
+		Sync:     sync.NewService(sqlite.NewSyncStore(db)),
+		Library:  library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
+		Accounts: sqlite.NewAccountStore(db),
 		InstanceID: instanceID,
 		Logger:     slog.New(slog.DiscardHandler),
 	}
