@@ -6,10 +6,12 @@ import {
   IconChevronDown,
   IconBookmark,
   IconFolderPlus,
+  IconMenu2,
 } from '@tabler/icons-react';
-import { headerRegion } from '../../styles/app-shell.css';
+import { headerRegion, sidebarMenuButton } from '../../styles/app-shell.css';
 import { tokens } from '../../styles/semantic-tokens.css';
 import { OPEN_PALETTE_EVENT } from '../command-palette/CommandPalette';
+import { TOGGLE_SIDEBAR_EVENT } from './AppShell';
 
 interface HeaderProps {
   breadcrumb?: string;
@@ -20,6 +22,13 @@ interface HeaderProps {
 export default function Header({ breadcrumb, onNewBookmark, onNewFolder }: HeaderProps) {
   return (
     <div className={headerRegion}>
+      <button
+        className={sidebarMenuButton}
+        aria-label="打开菜单"
+        onClick={() => window.dispatchEvent(new CustomEvent(TOGGLE_SIDEBAR_EVENT))}
+      >
+        <IconMenu2 size={18} stroke={1.5} />
+      </button>
       <Group gap="xs" style={{ flex: 1 }}>
         {breadcrumb && (
           <span style={{ fontSize: '14px', color: tokens.textSecondary }}>

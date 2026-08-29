@@ -11,6 +11,7 @@ import type { ContextMenuPos } from '../components/explorer/NodeContextMenu';
 import { NewNodeModal, ConfirmDeleteDialog } from '../components/explorer/node-modals';
 import type { NewNodeMode } from '../components/explorer/node-modals';
 import Inspector from '../components/inspector/Inspector';
+import ErrorState from '../components/common/ErrorState';
 import {
   CREATE_NODE_EVENT,
   FOCUS_NODE_EVENT,
@@ -28,7 +29,7 @@ export default function SpaceExplorerPage() {
   const { spaceId } = useParams();
   const [filter, setFilter] = useState<ExplorerFilter>('all');
 
-  const { data: nodesData, isLoading } = useNodes(spaceId);
+  const { data: nodesData, isLoading, isError, refetch } = useNodes(spaceId);
   const { data: slotsData } = useRootSlots(spaceId);
   const { data: spacesData } = useSpaces();
 
@@ -183,6 +184,9 @@ export default function SpaceExplorerPage() {
       />
       <div className={contentRegion} style={{ display: 'flex' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          {isError ? (
+            <ErrorState onRetry={() => void refetch()} />
+          ) : (
           <BookmarkExplorer
             isLoading={isLoading}
             index={index}
@@ -193,6 +197,7 @@ export default function SpaceExplorerPage() {
             onDeleteKey={() => setDeleteOpen(true)}
             onContextMenu={(x, y, id) => setMenu({ x, y, nodeId: id })}
           />
+          )}
         </div>
 
         {inspectorOpen &&

@@ -20,6 +20,7 @@ import {
   IconMoon,
   IconLogout,
 } from '@tabler/icons-react';
+import { useTranslation } from 'react-i18next';
 import { useMe, useLogout } from '../../hooks/use-auth';
 import { useSpaces, useCreateSpace } from '../../hooks/use-spaces';
 import {
@@ -37,6 +38,7 @@ import { tokens } from '../../styles/semantic-tokens.css';
 export default function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { t } = useTranslation();
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
   const { data: me } = useMe();
   const logout = useLogout();
@@ -91,7 +93,7 @@ export default function Sidebar() {
       </div>
 
       {/* Spaces section */}
-      <div className={sidebarSectionLabel}>空间</div>
+      <div className={sidebarSectionLabel}>{t('sidebar:spaces')}</div>
       <div className={sidebarSection}>
         {spaces.map((space) => (
           <div
@@ -109,7 +111,7 @@ export default function Sidebar() {
           onClick={() => setCreateOpen(true)}
         >
           <IconPlus size={16} stroke={1.5} className={sidebarItemIcon} />
-          新建空间
+          {t('sidebar:new_space')}
         </div>
       </div>
 
@@ -119,7 +121,7 @@ export default function Sidebar() {
       <div className={sidebarSection}>
         <div className={`${sidebarItem} ${currentPath === '/plaza' ? sidebarItemSelected : ''}`}>
           <IconLayoutGrid size={16} stroke={1.5} className={sidebarItemIcon} />
-          广场
+          {t('sidebar:plaza')}
         </div>
         <div
           className={`${sidebarItem} ${activityPath && currentPath === activityPath ? sidebarItemSelected : ''}`}
@@ -127,7 +129,7 @@ export default function Sidebar() {
           onClick={() => activityPath && navigate(activityPath)}
         >
           <IconClock size={16} stroke={1.5} className={sidebarItemIcon} />
-          最近活动
+          {t('sidebar:recent_activity')}
         </div>
       </div>
 
@@ -136,11 +138,11 @@ export default function Sidebar() {
       <div className={sidebarSection}>
         <div className={`${sidebarItem} ${currentPath === '/devices' ? sidebarItemSelected : ''}`}>
           <IconDeviceDesktop size={16} stroke={1.5} className={sidebarItemIcon} />
-          设备
+          {t('sidebar:devices')}
         </div>
         <div className={`${sidebarItem} ${currentPath === '/settings' ? sidebarItemSelected : ''}`}>
           <IconSettings size={16} stroke={1.5} className={sidebarItemIcon} />
-          设置
+          {t('sidebar:settings')}
         </div>
       </div>
 

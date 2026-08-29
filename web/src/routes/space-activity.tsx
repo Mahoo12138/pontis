@@ -11,6 +11,7 @@ import {
 } from '@tabler/icons-react';
 import type { ActivityAction, ActivityEntry } from '@pontis/api';
 import Header from '../components/app-shell/Header';
+import ErrorState from '../components/common/ErrorState';
 import { contentRegion } from '../styles/app-shell.css';
 import { tokens } from '../styles/semantic-tokens.css';
 import { useActivity } from '../hooks/use-activity';
@@ -26,7 +27,7 @@ const ACTION_META: Record<ActivityAction, { icon: typeof IconPlus; color: string
 
 export default function SpaceActivityPage() {
   const { spaceId } = useParams();
-  const { data, isLoading } = useActivity(spaceId);
+  const { data, isLoading, isError, refetch } = useActivity(spaceId);
   const { data: spacesData } = useSpaces();
   const spaceName = spacesData?.spaces?.find((s) => s.id === spaceId)?.name ?? '空间';
 
@@ -59,7 +60,8 @@ export default function SpaceActivityPage() {
       <Header breadcrumb={`${spaceName} / 最近活动`} />
       <div className={contentRegion} style={{ overflowY: 'auto' }}>
         <div style={{ maxWidth: 720, margin: '0 auto', padding: '24px 16px' }}>
-          {isLoading && (
+          {isError && <ErrorState onRetry={() => void refetch()} />}
+          {!isError && isLoading && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {Array.from({ length: 5 }, (_, i) => (
                 <Skeleton key={i} height={44} />
@@ -67,7 +69,7 @@ export default function SpaceActivityPage() {
             </div>
           )}
 
-          {!isLoading && groups.length === 0 && (
+          {!isError && !isLoading && groups.length === 0 && (
             <div
               style={{
                 display: 'flex',
@@ -84,7 +86,7 @@ export default function SpaceActivityPage() {
             </div>
           )}
 
-          {groups.map(([day, entries]) => (
+          {!isError && groups.map(([day, entries]) => (
             <section key={day} style={{ marginBottom: 24 }}>
               <Text fz="xs" fw={500} c="dimmed" style={{ marginBottom: 8 }}>
                 {day}

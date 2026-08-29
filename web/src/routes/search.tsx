@@ -7,6 +7,7 @@ import { IconSearch, IconFolder, IconBookmark } from '@tabler/icons-react';
 import type { Node } from '@pontis/api';
 import { listNodes } from '@pontis/api/endpoints/nodes';
 import Header from '../components/app-shell/Header';
+import ErrorState from '../components/common/ErrorState';
 import { contentRegion } from '../styles/app-shell.css';
 import { explorerContainer, explorerRow, explorerRowTitle } from '../styles/explorer.css';
 import { tokens } from '../styles/semantic-tokens.css';
@@ -39,6 +40,7 @@ export default function SearchPage() {
     })),
   });
   const isLoading = nodeQueries.some((r) => r.isLoading);
+  const isError = nodeQueries.some((r) => r.isError);
 
   const hits = useMemo<Hit[]>(() => {
     if (!q) return [];
@@ -89,7 +91,9 @@ export default function SearchPage() {
           />
         </Group>
 
-        {isLoading ? (
+        {isError ? (
+          <ErrorState onRetry={() => void Promise.all(nodeQueries.map((r) => r.refetch()))} />
+        ) : isLoading ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {Array.from({ length: 6 }, (_, i) => (
               <Skeleton key={i} height={38} />
