@@ -464,3 +464,40 @@ export interface RestoreBackupResponse {
   safety_backup_id: string;
   new_epoch: number;
 }
+
+// ─── API Tokens & Settings (gap endpoint — mock only) ────────
+
+export interface ApiToken {
+  id: string;
+  name: string;
+  scopes: string[];
+  space_scope: 'all' | string[];
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export interface ApiTokenListResponse {
+  tokens: ApiToken[];
+}
+
+export interface CreateTokenRequest {
+  name: string;
+  scopes: string[];
+  space_scope: 'all' | string[];
+}
+
+export interface CreateTokenResponse {
+  token: ApiToken;
+  secret: string;
+}
+
+export interface SystemSettings {
+  registration_mode: 'closed' | 'open' | 'invite';
+  default_locale: string;
+  session_ttl_hours: number;
+  max_spaces_per_user: number;
+}
+
+export interface SystemSettingsResponse {
+  settings: SystemSettings;
+}

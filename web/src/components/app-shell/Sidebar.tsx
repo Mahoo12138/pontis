@@ -148,7 +148,11 @@ export default function Sidebar() {
           <IconDeviceDesktop size={16} stroke={1.5} className={sidebarItemIcon} />
           {t('sidebar:devices')}
         </div>
-        <div className={`${sidebarItem} ${currentPath === '/settings' ? sidebarItemSelected : ''}`}>
+        <div
+          className={`${sidebarItem} ${currentPath === '/settings' ? sidebarItemSelected : ''}`}
+          style={{ cursor: 'pointer' }}
+          onClick={() => navigate('/settings')}
+        >
           <IconSettings size={16} stroke={1.5} className={sidebarItemIcon} />
           {t('sidebar:settings')}
         </div>

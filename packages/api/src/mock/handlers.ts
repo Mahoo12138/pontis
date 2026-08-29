@@ -6,7 +6,9 @@ import devicesJson from './data/devices.json';
 import deviceOverviewJsonRaw from './data/device-overview.json';
 import publicationsJsonRaw from './data/publications.json';
 import backupsJsonRaw from './data/backups.json';
+import tokensJsonRaw from './data/tokens.json';
 import type {
+  ApiToken,
   Backup,
   DeviceOverviewResponse,
   DuplicateGroup,
@@ -17,6 +19,7 @@ import type {
   PublicationSummary,
   PublicationNodeDTO,
   RootSlot,
+  SystemSettings,
 } from '../types';
 
 // Typed, mutable view of the fixture so session-stateful CRUD compiles.
@@ -24,7 +27,16 @@ const nodesJson = nodesJsonRaw as { nodes: Node[]; root_slots: RootSlot[] };
 const deviceOverview = deviceOverviewJsonRaw as DeviceOverviewResponse;
 const publications = publicationsJsonRaw.publications as PublicationDetail[];
 const backups = backupsJsonRaw.backups as Backup[];
+const tokens = tokensJsonRaw.tokens as ApiToken[];
 const revokedDevices = new Set<string>();
+const revokedTokenIds = new Set<string>();
+const profileOverrides: { display_name?: string; email?: string } = {};
+const settings: SystemSettings = {
+  registration_mode: 'closed',
+  default_locale: 'zh-CN',
+  session_ttl_hours: 24,
+  max_spaces_per_user: 16,
+};
 
 const BASE = '/api/v1';
 
@@ -58,7 +70,7 @@ let mockSession: { username: string } | null = loadSession();
 
 function mockUser(username: string) {
   return {
-    id: 'u001', username, display_name: username, email: `${username}@pontis.local`, role: 'admin', status: 'active', locale: 'zh-CN', created_at: '2026-08-20T08:00:00Z',
+    id: 'u001', username, display_name: profileOverrides.display_name ?? username, email: profileOverrides.email ?? `${username}@pontis.local`, role: 'admin', status: 'active', locale: 'zh-CN', created_at: '2026-08-20T08:00:00Z',
   };
 }
 
@@ -220,14 +232,61 @@ export const gapHandlers = [
 
   // ─── Settings (gap) ─────────────────────────────────────
   http.get(`${BASE}/settings`, () => {
-    return HttpResponse.json({
-      settings: {
-        registration_mode: 'closed',
-        default_locale: 'zh-CN',
-        session_ttl_hours: 24,
-        max_spaces_per_user: 16,
-      },
-    });
+    return HttpResponse.json({ settings });
+  }),
+
+  http.patch(`${BASE}/settings`, async ({ request }) => {
+    const body = (await request.json()) as Partial<SystemSettings>;
+    Object.assign(settings, body);
+    return HttpResponse.json({ settings });
+  }),
+
+  http.patch(`${BASE}/auth/me`, async ({ request }) => {
+    const body = (await request.json()) as { display_name?: string; email?: string };
+    if (!mockSession) {
+      return HttpResponse.json({ error: { code: 'UNAUTHENTICATED', message: 'not logged in', request_id: 'req_mock' } }, { status: 401 });
+    }
+    profileOverrides.display_name = body.display_name ?? profileOverrides.display_name;
+    profileOverrides.email = body.email ?? profileOverrides.email;
+    return HttpResponse.json(mockUser(mockSession.username));
+  }),
+
+  http.post(`${BASE}/auth/password`, async ({ request }) => {
+    const body = (await request.json()) as { current_password?: string; new_password?: string };
+    if (!body.new_password || body.new_password.length < 8) {
+      return HttpResponse.json({ error: { code: 'VALIDATION_FAILED', message: '新密码至少 8 位', request_id: 'req_mock' } }, { status: 400 });
+    }
+    return HttpResponse.json({ status: 'ok' });
+  }),
+
+  // ─── API Tokens (gap) ───────────────────────────────────
+  http.get(`${BASE}/tokens`, () => {
+    return HttpResponse.json({ tokens: tokens.filter((t) => !revokedTokenIds.has(t.id)) });
+  }),
+
+  http.post(`${BASE}/tokens`, async ({ request }) => {
+    const body = (await request.json()) as { name?: string; scopes?: string[]; space_scope?: 'all' | string[] };
+    if (!body.name?.trim()) {
+      return HttpResponse.json({ error: { code: 'VALIDATION_FAILED', message: '名称不能为空', request_id: 'req_mock' } }, { status: 400 });
+    }
+    const token: ApiToken = {
+      id: `tok-${Date.now()}`,
+      name: body.name.trim(),
+      scopes: body.scopes ?? ['bookmarks:read'],
+      space_scope: body.space_scope ?? 'all',
+      created_at: new Date().toISOString(),
+      last_used_at: null,
+    };
+    tokens.push(token);
+    return HttpResponse.json(
+      { token, secret: `pnt_${Math.random().toString(36).slice(2, 12)}${Math.random().toString(36).slice(2, 14)}` },
+      { status: 201 },
+    );
+  }),
+
+  http.delete(`${BASE}/tokens/:tokenId`, ({ params }) => {
+    revokedTokenIds.add(params.tokenId as string);
+    return new HttpResponse(null, { status: 204 });
   }),
 
   // ─── Plaza / Publications (gap) ─────────────────────────
