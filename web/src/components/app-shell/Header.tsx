@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { TextInput, Group, Badge, Menu } from '@mantine/core';
 import {
   IconSearch,
@@ -17,9 +18,11 @@ interface HeaderProps {
   breadcrumb?: string;
   onNewBookmark?: () => void;
   onNewFolder?: () => void;
+  /** Page-specific primary action; replaces the default 新建 menu. */
+  primaryAction?: { label: string; icon?: ReactNode; onClick: () => void };
 }
 
-export default function Header({ breadcrumb, onNewBookmark, onNewFolder }: HeaderProps) {
+export default function Header({ breadcrumb, onNewBookmark, onNewFolder, primaryAction }: HeaderProps) {
   return (
     <div className={headerRegion}>
       <button
@@ -60,43 +63,65 @@ export default function Header({ breadcrumb, onNewBookmark, onNewFolder }: Heade
           已同步
         </Badge>
 
-        <Menu shadow="md" width={160} position="bottom-end">
-          <Menu.Target>
-            <button
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px',
-                padding: '4px 10px',
-                fontSize: '13px',
-                fontWeight: 500,
-                color: 'white',
-                backgroundColor: tokens.accent,
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
-            >
-              <IconPlus size={14} stroke={1.5} />
-              新建
-              <IconChevronDown size={12} stroke={1.5} />
-            </button>
-          </Menu.Target>
-          <Menu.Dropdown>
-            <Menu.Item
-              leftSection={<IconBookmark size={14} stroke={1.5} />}
-              onClick={onNewBookmark}
-            >
-              新建书签
-            </Menu.Item>
-            <Menu.Item
-              leftSection={<IconFolderPlus size={14} stroke={1.5} />}
-              onClick={onNewFolder}
-            >
-              新建文件夹
-            </Menu.Item>
-          </Menu.Dropdown>
-        </Menu>
+        {primaryAction ? (
+          <button
+            onClick={primaryAction.onClick}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '4px 10px',
+              fontSize: '13px',
+              fontWeight: 500,
+              color: 'white',
+              backgroundColor: tokens.accent,
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+            }}
+          >
+            {primaryAction.icon ?? <IconPlus size={14} stroke={1.5} />}
+            {primaryAction.label}
+          </button>
+        ) : onNewBookmark || onNewFolder ? (
+          <Menu shadow="md" width={160} position="bottom-end">
+            <Menu.Target>
+              <button
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '4px 10px',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  color: 'white',
+                  backgroundColor: tokens.accent,
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                }}
+              >
+                <IconPlus size={14} stroke={1.5} />
+                新建
+                <IconChevronDown size={12} stroke={1.5} />
+              </button>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item
+                leftSection={<IconBookmark size={14} stroke={1.5} />}
+                onClick={onNewBookmark}
+              >
+                新建书签
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<IconFolderPlus size={14} stroke={1.5} />}
+                onClick={onNewFolder}
+              >
+                新建文件夹
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
+        ) : null}
       </Group>
     </div>
   );

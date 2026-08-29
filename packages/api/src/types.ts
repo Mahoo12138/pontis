@@ -81,6 +81,46 @@ export interface RegisterDeviceResponse {
   token: string;
 }
 
+// ─── Device overview (gap endpoint — mock only) ─────────────
+
+/** UI-facing health of a Device × Space binding. */
+export type BindingHealth =
+  | 'healthy'
+  | 'syncing'
+  | 'warning'
+  | 'recovery'
+  | 'offline'
+  | 'suspended';
+
+export interface DeviceBindingView {
+  id: string;
+  space_id: string;
+  space_name: string;
+  sync_mode: 'full' | 'partial';
+  state: 'pending_initial' | 'active' | 'suspended';
+  health: BindingHealth;
+  epoch: number;
+  applied_revision: number;
+  server_revision: number;
+  last_sync_at: string | null;
+}
+
+export interface DeviceOverview {
+  id: string;
+  name: string;
+  client_type: string;
+  browser: string;
+  platform: string;
+  sync_mode: 'full' | 'partial' | '';
+  created_at: string;
+  last_seen_at: string | null;
+  bindings: DeviceBindingView[];
+}
+
+export interface DeviceOverviewResponse {
+  devices: DeviceOverview[];
+}
+
 // ─── Bindings ───────────────────────────────────────────────
 
 export interface Binding {

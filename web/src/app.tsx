@@ -6,6 +6,7 @@ import SpaceExplorerPage from './routes/space-explorer';
 import SpaceActivityPage from './routes/space-activity';
 import SearchPage from './routes/search';
 import SpacesIndexPage from './routes/spaces-index';
+import DevicesPage from './routes/devices';
 import { RequireAuth, RequirePublic } from './features/auth/auth-guard';
 
 export default function App() {
@@ -38,6 +39,7 @@ export default function App() {
                   <Route path="/spaces/:spaceId" element={<SpaceExplorerPage />} />
                   <Route path="/spaces/:spaceId/activity" element={<SpaceActivityPage />} />
                   <Route path="/search" element={<SearchPage />} />
+                  <Route path="/devices" element={<DevicesPage />} />
                 </Routes>
               </AppShell>
             </RequireAuth>

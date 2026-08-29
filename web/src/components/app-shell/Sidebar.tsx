@@ -136,7 +136,11 @@ export default function Sidebar() {
       <hr className={sidebarDivider} />
 
       <div className={sidebarSection}>
-        <div className={`${sidebarItem} ${currentPath === '/devices' ? sidebarItemSelected : ''}`}>
+        <div
+          className={`${sidebarItem} ${currentPath === '/devices' ? sidebarItemSelected : ''}`}
+          style={{ cursor: 'pointer' }}
+          onClick={() => navigate('/devices')}
+        >
           <IconDeviceDesktop size={16} stroke={1.5} className={sidebarItemIcon} />
           {t('sidebar:devices')}
         </div>

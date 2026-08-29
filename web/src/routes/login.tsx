@@ -13,8 +13,8 @@ export default function LoginPage() {
   const form = useForm({
     initialValues: { username: '', password: '' },
     validate: {
-      username: (v) => (v.length < 3 ? '用户名至少 3 个字符' : null),
-      password: (v) => (v.length < 8 ? '密码至少 8 个字符' : null),
+      username: (v) => (v.trim().length === 0 ? '请输入用户名' : null),
+      password: (v) => (v.length === 0 ? '请输入密码' : null),
     },
   });
 

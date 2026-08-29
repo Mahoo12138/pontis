@@ -3,12 +3,54 @@ import metaJson from './data/meta.json';
 import spacesJson from './data/spaces.json';
 import nodesJsonRaw from './data/nodes.json';
 import devicesJson from './data/devices.json';
-import type { Node, RootSlot } from '../types';
+import deviceOverviewJsonRaw from './data/device-overview.json';
+import type { DeviceOverviewResponse, Node, RootSlot } from '../types';
 
 // Typed, mutable view of the fixture so session-stateful CRUD compiles.
 const nodesJson = nodesJsonRaw as { nodes: Node[]; root_slots: RootSlot[] };
+const deviceOverview = deviceOverviewJsonRaw as DeviceOverviewResponse;
+const revokedDevices = new Set<string>();
 
 const BASE = '/api/v1';
+
+/**
+ * In-memory mock session. Login accepts any credentials and flips the flag;
+ * /auth/me answers 401 until then, so the auth guard keeps unauthenticated
+ * visitors on the login page.
+ */
+let mockSession: { username: string } | null = null;
+
+function mockUser(username: string) {
+  return {
+    id: 'u001', username, display_name: username, email: `${username}@pontis.local`, role: 'admin', status: 'active', locale: 'zh-CN', created_at: '2026-08-20T08:00:00Z',
+  };
+}
+
+/** Auth endpoints mocked with "any credentials accepted" semantics. */
+export const authHandlers = [
+  http.post(`${BASE}/auth/login`, async ({ request }) => {
+    const body = (await request.json()) as { username?: string; password?: string };
+    const username = body.username?.trim() || 'admin';
+    mockSession = { username };
+    return HttpResponse.json({
+      token: `mock-session-token-${Date.now()}`,
+      expires_at: new Date(Date.now() + 86400000).toISOString(),
+      user: mockUser(username),
+    });
+  }),
+
+  http.get(`${BASE}/auth/me`, () => {
+    if (!mockSession) {
+      return HttpResponse.json({ error: { code: 'UNAUTHENTICATED', message: 'not logged in', request_id: 'req_mock' } }, { status: 401 });
+    }
+    return HttpResponse.json(mockUser(mockSession.username));
+  }),
+
+  http.post(`${BASE}/auth/logout`, () => {
+    mockSession = null;
+    return HttpResponse.json({ status: 'ok' });
+  }),
+];
 
 /** MSW handlers for backend gap endpoints (always active) and real endpoints (test-only). */
 export const gapHandlers = [
@@ -87,6 +129,44 @@ export const gapHandlers = [
     return HttpResponse.json(devicesJson);
   }),
 
+  // ─── Device overview (gap — joined Device × Binding view) ───
+  http.get(`${BASE}/devices/overview`, () => {
+    return HttpResponse.json({
+      devices: deviceOverview.devices.filter((d) => !revokedDevices.has(d.id)),
+    });
+  }),
+
+  http.post(`${BASE}/devices`, async ({ request }) => {
+    const body = (await request.json()) as {
+      name?: string;
+      client_type?: string;
+      browser?: string;
+      platform?: string;
+    };
+    const device = {
+      id: `d${Date.now()}`,
+      name: body.name ?? 'New device',
+      client_type: body.client_type ?? 'extension',
+      browser: body.browser ?? '',
+      platform: body.platform ?? '',
+      sync_mode: '' as const,
+      created_at: new Date().toISOString(),
+      last_seen_at: null,
+      bindings: [],
+    };
+    deviceOverview.devices.push(device);
+    // One-time secret: server keeps only a hash; shown once to the user.
+    return HttpResponse.json(
+      { device, token: `pnt_${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 14)}` },
+      { status: 201 },
+    );
+  }),
+
+  http.delete(`${BASE}/devices/:deviceId`, ({ params }) => {
+    revokedDevices.add(params.deviceId as string);
+    return new HttpResponse(null, { status: 204 });
+  }),
+
   // ─── Activity (gap) ─────────────────────────────────────
   http.get(`${BASE}/spaces/:spaceId/activity`, () => {
     return HttpResponse.json({
@@ -130,28 +210,6 @@ export const realHandlers = [
       created_at: new Date().toISOString(),
     }, { status: 201 });
   }),
-
-  http.post(`${BASE}/auth/login`, async ({ request }) => {
-    const body = (await request.json()) as { username: string; password: string };
-    if (body.username === 'admin' && body.password === 'password') {
-      return HttpResponse.json({
-        token: 'mock-session-token',
-        expires_at: new Date(Date.now() + 86400000).toISOString(),
-        user: { id: 'u001', username: 'admin', display_name: 'Admin', email: '', role: 'admin', status: 'active', locale: 'zh-CN', created_at: '2026-08-20T08:00:00Z' },
-      });
-    }
-    return HttpResponse.json({ error: { code: 'INVALID_CREDENTIALS', message: 'unknown user or wrong password', request_id: 'req_mock' } }, { status: 401 });
-  }),
-
-  http.get(`${BASE}/auth/me`, () => {
-    return HttpResponse.json({
-      id: 'u001', username: 'admin', display_name: 'Admin', email: 'admin@pontis.local', role: 'admin', status: 'active', locale: 'zh-CN', created_at: '2026-08-20T08:00:00Z',
-    });
-  }),
-
-  http.post(`${BASE}/auth/logout`, () => {
-    return HttpResponse.json({ status: 'ok' });
-  }),
 ];
 
-export const allHandlers = [...realHandlers, ...gapHandlers];
+export const allHandlers = [...authHandlers, ...realHandlers, ...gapHandlers];

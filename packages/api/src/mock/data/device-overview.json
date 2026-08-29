@@ -1,0 +1,123 @@
+{
+  "devices": [
+    {
+      "id": "d001",
+      "name": "Edge on Windows",
+      "client_type": "extension",
+      "browser": "edge",
+      "platform": "windows",
+      "sync_mode": "full",
+      "created_at": "2026-08-20T08:00:00Z",
+      "last_seen_at": "2026-08-29T07:58:00Z",
+      "bindings": [
+        {
+          "id": "b001",
+          "space_id": "0192a3f4-0001-7d8e-9f0a-1b2c3d4e5f01",
+          "space_name": "个人",
+          "sync_mode": "full",
+          "state": "active",
+          "health": "healthy",
+          "epoch": 1,
+          "applied_revision": 18320,
+          "server_revision": 18320,
+          "last_sync_at": "2026-08-29T07:58:00Z"
+        }
+      ]
+    },
+    {
+      "id": "d002",
+      "name": "Firefox on Mac",
+      "client_type": "extension",
+      "browser": "firefox",
+      "platform": "mac",
+      "sync_mode": "partial",
+      "created_at": "2026-08-22T10:00:00Z",
+      "last_seen_at": "2026-08-29T05:12:00Z",
+      "bindings": [
+        {
+          "id": "b002",
+          "space_id": "0192a3f4-0001-7d8e-9f0a-1b2c3d4e5f01",
+          "space_name": "个人",
+          "sync_mode": "partial",
+          "state": "active",
+          "health": "syncing",
+          "epoch": 1,
+          "applied_revision": 18311,
+          "server_revision": 18320,
+          "last_sync_at": "2026-08-29T05:12:00Z"
+        },
+        {
+          "id": "b003",
+          "space_id": "0192a3f4-0002-7d8e-9f0a-1b2c3d4e5f02",
+          "space_name": "工作",
+          "sync_mode": "partial",
+          "state": "active",
+          "health": "healthy",
+          "epoch": 1,
+          "applied_revision": 640,
+          "server_revision": 640,
+          "last_sync_at": "2026-08-29T05:12:00Z"
+        }
+      ]
+    },
+    {
+      "id": "d003",
+      "name": "Chrome on Linux",
+      "client_type": "extension",
+      "browser": "chrome",
+      "platform": "linux",
+      "sync_mode": "partial",
+      "created_at": "2026-08-25T14:00:00Z",
+      "last_seen_at": "2026-08-28T18:40:00Z",
+      "bindings": [
+        {
+          "id": "b004",
+          "space_id": "0192a3f4-0002-7d8e-9f0a-1b2c3d4e5f02",
+          "space_name": "工作",
+          "sync_mode": "partial",
+          "state": "active",
+          "health": "recovery",
+          "epoch": 2,
+          "applied_revision": 312,
+          "server_revision": 640,
+          "last_sync_at": "2026-08-28T18:40:00Z"
+        }
+      ]
+    },
+    {
+      "id": "d004",
+      "name": "Safari on iPhone",
+      "client_type": "extension",
+      "browser": "safari",
+      "platform": "ios",
+      "sync_mode": "",
+      "created_at": "2026-08-27T09:00:00Z",
+      "last_seen_at": null,
+      "bindings": []
+    },
+    {
+      "id": "d005",
+      "name": "Chrome on Laptop",
+      "client_type": "extension",
+      "browser": "chrome",
+      "platform": "windows",
+      "sync_mode": "partial",
+      "created_at": "2026-07-02T11:30:00Z",
+      "last_seen_at": "2026-08-24T21:05:00Z",
+      "bindings": [
+        {
+          "id": "b005",
+          "space_id": "0192a3f4-0001-7d8e-9f0a-1b2c3d4e5f01",
+          "space_name": "个人",
+          "sync_mode": "partial",
+          "state": "active",
+          "health": "offline",
+          "epoch": 1,
+          "applied_revision": 17900,
+          "server_revision": 18320,
+          "last_sync_at": "2026-08-24T21:05:00Z"
+        }
+      ]
+    }
+  ]
+}
