@@ -19,6 +19,7 @@ import (
 	"pontis/internal/device"
 	"pontis/internal/httpapi"
 	"pontis/internal/library"
+	"pontis/internal/organizer"
 	"pontis/internal/logging"
 	"pontis/internal/space"
 	"pontis/internal/store/sqlite"
@@ -70,6 +71,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Sync:       sync.NewService(sqlite.NewSyncStore(db)),
 		Library:    library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
 		Tokens:     token.NewService(sqlite.NewTokenStore(db)),
+		Organizer:  organizer.NewService(sqlite.NewLibraryStore(db)),
 		Backups:    backupSvc,
 		Accounts:   accountStore,
 		InstanceID: instanceID,

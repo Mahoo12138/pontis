@@ -366,3 +366,9 @@ var (
 	ErrTitleTooLong = errors.New("library: title too long")
 	ErrURLTooLong   = errors.New("library: url too long")
 )
+
+// ListNodes exposes the raw node list for detector-style consumers
+// (organizer, backup capture).
+func (s *Service) ListNodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error) {
+	return s.store.ListNodes(ctx, space)
+}

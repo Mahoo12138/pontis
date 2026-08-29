@@ -16,6 +16,7 @@ import (
 	"pontis/internal/backup"
 	"pontis/internal/device"
 	"pontis/internal/library"
+	"pontis/internal/organizer"
 	"pontis/internal/space"
 	"pontis/internal/store/sqlite"
 	"pontis/internal/sync"
@@ -37,10 +38,11 @@ type Server struct {
 	Devices  *device.Service
 	Spaces   *space.Service
 	Sync     *sync.Service
-	Library  *library.Service
-	Tokens   *token.Service
-	Backups  *backup.Service
-	Accounts *sqlite.AccountStore
+	Library   *library.Service
+	Tokens    *token.Service
+	Backups   *backup.Service
+	Organizer *organizer.Service
+	Accounts  *sqlite.AccountStore
 
 	// InstanceID identifies this server installation across URL changes.
 	InstanceID string
@@ -116,6 +118,9 @@ func (s *Server) Router() http.Handler {
 		r.Put("/api/v1/spaces/{spaceID}/nodes/{nodeID}/move", s.handleMoveNode)
 		r.Delete("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleDeleteNode)
 		r.Get("/api/v1/spaces/{spaceID}/activity", s.handleSpaceActivity)
+		r.Post("/api/v1/spaces/{spaceID}/organizer/link-check", s.handleRunLinkCheck)
+		r.Get("/api/v1/spaces/{spaceID}/organizer/link-check/results", s.handleLinkCheckResults)
+		r.Get("/api/v1/spaces/{spaceID}/organizer/duplicates", s.handleDuplicates)
 		r.Get("/api/v1/spaces/{spaceID}/backups", s.handleListBackups)
 		r.Post("/api/v1/spaces/{spaceID}/backups", s.handleCreateBackup)
 		r.Post("/api/v1/spaces/{spaceID}/backups/{backupID}/restore", s.handleRestoreBackup)
