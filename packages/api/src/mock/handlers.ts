@@ -7,6 +7,7 @@ import deviceOverviewJsonRaw from './data/device-overview.json';
 import publicationsJsonRaw from './data/publications.json';
 import type {
   DeviceOverviewResponse,
+  ImportPlanEntry,
   Node,
   PublicationDetail,
   PublicationSummary,
@@ -23,11 +24,32 @@ const revokedDevices = new Set<string>();
 const BASE = '/api/v1';
 
 /**
- * In-memory mock session. Login accepts any credentials and flips the flag;
+ * Mock session. Login accepts any credentials and flips the flag;
  * /auth/me answers 401 until then, so the auth guard keeps unauthenticated
- * visitors on the login page.
+ * visitors on the login page. The flag is mirrored into sessionStorage so a
+ * full page reload in mock-everything mode does not log the user out.
  */
-let mockSession: { username: string } | null = null;
+const SESSION_KEY = 'pontis-mock-session';
+
+function loadSession(): { username: string } | null {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    return raw ? (JSON.parse(raw) as { username: string }) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(session: { username: string } | null) {
+  try {
+    if (session) sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    else sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    // Storage may be unavailable; session then lives for this page only.
+  }
+}
+
+let mockSession: { username: string } | null = loadSession();
 
 function mockUser(username: string) {
   return {
@@ -41,6 +63,7 @@ export const authHandlers = [
     const body = (await request.json()) as { username?: string; password?: string };
     const username = body.username?.trim() || 'admin';
     mockSession = { username };
+    saveSession(mockSession);
     return HttpResponse.json({
       token: `mock-session-token-${Date.now()}`,
       expires_at: new Date(Date.now() + 86400000).toISOString(),
@@ -57,6 +80,7 @@ export const authHandlers = [
 
   http.post(`${BASE}/auth/logout`, () => {
     mockSession = null;
+    saveSession(null);
     return HttpResponse.json({ status: 'ok' });
   }),
 ];
@@ -313,6 +337,143 @@ export const gapHandlers = [
     const idx = publications.findIndex((p) => p.id === params.pubId);
     if (idx >= 0) publications.splice(idx, 1);
     return new HttpResponse(null, { status: 204 });
+  }),
+
+  // ─── Import / Export (gap) ──────────────────────────────
+  http.post(`${BASE}/spaces/:spaceId/import/preview`, async ({ request }) => {
+    const body = (await request.json()) as { format?: string; content?: string };
+    const format = body.format === 'native_json' ? 'native_json' : 'netscape_html';
+    // Deterministic sample plan; the real backend parses the uploaded file.
+    void body.content;
+    const counts = {
+      create: 24,
+      update: 3,
+      move: 2,
+      delete: 0,
+      keep: 6,
+      ambiguous: 1,
+      unsupported: 2,
+    };
+    const entries: ImportPlanEntry[] = [
+      { title: 'Go 官方文档', url: 'https://go.dev/doc/', path: '开发资源', action: 'create' },
+      { title: '标准库参考', url: 'https://pkg.go.dev/std', path: '开发资源', action: 'create' },
+      { title: 'Vite 指南', url: 'https://vite.dev/guide/', path: '开发资源/前端', action: 'create' },
+      { title: 'GitHub', url: 'https://github.com', path: '/', action: 'keep' },
+      { title: 'React', url: 'https://react.dev', path: '/', action: 'update', reason: 'URL 相同,标题不同' },
+      { title: 'TanStack', url: 'https://tanstack.com', path: '/', action: 'move', reason: '位置与现有不同' },
+      { title: '未命名页面', url: 'https://example.org/unknown', path: '开发资源', action: 'ambiguous', reason: '同名同 URL 已存在多处,不猜测' },
+      { title: '带图标的书签', path: '开发资源', action: 'unsupported', reason: 'ICON 属性将被忽略' },
+      { title: '分隔线', path: '开发资源', action: 'unsupported', reason: 'Separator 不支持跨浏览器同步' },
+    ];
+    return HttpResponse.json({
+      plan_id: `plan-${Date.now()}`,
+      format,
+      total: 38,
+      counts,
+      warnings: [
+        '2 个条目包含不支持将被忽略的属性(ICON / separator)。',
+        '1 个条目匹配不明确,确认后将被跳过。',
+      ],
+      entries,
+      bound_revision: 42,
+    });
+  }),
+
+  http.post(`${BASE}/spaces/:spaceId/import/apply`, async ({ request }) => {
+    const body = (await request.json()) as { plan_id?: string; strategy?: string };
+    if (!body.plan_id) {
+      return HttpResponse.json({ error: { code: 'PLAN_NOT_FOUND', message: 'plan required', request_id: 'req_mock' } }, { status: 400 });
+    }
+    // Replace recreates the target subtree; merge preserves matched content.
+    return HttpResponse.json(
+      body.strategy === 'replace'
+        ? { created: 36, updated: 0, deleted: 14, kept: 0 }
+        : { created: 24, updated: 3, deleted: 0, kept: 6 },
+    );
+  }),
+
+  http.post(`${BASE}/spaces/:spaceId/export`, async ({ request, params }) => {
+    const body = (await request.json()) as { format?: string; root_key?: string };
+    const spaceId = params.spaceId as string;
+    const spaceName =
+      spacesJson.spaces.find((s) => s.id === spaceId)?.name ?? 'space';
+    const inScope = nodesJson.nodes.filter(
+      (n) => n.space_id === spaceId && (!body.root_key || n.root_key === body.root_key),
+    );
+
+    const esc = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    if (body.format === 'native_json') {
+      return HttpResponse.json({
+        filename: `${spaceName}-export.json`,
+        content_type: 'application/json',
+        content: JSON.stringify(
+          {
+            format: 'pontis-portable-bookmarks',
+            version: 1,
+            exported_at: new Date().toISOString(),
+            space: { name: spaceName },
+            nodes: inScope.map((n) => ({
+              id: n.id,
+              type: n.type,
+              title: n.title,
+              url: n.url ?? undefined,
+              parent_id: n.parent_id ?? undefined,
+              root_key: n.root_key ?? undefined,
+              position: n.position,
+            })),
+            root_slots: nodesJson.root_slots.filter((s) => s.space_id === spaceId),
+          },
+          null,
+          2,
+        ),
+      });
+    }
+
+    const childrenOf = (parentId: string | null, rootKey: string | null) =>
+      inScope.filter((n) =>
+        parentId === null
+          // top level: scope by root slot; deeper levels scope by parent only
+          ? n.parent_id === null && n.root_key === rootKey
+          : n.parent_id === parentId,
+      );
+    const renderFolder = (title: string, parentId: string | null, rootKey: string | null, depth: number): string => {
+      const pad = '    '.repeat(depth);
+      const kids = childrenOf(parentId, rootKey);
+      const rows: string[] = [];
+      for (const k of kids) {
+        if (k.type === 'folder') {
+          rows.push(`${pad}<DT><H3>${esc(k.title)}</H3>`);
+          rows.push(renderFolder(k.title, k.id, rootKey, depth + 1));
+        } else {
+          rows.push(`${pad}<DT><A HREF="${esc(k.url ?? '')}">${esc(k.title)}</A>`);
+        }
+      }
+      return `${pad}<DL><p>\n${rows.join('\n')}\n${pad}</DL><p>`;
+    };
+
+    const slots = nodesJson.root_slots.filter((s) => s.space_id === spaceId);
+    const sections = slots
+      .map((slot) =>
+        `    <DT><H3>${esc(slot.display_name)}</H3>\n${renderFolder(slot.display_name, null, slot.key, 2)}`,
+      )
+      .join('\n');
+    const html = [
+      '<!DOCTYPE NETSCAPE-Bookmark-file-1>',
+      '<!-- This is an automatically generated file. It will be read and overwritten. DO NOT EDIT! -->',
+      '<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">',
+      `<TITLE>Bookmarks</TITLE>`,
+      '<H1>Bookmarks</H1>',
+      '<DL><p>',
+      sections,
+      '</DL><p>',
+    ].join('\n');
+    return HttpResponse.json({
+      filename: `${spaceName}-bookmarks.html`,
+      content_type: 'text/html',
+      content: html,
+    });
   }),
 ];
 

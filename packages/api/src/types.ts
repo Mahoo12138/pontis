@@ -332,3 +332,67 @@ export interface ApplyPublicationResponse {
   updated: number;
   kept: number;
 }
+
+// ─── Import / Export (gap endpoint — mock only) ─────────────
+
+export type ImportFormat = 'netscape_html' | 'native_json';
+
+export type ImportEntryAction =
+  | 'create'
+  | 'update'
+  | 'move'
+  | 'delete'
+  | 'keep'
+  | 'ambiguous'
+  | 'unsupported';
+
+/** One planned change from the Parse → Validate → Plan pipeline. */
+export interface ImportPlanEntry {
+  title: string;
+  url?: string;
+  path: string;
+  action: ImportEntryAction;
+  reason?: string;
+}
+
+export interface ImportPlan {
+  plan_id: string;
+  format: ImportFormat;
+  total: number;
+  counts: Record<ImportEntryAction, number>;
+  warnings: string[];
+  entries: ImportPlanEntry[];
+  /** Plan binds to target epoch/revision; stale plans must be re-previewed. */
+  bound_revision: number;
+}
+
+export interface ImportPreviewRequest {
+  format: ImportFormat;
+  content: string;
+}
+
+export interface ImportApplyRequest {
+  plan_id: string;
+  parent: ParentRef;
+  strategy: ImportStrategy;
+}
+
+export type ImportStrategy = 'merge' | 'replace';
+
+export interface ImportApplyResponse {
+  created: number;
+  updated: number;
+  deleted: number;
+  kept: number;
+}
+
+export interface ExportRequest {
+  format: ImportFormat;
+  root_key?: string;
+}
+
+export interface ExportResponse {
+  filename: string;
+  content_type: string;
+  content: string;
+}
