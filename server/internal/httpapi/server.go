@@ -112,6 +112,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/v1/settings", s.handleGetSettings)
 		r.Patch("/api/v1/settings", s.handleUpdateSettings)
 		r.Get("/api/v1/admin/jobs", s.handleListJobs)
+		r.Post("/api/v1/admin/jobs", s.handleEnqueueJob)
 		r.Post("/api/v1/admin/jobs/{jobID}/cancel", s.handleCancelJob)
 		r.Get("/api/v1/tokens", s.handleListTokens)
 		r.Post("/api/v1/tokens", s.handleCreateToken)

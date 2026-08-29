@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"pontis/internal/canonical"
+	"pontis/internal/jobs"
 )
 
 // --- handlers: background jobs (admin session) ---
@@ -75,6 +76,29 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		out = append(out, dto)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": out})
+}
+
+type enqueueJobRequest struct {
+	Type    string `json:"type"`
+	SpaceID string `json:"space_id"`
+}
+
+// handleEnqueueJob creates a job manually — the doc 13 "run it now" path.
+func (s *Server) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
+	admin, ok := requireAdmin(s, w, r)
+	if !ok {
+		return
+	}
+	var req enqueueJobRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	job, err := s.Jobs.Enqueue(r.Context(), jobs.Type(req.Type), canonical.UserID(admin.ID), req.SpaceID, "")
+	if err != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_JOB_TYPE", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"id": job.ID, "type": string(job.Type), "status": string(job.Status)})
 }
 
 func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
