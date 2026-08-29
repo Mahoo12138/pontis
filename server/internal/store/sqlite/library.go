@@ -142,3 +142,8 @@ func (s *LibraryStore) UserName(ctx context.Context, id string) (string, error) 
 	}
 	return name, err
 }
+
+// Space is an alias of GetSpace matching the backup TreeSource contract.
+func (s *LibraryStore) Space(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error) {
+	return s.GetSpace(ctx, id)
+}

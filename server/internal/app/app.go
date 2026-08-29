@@ -8,11 +8,13 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"pontis/internal/auth"
+	"pontis/internal/backup"
 	"pontis/internal/config"
 	"pontis/internal/device"
 	"pontis/internal/httpapi"
@@ -56,6 +58,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	accountStore := sqlite.NewAccountStore(db)
+	backupSvc, err := backup.NewService(sqlite.NewBackupStore(db), sqlite.NewLibraryStore(db),
+		filepath.Join(cfg.DataDir, "backups"))
+	if err != nil {
+		return err
+	}
 	api := &httpapi.Server{
 		Auth:       auth.NewService(sqlite.NewAuthStore(db), sessionTTL),
 		Devices:    device.NewService(sqlite.NewDeviceStore(db)),
@@ -63,6 +70,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Sync:       sync.NewService(sqlite.NewSyncStore(db)),
 		Library:    library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
 		Tokens:     token.NewService(sqlite.NewTokenStore(db)),
+		Backups:    backupSvc,
 		Accounts:   accountStore,
 		InstanceID: instanceID,
 		Logger:     logger,

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"pontis/internal/auth"
+	"pontis/internal/backup"
 	"pontis/internal/device"
 	"pontis/internal/library"
 	"pontis/internal/space"
@@ -36,6 +37,11 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	backupSvc, err := backup.NewService(sqlite.NewBackupStore(db), sqlite.NewLibraryStore(db),
+		filepath.Join(t.TempDir(), "backups"))
+	if err != nil {
+		t.Fatalf("backup service: %v", err)
+	}
 
 	srv := &Server{
 		Auth:       auth.NewService(sqlite.NewAuthStore(db), 24*time.Hour),
@@ -44,6 +50,7 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 		Sync:       sync.NewService(sqlite.NewSyncStore(db)),
 		Library:    library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
 		Tokens:     token.NewService(sqlite.NewTokenStore(db)),
+		Backups:    backupSvc,
 		Accounts:   sqlite.NewAccountStore(db),
 		InstanceID: instanceID,
 		Logger:     slog.New(slog.DiscardHandler),

@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"pontis/internal/auth"
+	"pontis/internal/backup"
 	"pontis/internal/device"
 	"pontis/internal/library"
 	"pontis/internal/space"
@@ -38,6 +39,7 @@ type Server struct {
 	Sync     *sync.Service
 	Library  *library.Service
 	Tokens   *token.Service
+	Backups  *backup.Service
 	Accounts *sqlite.AccountStore
 
 	// InstanceID identifies this server installation across URL changes.
@@ -114,6 +116,11 @@ func (s *Server) Router() http.Handler {
 		r.Put("/api/v1/spaces/{spaceID}/nodes/{nodeID}/move", s.handleMoveNode)
 		r.Delete("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleDeleteNode)
 		r.Get("/api/v1/spaces/{spaceID}/activity", s.handleSpaceActivity)
+		r.Get("/api/v1/spaces/{spaceID}/backups", s.handleListBackups)
+		r.Post("/api/v1/spaces/{spaceID}/backups", s.handleCreateBackup)
+		r.Post("/api/v1/spaces/{spaceID}/backups/{backupID}/restore", s.handleRestoreBackup)
+		r.Patch("/api/v1/spaces/{spaceID}/backups/{backupID}", s.handleUpdateBackup)
+		r.Delete("/api/v1/spaces/{spaceID}/backups/{backupID}", s.handleDeleteBackup)
 	})
 
 	// Device registration (web session): returns the one-time device secret.
