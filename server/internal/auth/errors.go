@@ -24,6 +24,9 @@ var (
 	// ErrSessionInvalid is returned for unknown, expired or revoked sessions.
 	ErrSessionInvalid = errors.New("auth: session invalid")
 
+	// ErrResetTokenInvalid is returned for unknown, expired or used reset tokens.
+	ErrResetTokenInvalid = errors.New("auth: reset token invalid")
+
 	// ErrEmailTaken is returned when the email is already in use.
 	ErrEmailTaken = errors.New("auth: email already in use")
 )

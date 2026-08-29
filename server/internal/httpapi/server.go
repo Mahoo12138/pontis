@@ -83,12 +83,21 @@ func (s *Server) Router() http.Handler {
 	// Auth (web session).
 	r.Post("/api/v1/auth/setup", s.handleSetup)
 	r.Post("/api/v1/auth/login", s.handleLogin)
+	r.Post("/api/v1/auth/reset", s.handleResetPassword)
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireSession)
 		r.Post("/api/v1/auth/logout", s.handleLogout)
 		r.Get("/api/v1/auth/me", s.handleMe)
 		r.Patch("/api/v1/auth/me", s.handleUpdateProfile)
 		r.Post("/api/v1/auth/password", s.handleChangePassword)
+	})
+
+	// Admin: user management (admin session).
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireSession)
+		r.Get("/api/v1/admin/users", s.handleListAdminUsers)
+		r.Patch("/api/v1/admin/users/{userID}", s.handleUpdateAdminUser)
+		r.Post("/api/v1/admin/users/{userID}/reset-link", s.handleCreateResetLink)
 	})
 
 	// Account management (web session).
@@ -277,6 +286,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, auth.ErrInvalidCredentials) {
 			s.writeError(w, r, http.StatusUnauthorized, "INVALID_CREDENTIALS", "unknown user or wrong password")
+			return
+		}
+		if errors.Is(err, auth.ErrUserDisabled) {
+			s.writeError(w, r, http.StatusUnauthorized, "ACCOUNT_DISABLED", "this account is disabled")
 			return
 		}
 		s.mapAuthError(w, r, err)

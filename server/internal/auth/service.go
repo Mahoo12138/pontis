@@ -2,6 +2,9 @@ package auth
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/base64"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -193,4 +196,72 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 // UserByID returns one account by id.
 func (s *Service) UserByID(ctx context.Context, id string) (User, error) {
 	return s.store.GetUser(ctx, id)
+}
+
+// resetTokenTTL is how long a password reset link stays valid.
+const resetTokenTTL = 30 * time.Minute
+
+// ResetStore is the extra contract for password reset flows; implemented
+// by the sqlite account store.
+type ResetStore interface {
+	InsertResetToken(ctx context.Context, userID, hash string, expiresAt, at time.Time) error
+	ConsumeResetToken(ctx context.Context, hash string) (string, error)
+}
+
+// CreateResetLink mints a single-use reset token for the user and returns
+// the raw secret for out-of-band delivery (doc 09 §15). The admin never
+// learns the new password.
+func (s *Service) CreateResetLink(ctx context.Context, userID string) (string, error) {
+	if _, err := s.store.GetUser(ctx, userID); err != nil {
+		return "", err
+	}
+	resetStore, ok := s.store.(ResetStore)
+	if !ok {
+		return "", errors.New("auth: reset flow unavailable")
+	}
+	raw := make([]byte, 32)
+	if _, err := crand.Read(raw); err != nil {
+		return "", err
+	}
+	token := "prs_" + base64.RawURLEncoding.EncodeToString(raw)
+	now := time.Now().UTC()
+	if err := resetStore.InsertResetToken(ctx, userID, hashToken(token), now.Add(resetTokenTTL), now); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// ResetPassword consumes a raw reset token and sets a new password,
+// invalidating all of the user's web sessions.
+func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword string) error {
+	if !ValidatePassword(newPassword) {
+		return ErrInvalidPassword
+	}
+	resetStore, ok := s.store.(ResetStore)
+	if !ok {
+		return errors.New("auth: reset flow unavailable")
+	}
+	userID, err := resetStore.ConsumeResetToken(ctx, hashToken(rawToken))
+	if err != nil {
+		return err
+	}
+	hash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	passwordStore, ok := s.store.(PasswordChanger)
+	if !ok {
+		return errors.New("auth: reset flow unavailable")
+	}
+	if err := passwordStore.UpdatePassword(ctx, userID, hash, now); err != nil {
+		return err
+	}
+	return s.store.DeleteUserSessions(ctx, userID)
+}
+
+// PasswordChanger is implemented by stores that can rewrite a password.
+type PasswordChanger interface {
+	UpdatePassword(ctx context.Context, userID, hash string, at time.Time) error
+	DeleteUserSessions(ctx context.Context, userID string) error
 }
