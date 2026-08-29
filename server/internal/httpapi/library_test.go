@@ -116,7 +116,7 @@ func TestNodesCRUDAndActivity(t *testing.T) {
 	}
 
 	// Move the bookmark back to the root slot.
-	code, body = doJSON(t, "PUT", root+"/nodes/"+bookmarkID+"/move", h,
+	code, body = doJSON(t, "PATCH", root+"/nodes/"+bookmarkID+"/move", h,
 		map[string]any{"parent": map[string]string{"type": "root", "key": "main"}})
 	if code != http.StatusOK {
 		t.Fatalf("move = %d %v", code, body)

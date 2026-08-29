@@ -237,6 +237,7 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 
 type activityResponse struct {
 	ID        string `json:"id"`
+	Timestamp string `json:"timestamp"`
 	Revision  int64  `json:"revision"`
 	Actor     string `json:"actor"`
 	Action    string `json:"action"`
@@ -254,12 +255,13 @@ func (s *Server) handleSpaceActivity(w http.ResponseWriter, r *http.Request) {
 	out := make([]activityResponse, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, activityResponse{
-			ID:       "rev-" + strconv.FormatInt(e.Revision, 10),
-			Revision: e.Revision,
-			Actor:    e.Actor,
-			Action:   e.Action,
-			Summary:  e.Summary,
-			Undoable: true, // V1: recent canonical changes are undoable in principle.
+			ID:        "rev-" + strconv.FormatInt(e.Revision, 10),
+			Timestamp: e.Timestamp,
+			Revision:  e.Revision,
+			Actor:     e.Actor,
+			Action:    e.Action,
+			Summary:   e.Summary,
+			Undoable:  true, // V1: recent canonical changes are undoable in principle.
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"activity": out})

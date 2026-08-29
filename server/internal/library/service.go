@@ -248,10 +248,11 @@ func (s *Service) DeleteNode(ctx context.Context, space canonical.SpaceID, user 
 
 // ActivityEntry is one human-readable item of the space's recent history.
 type ActivityEntry struct {
-	Revision int64
-	Actor    string
-	Action   string // create | update | move | delete
-	Summary  string
+	Revision  int64
+	Timestamp string
+	Actor     string
+	Action    string // create | update | move | delete
+	Summary   string
 }
 
 // Activity derives a compact recent-history feed from the journal. The V1
@@ -284,9 +285,10 @@ func (s *Service) Activity(ctx context.Context, space canonical.SpaceID, limit i
 			return nil, err
 		}
 		entry := ActivityEntry{
-			Revision: row.Revision,
-			Actor:    actor,
-			Action:   mapAction(row.ChangeType),
+			Revision:  row.Revision,
+			Timestamp: row.CreatedAt,
+			Actor:     actor,
+			Action:    mapAction(row.ChangeType),
 		}
 		title := titles[canonical.NodeID(row.NodeID)]
 		if title == "" {

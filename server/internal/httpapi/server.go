@@ -117,7 +117,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/v1/spaces/{spaceID}/root-slots", s.handleListRootSlots)
 		r.Post("/api/v1/spaces/{spaceID}/nodes", s.handleCreateNode)
 		r.Patch("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleUpdateNode)
-		r.Put("/api/v1/spaces/{spaceID}/nodes/{nodeID}/move", s.handleMoveNode)
+		r.Patch("/api/v1/spaces/{spaceID}/nodes/{nodeID}/move", s.handleMoveNode)
 		r.Delete("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleDeleteNode)
 		r.Get("/api/v1/spaces/{spaceID}/activity", s.handleSpaceActivity)
 		r.Post("/api/v1/spaces/{spaceID}/organizer/link-check", s.handleRunLinkCheck)
