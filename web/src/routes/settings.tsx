@@ -534,9 +534,14 @@ function SystemPanel() {
       <section>
         <Text className={sectionTitle} mb={4}>用户管理</Text>
         <Text className={sectionHint} mb="sm">管理员可以在此管理用户状态与角色。</Text>
-        <Button size="xs" variant="default" onClick={() => navigate('/admin/users')}>
-          打开用户管理
-        </Button>
+        <Group gap="sm">
+          <Button size="xs" variant="default" onClick={() => navigate('/admin/users')}>
+            打开用户管理
+          </Button>
+          <Button size="xs" variant="subtle" color="coolGray" onClick={() => navigate('/admin/jobs')}>
+            后台任务
+          </Button>
+        </Group>
       </section>
     </div>
   );

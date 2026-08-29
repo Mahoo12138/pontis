@@ -519,3 +519,35 @@ export interface AdminUserView {
 export interface AdminUserListResponse {
   users: AdminUserView[];
 }
+
+// ─── Background jobs (gap endpoint — mock only) ──────────────
+
+export type JobStatus = 'queued' | 'running' | 'retry_wait' | 'succeeded' | 'failed' | 'cancelled';
+
+export type JobType =
+  | 'link_check'
+  | 'backup'
+  | 'maintenance'
+  | 'email'
+  | 'import';
+
+export interface JobView {
+  id: string;
+  type: JobType;
+  status: JobStatus;
+  owner: string;
+  space_name?: string;
+  /** Human-readable phase, more useful than a fake percentage. */
+  phase?: string;
+  progress?: { current: number; total: number };
+  attempt: number;
+  max_attempts: number;
+  scheduled_at: string;
+  started_at?: string;
+  finished_at?: string;
+  error?: string;
+}
+
+export interface JobListResponse {
+  jobs: JobView[];
+}

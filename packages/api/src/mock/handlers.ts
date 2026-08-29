@@ -8,6 +8,7 @@ import publicationsJsonRaw from './data/publications.json';
 import backupsJsonRaw from './data/backups.json';
 import tokensJsonRaw from './data/tokens.json';
 import adminUsersJsonRaw from './data/admin-users.json';
+import jobsJsonRaw from './data/jobs.json';
 import type {
   AdminUserView,
   ApiToken,
@@ -22,6 +23,7 @@ import type {
   PublicationNodeDTO,
   RootSlot,
   SystemSettings,
+  JobView,
 } from '../types';
 
 // Typed, mutable view of the fixture so session-stateful CRUD compiles.
@@ -31,6 +33,7 @@ const publications = publicationsJsonRaw.publications as PublicationDetail[];
 const backups = backupsJsonRaw.backups as Backup[];
 const tokens = tokensJsonRaw.tokens as ApiToken[];
 const adminUsers = adminUsersJsonRaw.users as AdminUserView[];
+const jobs = jobsJsonRaw.jobs as JobView[];
 const revokedDevices = new Set<string>();
 const revokedTokenIds = new Set<string>();
 const profileOverrides: { display_name?: string; email?: string } = {};
@@ -317,6 +320,24 @@ export const gapHandlers = [
     return HttpResponse.json({
       reset_link: `http://localhost:5174/reset?token=reset_${Math.random().toString(36).slice(2, 18)}`,
     });
+  }),
+
+  // ─── Background jobs (gap) ──────────────────────────────
+  http.get(`${BASE}/admin/jobs`, () => {
+    return HttpResponse.json({ jobs });
+  }),
+
+  http.post(`${BASE}/admin/jobs/:jobId/cancel`, ({ params }) => {
+    const job = jobs.find((j) => j.id === params.jobId);
+    if (!job) {
+      return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'job not found', request_id: 'req_mock' } }, { status: 404 });
+    }
+    if (job.status === 'queued' || job.status === 'running' || job.status === 'retry_wait') {
+      job.status = 'cancelled';
+      job.phase = '已取消';
+      job.finished_at = new Date().toISOString();
+    }
+    return HttpResponse.json({ status: 'ok' });
   }),
 
   // ─── Plaza / Publications (gap) ─────────────────────────

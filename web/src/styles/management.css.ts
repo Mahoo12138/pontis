@@ -53,6 +53,20 @@ export const statusDotPulsing = style({
   },
 });
 
+export const spinKeyframes = keyframes({
+  to: { transform: 'rotate(360deg)' },
+});
+
+export const spin = style({
+  animation: `${spinKeyframes} 1.2s linear infinite`,
+
+  '@media': {
+    '(prefers-reduced-motion: reduce)': {
+      animation: 'none',
+    },
+  },
+});
+
 /** Compact table row that only highlights on hover. */
 export const rowHover = style({
   selectors: {
