@@ -70,4 +70,6 @@ export type {
   CreateTokenResponse,
   SystemSettings,
   SystemSettingsResponse,
+  AdminUserView,
+  AdminUserListResponse,
 } from './types';

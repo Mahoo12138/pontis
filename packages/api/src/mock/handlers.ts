@@ -7,7 +7,9 @@ import deviceOverviewJsonRaw from './data/device-overview.json';
 import publicationsJsonRaw from './data/publications.json';
 import backupsJsonRaw from './data/backups.json';
 import tokensJsonRaw from './data/tokens.json';
+import adminUsersJsonRaw from './data/admin-users.json';
 import type {
+  AdminUserView,
   ApiToken,
   Backup,
   DeviceOverviewResponse,
@@ -28,6 +30,7 @@ const deviceOverview = deviceOverviewJsonRaw as DeviceOverviewResponse;
 const publications = publicationsJsonRaw.publications as PublicationDetail[];
 const backups = backupsJsonRaw.backups as Backup[];
 const tokens = tokensJsonRaw.tokens as ApiToken[];
+const adminUsers = adminUsersJsonRaw.users as AdminUserView[];
 const revokedDevices = new Set<string>();
 const revokedTokenIds = new Set<string>();
 const profileOverrides: { display_name?: string; email?: string } = {};
@@ -287,6 +290,33 @@ export const gapHandlers = [
   http.delete(`${BASE}/tokens/:tokenId`, ({ params }) => {
     revokedTokenIds.add(params.tokenId as string);
     return new HttpResponse(null, { status: 204 });
+  }),
+
+  // ─── Users admin (gap) ──────────────────────────────────
+  http.get(`${BASE}/admin/users`, () => {
+    return HttpResponse.json({ users: adminUsers });
+  }),
+
+  http.patch(`${BASE}/admin/users/:userId`, async ({ request, params }) => {
+    const body = (await request.json()) as { status?: 'active' | 'disabled'; role?: 'admin' | 'user' };
+    const user = adminUsers.find((u) => u.id === params.userId);
+    if (!user) {
+      return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'user not found', request_id: 'req_mock' } }, { status: 404 });
+    }
+    if (body.status) user.status = body.status;
+    if (body.role) user.role = body.role;
+    return HttpResponse.json(user);
+  }),
+
+  http.post(`${BASE}/admin/users/:userId/reset-link`, ({ params }) => {
+    const user = adminUsers.find((u) => u.id === params.userId);
+    if (!user) {
+      return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'user not found', request_id: 'req_mock' } }, { status: 404 });
+    }
+    // Single-use short-lived link; admin passes it to the user out of band.
+    return HttpResponse.json({
+      reset_link: `http://localhost:5174/reset?token=reset_${Math.random().toString(36).slice(2, 18)}`,
+    });
   }),
 
   // ─── Plaza / Publications (gap) ─────────────────────────

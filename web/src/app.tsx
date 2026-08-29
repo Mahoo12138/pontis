@@ -12,6 +12,7 @@ import DevicesPage from './routes/devices';
 import PlazaPage from './routes/plaza';
 import PlazaDetailPage from './routes/plaza-detail';
 import SettingsPage from './routes/settings';
+import AdminUsersPage from './routes/admin-users';
 import { RequireAuth, RequirePublic } from './features/auth/auth-guard';
 
 export default function App() {
@@ -50,6 +51,7 @@ export default function App() {
                   <Route path="/plaza" element={<PlazaPage />} />
                   <Route path="/plaza/:publicationId" element={<PlazaDetailPage />} />
                   <Route path="/settings" element={<SettingsPage />} />
+                  <Route path="/admin/users" element={<AdminUsersPage />} />
                 </Routes>
               </AppShell>
             </RequireAuth>

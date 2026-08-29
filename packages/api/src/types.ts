@@ -501,3 +501,21 @@ export interface SystemSettings {
 export interface SystemSettingsResponse {
   settings: SystemSettings;
 }
+
+// ─── Users admin (gap endpoint — mock only) ──────────────────
+
+export interface AdminUserView {
+  id: string;
+  username: string;
+  display_name: string;
+  email: string;
+  role: 'admin' | 'user';
+  status: 'active' | 'disabled';
+  space_count: number;
+  created_at: string;
+  last_seen_at: string | null;
+}
+
+export interface AdminUserListResponse {
+  users: AdminUserView[];
+}
