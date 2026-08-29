@@ -14,6 +14,7 @@ import (
 
 	"pontis/internal/auth"
 	"pontis/internal/device"
+	"pontis/internal/library"
 	"pontis/internal/space"
 	"pontis/internal/sync"
 )
@@ -33,6 +34,7 @@ type Server struct {
 	Devices *device.Service
 	Spaces  *space.Service
 	Sync    *sync.Service
+	Library *library.Service
 
 	// InstanceID identifies this server installation across URL changes.
 	InstanceID string
@@ -81,6 +83,18 @@ func (s *Server) Router() http.Handler {
 		r.Use(s.requireSession)
 		r.Get("/api/v1/spaces", s.handleListSpaces)
 		r.Post("/api/v1/spaces", s.handleCreateSpace)
+	})
+
+	// Canonical tree access (web session, owner-scoped).
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireSession, s.requireSpaceAccess)
+		r.Get("/api/v1/spaces/{spaceID}/nodes", s.handleListNodes)
+		r.Get("/api/v1/spaces/{spaceID}/root-slots", s.handleListRootSlots)
+		r.Post("/api/v1/spaces/{spaceID}/nodes", s.handleCreateNode)
+		r.Patch("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleUpdateNode)
+		r.Put("/api/v1/spaces/{spaceID}/nodes/{nodeID}/move", s.handleMoveNode)
+		r.Delete("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleDeleteNode)
+		r.Get("/api/v1/spaces/{spaceID}/activity", s.handleSpaceActivity)
 	})
 
 	// Device registration (web session): returns the one-time device secret.
