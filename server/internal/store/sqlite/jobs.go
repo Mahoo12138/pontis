@@ -26,10 +26,14 @@ func scanJob(row interface{ Scan(dest ...any) error }) (jobs.Job, error) {
 	var typ, status, scheduledAt, cancelFlag string
 	var startedAt, finishedAt *string
 	var progressCur, progressTot *int64
-	if err := row.Scan(&j.ID, &typ, &status, &j.OwnerUserID, &j.SpaceID, &j.Payload, &j.Error,
+	var owner *string
+	if err := row.Scan(&j.ID, &typ, &status, &owner, &j.SpaceID, &j.Payload, &j.Error,
 		&j.Phase, &progressCur, &progressTot, &j.Attempt, &j.MaxAttempts,
 		&cancelFlag, &scheduledAt, &startedAt, &finishedAt); err != nil {
 		return j, err
+	}
+	if owner != nil {
+		j.OwnerUserID = *owner
 	}
 	j.CancelRequested = cancelFlag != ""
 	j.Type = jobs.Type(typ)
@@ -48,13 +52,17 @@ func scanJob(row interface{ Scan(dest ...any) error }) (jobs.Job, error) {
 	return j, nil
 }
 
-// Enqueue writes a queued job.
+// Enqueue writes a queued job. Empty owner = system job (NULL).
 func (s *JobStore) Enqueue(ctx context.Context, j jobs.Job) error {
+	var owner any
+	if j.OwnerUserID != "" {
+		owner = j.OwnerUserID
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO jobs (id, type, status, owner_user_id, space_id, payload,
 			attempt, max_attempts, next_run_at, scheduled_at, created_at, updated_at)
 		VALUES (?, ?, 'queued', ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
-		j.ID, string(j.Type), j.OwnerUserID, nullableString(j.SpaceID), j.Payload,
+		j.ID, string(j.Type), owner, nullableString(j.SpaceID), j.Payload,
 		j.MaxAttempts, formatTime(j.ScheduledAt), formatTime(j.ScheduledAt),
 		formatTime(j.ScheduledAt), formatTime(j.ScheduledAt))
 	return err
@@ -145,10 +153,18 @@ func (s *JobStore) Get(ctx context.Context, id string) (jobs.Job, error) {
 	return j, err
 }
 
-// List returns recent jobs, newest first.
+// List returns recent jobs, newest first (admin view: all owners).
 func (s *JobStore) List(ctx context.Context, limit int) ([]jobs.Job, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT `+jobColumns+` FROM jobs ORDER BY created_at DESC, id LIMIT ?`, limit)
+	return s.listQuery(ctx, `SELECT `+jobColumns+` FROM jobs ORDER BY created_at DESC, id LIMIT ?`, limit)
+}
+
+// ListByOwner returns one user's recent jobs (user task view).
+func (s *JobStore) ListByOwner(ctx context.Context, owner string, limit int) ([]jobs.Job, error) {
+	return s.listQuery(ctx, `SELECT `+jobColumns+` FROM jobs WHERE owner_user_id = ? ORDER BY created_at DESC, id LIMIT ?`, owner, limit)
+}
+
+func (s *JobStore) listQuery(ctx context.Context, query string, args ...any) ([]jobs.Job, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

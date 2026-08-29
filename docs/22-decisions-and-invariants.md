@@ -33,6 +33,9 @@
 | Whole-space restore | epoch change |
 | Job queue | SQLite persistent jobs |
 | Scheduler | persistent SQLite state |
+| User task surface | 独立「任务」页，聚合用户-owned schedules/jobs；领域页面仍是主要配置入口 |
+| Admin task surface | `设置 / 后台任务`，用于全局 Job/Worker 运维，不暴露私人书签内容 |
+| Generic task builder | No；用户只能创建注册过的领域 Task Definition |
 | Job delivery | at least once |
 | Undo | new inverse ChangeSet, never revision rollback |
 | Telemetry | off by default |
@@ -86,7 +89,17 @@
 9. Host/proxy headers 默认不可信。
 10. Logical Bookmark Backup 不包含 Server credentials。
 
-## E. Retention Invariants
+## E. Task / Job Invariants
+
+1. Schedule 与 Job 是两个不同对象：Schedule 决定何时产生 Job；Job 表示一次实际执行。
+2. `owner_user_id != NULL` 表示 User Task；`owner_user_id == NULL` 表示 System Task。
+3. 用户级「任务」页面只展示当前用户拥有的领域任务，不暴露 Generic Job Infrastructure。
+4. 用户任务配置优先归属领域页面；任务中心提供跨 Space 聚合、状态与统一管理。
+5. 管理员「后台任务」页面是运维视图，不赋予 Private Bookmark Reader 权限。
+6. Pause/Delete Schedule 不自动取消已经创建或正在运行的 Job。
+7. 普通用户不能提交任意 Job Type / Payload / Cron，只能使用已注册的 User-visible Task Definition。
+
+## F. Retention Invariants
 
 1. Journal/Tombstone/Receipt 共享历史安全边界。
 2. Old offline Device 不无限阻止 Journal GC。
@@ -96,7 +109,7 @@
 6. 最后一份成功 Backup 不自动删除。
 7. Undo retention 与 Journal retention 独立。
 
-## F. 术语
+## G. 术语
 
 ### Canonical Tree
 Server 权威 Bookmark Tree。

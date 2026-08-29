@@ -1,7 +1,7 @@
-# 自托管跨浏览器书签同步平台：设计文档集
+# Pontis：自托管跨浏览器书签同步平台设计文档集
 
 > 文档状态：V1 Architecture Baseline  
-> 更新时间：2026-08-27
+> 更新时间：2026-08-29
 
 本目录记录项目从产品边界、Canonical Tree、同步协议、浏览器扩展、本地副本、Reconciliation、备份、权限、后台任务、数据库、安全到工程技术栈的完整设计。
 
@@ -22,7 +22,7 @@
 11. [10-publication-plaza.md](./10-publication-plaza.md) — Plaza / Publication / Copy 模型
 12. [11-import-export.md](./11-import-export.md) — HTML / Native JSON Import / Export
 13. [12-organizer-and-search.md](./12-organizer-and-search.md) — 失效链接、重复项、私有搜索
-14. [13-background-jobs.md](./13-background-jobs.md) — Job Queue / Scheduler / Worker / Crash Recovery
+14. [13-background-jobs.md](./13-background-jobs.md) — 用户任务中心、管理员后台任务、Job Queue / Scheduler / Worker
 15. [14-backup-retention-gc.md](./14-backup-retention-gc.md) — Backup、Journal/Tombstone/Receipt Retention
 16. [15-undo-activity.md](./15-undo-activity.md) — ChangeSet、Activity、Undo
 17. [16-diagnostics-observability.md](./16-diagnostics-observability.md) — Diagnostics / Logs / Support Bundle
@@ -32,6 +32,7 @@
 21. [20-go-module-architecture.md](./20-go-module-architecture.md) — Go 模块、依赖方向和核心接口
 22. [21-development-and-testing.md](./21-development-and-testing.md) — 开发顺序、测试与 syncsim
 23. [22-decisions-and-invariants.md](./22-decisions-and-invariants.md) — 关键决策、不变量与术语表
+24. [23-ui-design-system.md](./23-ui-design-system.md) — Cold Rational Workspace UI 主题与规范
 
 ## 文档约定
 

@@ -39,7 +39,7 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 func TestWorkerRunsJobToSuccess(t *testing.T) {
 	svc, _ := newTestService(t, 1)
 	ran := make(chan struct{})
-	svc.Register(jobs.TypeBackup, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
+	svc.Register(jobs.TypeBackupCreate, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
 		if err := report("备份中", nil, nil); err != nil {
 			return err
 		}
@@ -48,7 +48,7 @@ func TestWorkerRunsJobToSuccess(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	if _, err := svc.Enqueue(ctx, jobs.TypeBackup, "u1", "s1", ""); err != nil {
+	if _, err := svc.Enqueue(ctx, jobs.TypeBackupCreate, "", "s1", ""); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	svc.Start(ctx)
@@ -68,7 +68,7 @@ func TestWorkerRunsJobToSuccess(t *testing.T) {
 func TestWorkerRetriesThenSucceeds(t *testing.T) {
 	svc, _ := newTestService(t, 1)
 	attempts := 0
-	svc.Register(jobs.TypeMaintenance, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
+	svc.Register(jobs.TypeSessionCleanup, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
 		attempts++
 		if attempts < 2 {
 			return jobs.Retryable{Err: errors.New("transient")}
@@ -77,7 +77,7 @@ func TestWorkerRetriesThenSucceeds(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	job, _ := svc.Enqueue(ctx, jobs.TypeMaintenance, "u1", "", "")
+	job, _ := svc.Enqueue(ctx, jobs.TypeSessionCleanup, "", "", "")
 	svc.Start(ctx)
 	defer svc.Stop()
 
@@ -94,13 +94,13 @@ func TestWorkerRetriesThenSucceeds(t *testing.T) {
 func TestFatalErrorFailsWithoutRetry(t *testing.T) {
 	svc, _ := newTestService(t, 1)
 	calls := 0
-	svc.Register(jobs.TypeImport, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
+	svc.Register(jobs.TypeImportRun, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
 		calls++
 		return jobs.FatalError
 	})
 
 	ctx := context.Background()
-	svc.Enqueue(ctx, jobs.TypeImport, "u1", "", "")
+	svc.Enqueue(ctx, jobs.TypeImportRun, "", "", "")
 	svc.Start(ctx)
 	defer svc.Stop()
 
@@ -128,7 +128,7 @@ func TestCancelIsCooperative(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	job, _ := svc.Enqueue(ctx, jobs.TypeLinkCheck, "u1", "s1", "")
+	job, _ := svc.Enqueue(ctx, jobs.TypeLinkCheck, "", "s1", "")
 	svc.Start(ctx)
 	defer svc.Stop()
 

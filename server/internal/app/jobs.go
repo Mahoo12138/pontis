@@ -25,7 +25,7 @@ func buildJobService(
 	svc := jobs.NewService(store, 2)
 
 	// backup: capture one space's tree (payload {"space_id": "..."}).
-	svc.Register(jobs.TypeBackup, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
+	svc.Register(jobs.TypeBackupCreate, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
 		if job.SpaceID == "" {
 			return fmt.Errorf("%w: job has no space", jobs.FatalError)
 		}
@@ -41,7 +41,7 @@ func buildJobService(
 	})
 
 	// maintenance: purge expired reset tokens.
-	svc.Register(jobs.TypeMaintenance, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
+	svc.Register(jobs.TypeSessionCleanup, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
 		err := report("清理过期凭据", nil, nil)
 		if err != nil {
 			return err
@@ -84,7 +84,7 @@ func buildJobService(
 
 	// email: placeholder until SMTP support lands; succeeds without side
 	// effects so queued flows do not pile up as failures.
-	svc.Register(jobs.TypeEmail, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
+	svc.Register(jobs.TypeMailSend, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
 		err := report("SMTP 未配置,跳过发送", nil, nil)
 		return err
 	})

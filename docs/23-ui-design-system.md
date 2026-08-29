@@ -362,6 +362,7 @@ Pontis
 
   广场
   最近活动
+  任务
 
 ────────
 
@@ -618,7 +619,66 @@ Activity 建议采用类似 Git History 的 Timeline。
 
 ---
 
-## 24. Settings / Devices / Backups
+## 24. 用户任务中心与管理员后台任务
+
+Pontis 将“用户领域任务”和“系统后台任务”明确分开。
+
+### 24.1 用户「任务」
+
+用户「任务」作为 Sidebar 的二级主导航，与「最近活动」同组。它回答：
+
+> “我让 Pontis 现在或以后帮我做什么？”
+
+页面不做 Generic Scheduler Dashboard，而采用紧凑的三段式工作区：
+
+```text
+任务                                      + 新建任务
+
+正在运行
+检查失效链接     个人      342 / 1,280      取消
+
+计划任务
+每日自动备份     个人      每天 02:00        …
+每周链接检查     工作      周日 03:00        …
+
+最近完成
+备份 Personal    成功      2 分钟前
+链接检查          12 个问题 昨天 03:14
+```
+
+视觉规则：
+
+- 不使用 KPI Card Grid；
+- 正在运行任务可显示 Progress / Phase；
+- Schedule 以领域名称展示，不显示 Cron / Payload；
+- 支持「立即运行」「编辑」「暂停」；
+- 删除计划只停止未来执行，历史记录继续保留；
+- 创建任务使用领域模板，例如「自动备份」「检查失效链接」。
+
+领域页面仍是任务配置的主要入口，例如 Backup 页面配置自动备份、Organizer 页面配置定期链接检查；任务中心负责跨 Space 聚合与统一管理。
+
+### 24.2 管理员「设置 / 后台任务」
+
+管理员页面属于 Management World，采用 Filter + Dense Table：
+
+```text
+后台任务
+
+状态 [全部]  类型 [全部]  所有者 [全部]  时间 [最近 24 小时]
+
+Type                  Owner       Status        Started
+backup.create         Mahoo       Running       21:13
+mail.send             System      Success       21:12
+journal.gc            System      Success       21:00
+```
+
+可展开查看：Job ID、Attempt、Progress、Worker、Lease、Error Code、Request ID、Duration 等运维数据。
+
+管理员页面不得显示用户私有 Bookmark Title/URL、未脱敏 payload/result 或 Secret。它是服务器运行状态视图，不是跨用户内容浏览器。
+
+---
+
+## 25. Settings / Devices / Backups
 
 这些页面属于 Management World，可以采用更加传统的管理布局，适合使用 Mantine Table、TanStack Table、Settings Sections、Form、Tabs、Drawer 与 Modal。
 
@@ -630,7 +690,7 @@ Firefox on Mac       离线        2 小时前
 
 ---
 
-## 25. Diagnostics
+## 26. Diagnostics
 
 Diagnostics 可以更偏 Developer Tool。
 
@@ -648,7 +708,7 @@ Server Revision     18,340
 
 ---
 
-## 26. Form
+## 27. Form
 
 优先使用 Mantine Form + Mantine Input Components。
 
@@ -663,7 +723,7 @@ Server Revision     18,340
 
 ---
 
-## 27. Modal / Dialog
+## 28. Modal / Dialog
 
 普通 Modal 宽度建议 `400–480px`，复杂设置 `560–640px`。
 
@@ -678,7 +738,7 @@ Server Revision     18,340
 
 ---
 
-## 28. Destructive Operation
+## 29. Destructive Operation
 
 危险操作必须清晰说明影响。
 
@@ -695,7 +755,7 @@ Server Revision     18,340
 
 ---
 
-## 29. Empty State
+## 30. Empty State
 
 Pontis 不采用营销式 Empty State。
 
@@ -712,7 +772,7 @@ Pontis 不采用营销式 Empty State。
 
 ---
 
-## 30. Loading
+## 31. Loading
 
 优先使用 Skeleton、Row Placeholder 与 Inline Spinner。
 
@@ -720,7 +780,7 @@ Pontis 不采用营销式 Empty State。
 
 ---
 
-## 31. Error
+## 32. Error
 
 ### 可恢复错误
 
@@ -746,7 +806,7 @@ Pontis 不采用营销式 Empty State。
 
 ---
 
-## 32. Motion
+## 33. Motion
 
 动画应作为反馈，而不是表现。
 
@@ -763,7 +823,7 @@ Menu               100–150ms
 
 ---
 
-## 33. Accessibility
+## 34. Accessibility
 
 必须保证：
 
@@ -780,7 +840,7 @@ Explorer 需要特别关注 Arrow Key、Enter、Space、Context Menu、Multi Sel
 
 ---
 
-## 34. 响应式策略
+## 35. 响应式策略
 
 Pontis 是 Desktop-first Workspace。
 
@@ -799,7 +859,7 @@ Pontis 是 Desktop-first Workspace。
 
 ---
 
-## 35. Mantine 与 Vanilla Extract 分工
+## 36. Mantine 与 Vanilla Extract 分工
 
 ### Mantine 负责
 
@@ -817,7 +877,7 @@ App Shell、Sidebar Layout、Workspace、Explorer、Inspector、Plaza Layout、A
 
 ---
 
-## 36. 页面视觉分区
+## 37. 页面视觉分区
 
 ### Content World
 
@@ -835,7 +895,7 @@ App Shell、Sidebar Layout、Workspace、Explorer、Inspector、Plaza Layout、A
 
 ---
 
-## 37. 推荐组件密度
+## 38. 推荐组件密度
 
 建议在 Mantine Theme 中统一配置较紧凑的默认尺寸，例如：
 
@@ -852,7 +912,7 @@ Badge         sm
 
 ---
 
-## 38. Pontis Logo 与品牌
+## 39. Pontis Logo 与品牌
 
 Logo 建议方向：几何、简单、单色优先、低装饰，并与 “Pontis / Bridge / Connection / Sync” 概念相关。
 
@@ -862,7 +922,7 @@ Sidebar 中 Logo 应保持 Graphite / Muted Blue，避免渐变 Logo 主导界�
 
 ---
 
-## 39. Do / Don't
+## 40. Do / Don't
 
 ### Do
 
@@ -892,7 +952,7 @@ Sidebar 中 Logo 应保持 Graphite / Muted Blue，避免渐变 Logo 主导界�
 
 ---
 
-## 40. V1 UI 基线
+## 41. V1 UI 基线
 
 ```text
 Theme
@@ -955,7 +1015,7 @@ Vanilla Extract
 
 ---
 
-## 41. 最终设计判断标准
+## 42. 最终设计判断标准
 
 每设计一个 Pontis 页面或组件，都可以用下面的问题判断是否符合主题：
 
@@ -974,7 +1034,7 @@ Vanilla Extract
 
 ---
 
-## 42. 结论
+## 43. 结论
 
 Pontis 的 UI 不应追求“第一眼惊艳”，而应追求：
 

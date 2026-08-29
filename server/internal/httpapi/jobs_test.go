@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"pontis/internal/canonical"
 	"pontis/internal/jobs"
 )
 
@@ -23,11 +24,13 @@ func TestJobsAdminGatingAndListing(t *testing.T) {
 		t.Fatalf("bob cancel = %d %v", code, body)
 	}
 
-	// Register a no-op handler and enqueue a backup job.
-	f.srv.Jobs.Register(jobs.TypeBackup, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
+	// Register a no-op handler and enqueue a backup job for alice.
+	_, me := doJSON(t, "GET", f.ts.URL+"/api/v1/auth/me", adminHeader, nil)
+	aliceID := me["id"].(string)
+	f.srv.Jobs.Register(jobs.TypeBackupCreate, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
 		return nil
 	})
-	job, err := f.srv.Jobs.Enqueue(t.Context(), jobs.TypeBackup, "u1", f.spaceID, "")
+	job, err := f.srv.Jobs.Enqueue(t.Context(), jobs.TypeBackupCreate, canonical.UserID(aliceID), f.spaceID, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -42,7 +45,7 @@ func TestJobsAdminGatingAndListing(t *testing.T) {
 		t.Fatalf("expected 1 job, got %v", list)
 	}
 	entry := list[0].(map[string]any)
-	if entry["id"] != job.ID || entry["type"] != "backup" || entry["status"] != "queued" {
+	if entry["id"] != job.ID || entry["type"] != "backup.create" || entry["status"] != "queued" {
 		t.Fatalf("job entry wrong: %v", entry)
 	}
 

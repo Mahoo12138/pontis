@@ -1,7 +1,7 @@
 // Package jobs implements the SQLite persistent job queue with claim+lease
 // workers, bounded exponential backoff and cooperative cancellation
-// (doc 13). Handlers are idempotent by contract; the queue guarantees
-// at-least-once execution.
+// (doc 13), plus the Task Definition Registry that keeps the generic
+// infrastructure out of the product layer (doc 13 §4.3).
 package jobs
 
 import (
@@ -16,16 +16,62 @@ import (
 	"pontis/internal/canonical"
 )
 
-// Type enumerates the built-in job kinds.
+// Type is a registered domain job type. Only types present in Definitions
+// exist; user APIs may only reference user_visible && schedulable ones.
 type Type string
 
+// User-visible domain tasks.
 const (
-	TypeLinkCheck   Type = "link_check"
-	TypeBackup      Type = "backup"
-	TypeMaintenance Type = "maintenance"
-	TypeEmail       Type = "email"
-	TypeImport      Type = "import"
+	TypeBackupCreate Type = "backup.create"
+	TypeLinkCheck    Type = "organizer.link_check"
 )
+
+// System maintenance tasks.
+const (
+	TypeJournalGC       Type = "journal.gc"
+	TypeReceiptGC       Type = "receipt.gc"
+	TypeSessionCleanup  Type = "session.cleanup"
+	TypeArtifactCleanup Type = "artifact.cleanup"
+	TypeBackupRetention Type = "backup.retention"
+	TypeMailSend        Type = "mail.send"
+	TypeImportRun       Type = "import.run"
+)
+
+// Definition describes one domain task in the registry (doc 13 §4.3).
+type Definition struct {
+	Type        Type
+	UserVisible bool
+	Schedulable bool
+	// TitleKey is the product-layer display name key; the web UI maps it
+	// to localized domain wording.
+	TitleKey string
+}
+
+// Definitions is the closed Task Definition Registry.
+var Definitions = []Definition{
+	{Type: TypeBackupCreate, UserVisible: true, Schedulable: true, TitleKey: "task.backup_create"},
+	{Type: TypeLinkCheck, UserVisible: true, Schedulable: true, TitleKey: "task.link_check"},
+	{Type: TypeJournalGC, UserVisible: false, Schedulable: false, TitleKey: "task.journal_gc"},
+	{Type: TypeReceiptGC, UserVisible: false, Schedulable: false, TitleKey: "task.receipt_gc"},
+	{Type: TypeSessionCleanup, UserVisible: false, Schedulable: false, TitleKey: "task.session_cleanup"},
+	{Type: TypeArtifactCleanup, UserVisible: false, Schedulable: false, TitleKey: "task.artifact_cleanup"},
+	{Type: TypeBackupRetention, UserVisible: false, Schedulable: false, TitleKey: "task.backup_retention"},
+	{Type: TypeMailSend, UserVisible: false, Schedulable: false, TitleKey: "task.mail_send"},
+	{Type: TypeImportRun, UserVisible: false, Schedulable: false, TitleKey: "task.import_run"},
+}
+
+// DefinitionOf returns the registry entry for a type.
+func DefinitionOf(t Type) (Definition, bool) {
+	for _, d := range Definitions {
+		if d.Type == t {
+			return d, true
+		}
+	}
+	return Definition{}, false
+}
+
+// ErrUnknownType is returned for types outside the registry.
+var ErrUnknownType = errors.New("jobs: unknown task type")
 
 // Status is the job lifecycle state.
 type Status string
@@ -46,7 +92,7 @@ var (
 	FatalError = errors.New("jobs: fatal")
 )
 
-// Job is one queue entry.
+// Job is one queue entry. OwnerUserID empty = system job (doc 13 §3.1).
 type Job struct {
 	ID          string
 	Type        Type
@@ -96,6 +142,8 @@ type Store interface {
 	Get(ctx context.Context, id string) (Job, error)
 	// List returns recent jobs, newest first.
 	List(ctx context.Context, limit int) ([]Job, error)
+	// ListByOwner returns one user's recent jobs (user task view).
+	ListByOwner(ctx context.Context, owner string, limit int) ([]Job, error)
 	// RecoverExpiredLeases requeues jobs whose worker died.
 	RecoverExpiredLeases(ctx context.Context, at time.Time) error
 }
@@ -121,13 +169,21 @@ func NewService(store Store, workers int) *Service {
 	return &Service{store: store, handlers: map[Type]Handler{}, workers: workers}
 }
 
-// Register installs a handler for a job type.
-func (s *Service) Register(t Type, h Handler) {
+// Register installs a handler for a job type. Only registry types may be
+// handled.
+func (s *Service) Register(t Type, h Handler) error {
+	if _, ok := DefinitionOf(t); !ok {
+		return ErrUnknownType
+	}
 	s.handlers[t] = h
+	return nil
 }
 
 // Enqueue creates a job that is due immediately.
 func (s *Service) Enqueue(ctx context.Context, t Type, owner canonical.UserID, spaceID string, payload string) (Job, error) {
+	if _, ok := DefinitionOf(t); !ok {
+		return Job{}, ErrUnknownType
+	}
 	if _, ok := s.handlers[t]; !ok {
 		return Job{}, fmt.Errorf("jobs: no handler for %s", t)
 	}
@@ -299,7 +355,12 @@ func (s *Service) Cancel(ctx context.Context, id string) error {
 	return s.store.RequestCancel(ctx, id, time.Now().UTC())
 }
 
-// List returns recent jobs for the admin view.
+// List returns recent jobs for the admin view (all owners).
 func (s *Service) List(ctx context.Context, limit int) ([]Job, error) {
 	return s.store.List(ctx, limit)
+}
+
+// ListMine returns the user's recent jobs for the user task view.
+func (s *Service) ListMine(ctx context.Context, owner canonical.UserID, limit int) ([]Job, error) {
+	return s.store.ListByOwner(ctx, string(owner), limit)
 }
