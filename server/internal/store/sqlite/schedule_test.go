@@ -71,6 +71,11 @@ func TestScheduleStoreCRUDAndDue(t *testing.T) {
 	// ListByOwner matches only the owning user; system rows (NULL owner)
 	// never leak into a user list.
 	system := scheduleFixture("sched-sys", "", "", schedule.KindDaily, jobs.TypeJournalGC)
+	// ListDue honours enabled and next_run_at. The system row must be
+	// explicitly in the past — a time.Now() fixture goes stale as the wall
+	// clock passes the query instant and the test becomes time-of-day
+	// dependent.
+	system.NextRunAt = time.Date(2026, 8, 30, 3, 0, 0, 0, time.UTC)
 	if err := store.Insert(ctx, system); err != nil {
 		t.Fatalf("insert system: %v", err)
 	}
