@@ -174,6 +174,22 @@ func TestCreateRequiresSpaceForUsers(t *testing.T) {
 	}
 }
 
+// System schedules are the maintenance path (doc 13 §18): they may target
+// non-schedulable registry types, unlike the user API (doc 13 §4.3).
+func TestCreateSystemAllowsMaintenanceTypes(t *testing.T) {
+	svc := NewService(newFakeStore(), newFakeEnqueuer())
+	p := dailyParams()
+	p.Type = jobs.TypeJournalGC
+	p.SpaceID = ""
+	sched, err := svc.CreateSystem(context.Background(), p)
+	if err != nil {
+		t.Fatalf("system create for maintenance type: %v", err)
+	}
+	if sched.OwnerUserID != "" || sched.SpaceID != "" {
+		t.Fatalf("system schedule must be ownerless and spaceless: %+v", sched)
+	}
+}
+
 func TestTickEnqueuesAdvancesAndCoalesces(t *testing.T) {
 	store := newFakeStore()
 	enq := newFakeEnqueuer()

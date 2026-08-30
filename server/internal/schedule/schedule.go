@@ -140,10 +140,17 @@ func validate(p CreateParams) error {
 	return nil
 }
 
-// Create validates and persists a schedule.
+// Create validates and persists a schedule. User schedules may only target
+// user_visible && schedulable registry types (doc 13 §4.3: "用户 API 只能创建
+// user_visible && schedulable 的 Task Definition"); system schedules (empty
+// owner) are the maintenance path and may schedule any registered type,
+// including system maintenance tasks (doc 13 §18).
 func (s *Service) Create(ctx context.Context, owner canonical.UserID, p CreateParams) (Schedule, error) {
 	def, ok := jobs.DefinitionOf(p.Type)
-	if !ok || !def.Schedulable {
+	if !ok {
+		return Schedule{}, ErrBadType
+	}
+	if owner != "" && !def.Schedulable {
 		return Schedule{}, ErrBadType
 	}
 	if err := validate(p); err != nil {
