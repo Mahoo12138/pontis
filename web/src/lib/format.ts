@@ -1,12 +1,24 @@
-/** Format a date as relative time string (e.g. "2 分钟前", "昨天"). */
+/** Format a date as relative time string (e.g. "2 分钟前", "昨天", "3 小时后"). */
 export function formatRelativeTime(dateStr: string, locale: string = 'zh-CN'): string {
   const date = new Date(dateStr);
   const now = Date.now();
   const diff = now - date.getTime();
-  const seconds = Math.floor(diff / 1000);
+  const future = diff < 0;
+  const seconds = Math.floor(Math.abs(diff) / 1000);
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
+
+  if (future) {
+    // Schedules carry next_run_at; "13 小时后" beats a stale "刚刚".
+    if (seconds < 60) return locale === 'zh-CN' ? '即将执行' : 'any moment';
+    if (minutes < 60) return locale === 'zh-CN' ? `${minutes} 分钟后` : `in ${minutes}m`;
+    if (hours < 24) return locale === 'zh-CN' ? `${hours} 小时后` : `in ${hours}h`;
+    return date.toLocaleDateString(locale === 'zh-CN' ? 'zh-CN' : 'en', {
+      month: 'short',
+      day: 'numeric',
+    });
+  }
 
   if (seconds < 60) return locale === 'zh-CN' ? '刚刚' : 'just now';
   if (minutes < 60) return locale === 'zh-CN' ? `${minutes} 分钟前` : `${minutes}m ago`;
