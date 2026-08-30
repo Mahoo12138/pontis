@@ -181,6 +181,25 @@ func (s *Server) handleRunScheduleNow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": job.ID, "status": string(job.Status)})
 }
 
+// handleCancelMyJob cancels one of the caller's own jobs (doc 13 §4.1
+// user task page). Ownership and system-job reachability are enforced in
+// the service; terminal jobs answer idempotently with 200.
+func (s *Server) handleCancelMyJob(w http.ResponseWriter, r *http.Request) {
+	u, _ := currentUser(r)
+	err := s.Jobs.CancelOwned(r.Context(), chi.URLParam(r, "jobID"), canonical.UserID(u.ID))
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	case errors.Is(err, jobs.ErrNotFound):
+		s.writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "unknown job")
+	case errors.Is(err, jobs.ErrForbidden):
+		s.writeError(w, r, http.StatusForbidden, "NOT_JOB_OWNER", "job belongs to another user")
+	default:
+		s.Logger.Error("cancel my job failed", "err", err)
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+	}
+}
+
 // handleListMyTasks is the user task view: own schedules plus recent
 // own jobs (doc 13 §4.1). System tasks never appear here.
 func (s *Server) handleListMyTasks(w http.ResponseWriter, r *http.Request) {

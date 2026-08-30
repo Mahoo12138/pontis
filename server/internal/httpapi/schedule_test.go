@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"pontis/internal/canonical"
 	"pontis/internal/jobs"
 )
 
@@ -180,4 +181,54 @@ func TestRunNowEnqueuesJobForOwner(t *testing.T) {
 	if code != http.StatusNotFound {
 		t.Fatalf("unknown run-now = %d", code)
 	}
+}
+
+func TestCancelMyJobOwnerScoped(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	h := map[string]string{"Authorization": "Bearer " + f.sessionToken}
+	bobH := map[string]string{"Authorization": "Bearer " + f.bobToken}
+
+	// A blocked handler keeps the job running until cancellation lands.
+	release := make(chan struct{})
+	if err := f.srv.Jobs.Register(jobs.TypeBackupCreate, func(ctx context.Context, _ jobs.Job, _ jobs.ReportFunc) error {
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, me := doJSON(t, "GET", f.ts.URL+"/api/v1/auth/me", h, nil)
+	aliceID := me["id"].(string)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	f.srv.Jobs.Start(ctx)
+	defer f.srv.Jobs.Stop()
+	job, err := f.srv.Jobs.Enqueue(t.Context(), jobs.TypeBackupCreate, canonical.UserID(aliceID), f.spaceID, "")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	waitForJobStatus(t, f.srv, job.ID, jobs.StatusRunning)
+
+	// Bob cannot cancel Alice's job.
+	code, body := doJSON(t, "POST", f.ts.URL+"/api/v1/jobs/"+job.ID+"/cancel", bobH, nil)
+	if code != http.StatusForbidden || errCode(t, body) != "NOT_JOB_OWNER" {
+		t.Fatalf("foreign cancel = %d %v", code, body)
+	}
+
+	// Owner cancel flags cooperative cancellation.
+	code, body = doJSON(t, "POST", f.ts.URL+"/api/v1/jobs/"+job.ID+"/cancel", h, nil)
+	if code != http.StatusOK {
+		t.Fatalf("owner cancel = %d %v", code, body)
+	}
+	waitForJobStatus(t, f.srv, job.ID, jobs.StatusCancelled)
+
+	// Unknown job -> 404.
+	code, body = doJSON(t, "POST", f.ts.URL+"/api/v1/jobs/nope/cancel", h, nil)
+	if code != http.StatusNotFound || errCode(t, body) != "JOB_NOT_FOUND" {
+		t.Fatalf("unknown cancel = %d %v", code, body)
+	}
+	close(release)
 }

@@ -88,6 +88,8 @@ const (
 // Errors.
 var (
 	ErrNotFound = errors.New("jobs: not found")
+	// ErrForbidden marks ownership failures on user operations.
+	ErrForbidden = errors.New("jobs: not the owner")
 	// FatalError marks a handler failure as non-retryable.
 	FatalError = errors.New("jobs: fatal")
 )
@@ -403,10 +405,31 @@ func (s *Service) Cancel(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if j.Status == StatusSucceeded || j.Status == StatusFailed || j.Status == StatusCancelled {
-		return nil // terminal; nothing to cancel
+	if terminal(j.Status) {
+		return nil // nothing to cancel
 	}
 	return s.store.RequestCancel(ctx, id, time.Now().UTC())
+}
+
+// CancelOwned is the user task page path (doc 13 §4.1): the caller may
+// only cancel one of their own jobs. System jobs (owner empty) are out
+// of reach from the user API.
+func (s *Service) CancelOwned(ctx context.Context, id string, owner canonical.UserID) error {
+	j, err := s.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if j.OwnerUserID == "" || j.OwnerUserID != string(owner) {
+		return ErrForbidden
+	}
+	if terminal(j.Status) {
+		return nil
+	}
+	return s.store.RequestCancel(ctx, id, time.Now().UTC())
+}
+
+func terminal(st Status) bool {
+	return st == StatusSucceeded || st == StatusFailed || st == StatusCancelled
 }
 
 // List returns recent jobs for the admin view (all owners).

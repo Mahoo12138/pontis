@@ -102,6 +102,7 @@ func (s *Server) Router() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireSession)
 		r.Get("/api/v1/tasks", s.handleListMyTasks)
+		r.Post("/api/v1/jobs/{jobID}/cancel", s.handleCancelMyJob)
 		r.Get("/api/v1/schedules", s.handleListSchedules)
 		r.Post("/api/v1/schedules", s.handleCreateSchedule)
 		r.Patch("/api/v1/schedules/{scheduleID}", s.handleUpdateSchedule)
