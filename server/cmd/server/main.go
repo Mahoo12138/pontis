@@ -8,6 +8,11 @@ import (
 	"os/signal"
 	"syscall"
 
+	// Embed the IANA timezone database so schedule cron semantics
+	// ("daily at 03:00 local time") work in minimal containers without
+	// host tzdata (doc 19 §13).
+	_ "time/tzdata"
+
 	"pontis/internal/app"
 	"pontis/internal/config"
 )

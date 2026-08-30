@@ -56,8 +56,8 @@ func TestMigrateAppliesAndIsIdempotent(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 12 {
-		t.Errorf("schema_migrations count = %d, want 12", count)
+	if count != 13 {
+		t.Errorf("schema_migrations count = %d, want 13", count)
 	}
 }
 

@@ -270,3 +270,73 @@ func (s *Service) Restore(ctx context.Context, spaceID canonical.SpaceID, id str
 func (s *Service) Get(ctx context.Context, id string) (Backup, error) {
 	return s.store.Get(ctx, id)
 }
+
+// spaceLister is implemented by the tree source for whole-instance sweeps.
+type spaceLister interface {
+	ListSpaceIDs(ctx context.Context) ([]string, error)
+}
+
+// PurgeExpiredSafety deletes unprotected safety backups older than the
+// retention window (default 30 days, doc 14 §8).
+func (s *Service) PurgeExpiredSafety(ctx context.Context, window time.Duration) (int, error) {
+	list, ok := s.trees.(spaceLister)
+	if !ok {
+		return 0, nil
+	}
+	spaceIDs, err := list.ListSpaceIDs(ctx)
+	if err != nil {
+		return 0, err
+	}
+	cutoff := time.Now().UTC().Add(-window)
+	removed := 0
+	for _, sid := range spaceIDs {
+		backups, err := s.store.List(ctx, sid)
+		if err != nil {
+			return removed, err
+		}
+		for _, b := range backups {
+			if b.Kind == KindSafety && !b.Protected && b.CreatedAt.Before(cutoff) {
+				if err := s.Delete(ctx, b.ID); err != nil {
+					return removed, err
+				}
+				removed++
+			}
+		}
+	}
+	return removed, nil
+}
+
+// ApplyScheduledRetention keeps the newest `keep` scheduled backups per
+// space; protected backups are never auto-deleted (doc 14 §9).
+func (s *Service) ApplyScheduledRetention(ctx context.Context, keep int) (int, error) {
+	list, ok := s.trees.(spaceLister)
+	if !ok {
+		return 0, nil
+	}
+	spaceIDs, err := list.ListSpaceIDs(ctx)
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, sid := range spaceIDs {
+		backups, err := s.store.List(ctx, sid)
+		if err != nil {
+			return removed, err
+		}
+		// List is newest-first already.
+		seen := 0
+		for _, b := range backups {
+			if b.Kind != KindScheduled {
+				continue
+			}
+			seen++
+			if seen > keep && !b.Protected {
+				if err := s.Delete(ctx, b.ID); err != nil {
+					return removed, err
+				}
+				removed++
+			}
+		}
+	}
+	return removed, nil
+}

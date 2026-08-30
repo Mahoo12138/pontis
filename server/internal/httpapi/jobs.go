@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -110,6 +111,26 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleRetryJob re-enqueues a failed or cancelled job (doc 13 §4.2 ops
+// path). The original row is kept; a fresh job runs the same type/payload.
+func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireAdmin(s, w, r); !ok {
+		return
+	}
+	retried, err := s.Jobs.Retry(r.Context(), chi.URLParam(r, "jobID"))
+	if err != nil {
+		if errors.Is(err, jobs.ErrNotFound) {
+			s.writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "unknown job")
+		} else {
+			s.writeError(w, r, http.StatusConflict, "JOB_NOT_RETRYABLE", err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"id": retried.ID, "type": string(retried.Type), "status": string(retried.Status),
+	})
 }
 
 func (s *Server) ownerName(r *http.Request, userID string) string {

@@ -107,6 +107,11 @@ type Job struct {
 	Attempt     int
 	MaxAttempts int
 	CancelRequested bool
+	// ScheduleID / ScheduledFor tie one occurrence to its plan schedule;
+	// the (schedule_id, scheduled_for) unique index makes the scheduler
+	// idempotent across crash-restarts (doc 13 §8).
+	ScheduleID   string
+	ScheduledFor *time.Time
 	ScheduledAt time.Time
 	StartedAt   *time.Time
 	FinishedAt  *time.Time
@@ -146,6 +151,12 @@ type Store interface {
 	ListByOwner(ctx context.Context, owner string, limit int) ([]Job, error)
 	// RecoverExpiredLeases requeues jobs whose worker died.
 	RecoverExpiredLeases(ctx context.Context, at time.Time) error
+	// EnqueueOccurrence inserts a scheduled occurrence. created=false means
+	// the (schedule_id, scheduled_for) dedupe index absorbed a replay
+	// (crash between enqueue and next_run advance, doc 13 §8).
+	EnqueueOccurrence(ctx context.Context, j Job) (bool, error)
+	// PurgeFinishedBefore deletes terminal jobs that ended before `at`.
+	PurgeFinishedBefore(ctx context.Context, at time.Time) (int64, error)
 }
 
 // Service runs the queue: a poll loop claims due jobs and executes them on
@@ -206,6 +217,49 @@ func (s *Service) Enqueue(ctx context.Context, t Type, owner canonical.UserID, s
 		return Job{}, err
 	}
 	return j, nil
+}
+
+// EnqueueForSchedule creates the job for one schedule occurrence. The
+// (schedule_id, scheduled_for) unique index makes replays harmless: the
+// scheduler may crash after enqueue but before advancing next_run_at, and
+// the next tick dedupes instead of doubling the occurrence (doc 13 §8).
+func (s *Service) EnqueueForSchedule(ctx context.Context, t Type, owner canonical.UserID, spaceID, scheduleID string, scheduledFor time.Time) (bool, error) {
+	if _, ok := DefinitionOf(t); !ok {
+		return false, ErrUnknownType
+	}
+	if _, ok := s.handlers[t]; !ok {
+		return false, fmt.Errorf("jobs: no handler for %s", t)
+	}
+	id, err := uuid.NewV7()
+	if err != nil {
+		return false, err
+	}
+	now := time.Now().UTC()
+	j := Job{
+		ID:           id.String(),
+		Type:         t,
+		Status:       StatusQueued,
+		OwnerUserID:  string(owner),
+		SpaceID:      spaceID,
+		MaxAttempts:  3,
+		ScheduleID:   scheduleID,
+		ScheduledFor: &scheduledFor,
+		ScheduledAt:  now,
+	}
+	return s.store.EnqueueOccurrence(ctx, j)
+}
+
+// Retry re-enqueues a failed or cancelled job as a fresh attempt. The
+// original row is kept for the audit trail (doc 13 §4.2 ops path).
+func (s *Service) Retry(ctx context.Context, id string) (Job, error) {
+	old, err := s.store.Get(ctx, id)
+	if err != nil {
+		return Job{}, err
+	}
+	if old.Status != StatusFailed && old.Status != StatusCancelled {
+		return Job{}, fmt.Errorf("jobs: %s job cannot be retried", old.Status)
+	}
+	return s.Enqueue(ctx, old.Type, canonical.UserID(old.OwnerUserID), old.SpaceID, old.Payload)
 }
 
 // Start launches the poll loop and workers; safe to call once.

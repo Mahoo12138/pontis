@@ -19,6 +19,7 @@ import (
 	"pontis/internal/jobs"
 	"pontis/internal/organizer"
 	"pontis/internal/plaza"
+	"pontis/internal/schedule"
 	"pontis/internal/space"
 	"pontis/internal/store/sqlite"
 	"pontis/internal/transfer"
@@ -47,6 +48,7 @@ type Server struct {
 	Organizer *organizer.Service
 	Plaza     *plaza.Service
 	Jobs      *jobs.Service
+	Schedules *schedule.Service
 	Transfer  *transfer.Service
 	Accounts  *sqlite.AccountStore
 
@@ -96,6 +98,17 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/v1/auth/password", s.handleChangePassword)
 	})
 
+	// User task view + plan schedules (web session, owner-scoped).
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireSession)
+		r.Get("/api/v1/tasks", s.handleListMyTasks)
+		r.Get("/api/v1/schedules", s.handleListSchedules)
+		r.Post("/api/v1/schedules", s.handleCreateSchedule)
+		r.Patch("/api/v1/schedules/{scheduleID}", s.handleUpdateSchedule)
+		r.Delete("/api/v1/schedules/{scheduleID}", s.handleDeleteSchedule)
+		r.Post("/api/v1/schedules/{scheduleID}/run-now", s.handleRunScheduleNow)
+	})
+
 	// Admin: user management (admin session).
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireSession)
@@ -114,6 +127,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/v1/admin/jobs", s.handleListJobs)
 		r.Post("/api/v1/admin/jobs", s.handleEnqueueJob)
 		r.Post("/api/v1/admin/jobs/{jobID}/cancel", s.handleCancelJob)
+		r.Post("/api/v1/admin/jobs/{jobID}/retry", s.handleRetryJob)
 		r.Get("/api/v1/tokens", s.handleListTokens)
 		r.Post("/api/v1/tokens", s.handleCreateToken)
 		r.Delete("/api/v1/tokens/{tokenID}", s.handleRevokeToken)

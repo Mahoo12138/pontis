@@ -21,6 +21,7 @@ import (
 	"pontis/internal/library"
 	"pontis/internal/organizer"
 	"pontis/internal/plaza"
+	"pontis/internal/schedule"
 	"pontis/internal/transfer"
 	"pontis/internal/logging"
 	"pontis/internal/space"
@@ -69,10 +70,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 	organizerSvc := organizer.NewService(libraryStore)
-	jobSvc, err := buildJobService(db, backupSvc, organizerSvc, accountStore)
+	jobSvc, err := buildJobService(db, backupSvc, organizerSvc, accountStore, libraryStore)
 	if err != nil {
 		return err
 	}
+	scheduleStore := sqlite.NewScheduleStore(db)
+	scheduleSvc := schedule.NewService(scheduleStore, jobSvc)
+	scheduleSvc.Log = logger
 	api := &httpapi.Server{
 		Auth:       auth.NewService(sqlite.NewAuthStore(db), sessionTTL),
 		Devices:    device.NewService(sqlite.NewDeviceStore(db)),
@@ -85,6 +89,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Plaza:      plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(libraryStore, canonicalStore), canonicalStore),
 		Backups:    backupSvc,
 		Jobs:       jobSvc,
+		Schedules:  scheduleSvc,
 		Accounts:   accountStore,
 		InstanceID: instanceID,
 		Logger:     logger,
@@ -92,6 +97,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	jobSvc.Start(ctx)
 	defer jobSvc.Stop()
+
+	// Seed the built-in system schedules once, then run the scheduler tick
+	// loop (doc 13 §5-§7).
+	seedSystemSchedules(ctx, scheduleSvc, logger)
+	scheduleCtx, stopScheduler := context.WithCancel(ctx)
+	defer stopScheduler()
+	go scheduleSvc.RunLoop(scheduleCtx, 30*time.Second)
 
 	mux := chi.NewMux()
 	mux.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {

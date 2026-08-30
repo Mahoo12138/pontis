@@ -147,3 +147,21 @@ func (s *LibraryStore) UserName(ctx context.Context, id string) (string, error) 
 func (s *LibraryStore) Space(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error) {
 	return s.GetSpace(ctx, id)
 }
+
+// ListSpaceIDs returns every space id (system maintenance scope).
+func (s *LibraryStore) ListSpaceIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM sync_spaces ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}

@@ -20,6 +20,7 @@ import (
 	"pontis/internal/library"
 	"pontis/internal/organizer"
 	"pontis/internal/plaza"
+	"pontis/internal/schedule"
 	"pontis/internal/transfer"
 	"pontis/internal/space"
 	"pontis/internal/store/sqlite"
@@ -47,6 +48,10 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 		t.Fatalf("backup service: %v", err)
 	}
 
+	// The schedule service shares the job service so run-now and the tick
+	// loop can enqueue real jobs (same wiring as the app composition root).
+	jobSvc := jobs.NewService(sqlite.NewJobStore(db), 1)
+
 	srv := &Server{
 		Auth:       auth.NewService(sqlite.NewAuthStore(db), 24*time.Hour),
 		Devices:    device.NewService(sqlite.NewDeviceStore(db)),
@@ -59,7 +64,8 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 		Plaza:      plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)), sqlite.NewStore(db)),
 		Backups:    backupSvc,
 		Accounts:   sqlite.NewAccountStore(db),
-		Jobs:       jobs.NewService(sqlite.NewJobStore(db), 1),
+		Jobs:       jobSvc,
+		Schedules:  schedule.NewService(sqlite.NewScheduleStore(db), jobSvc),
 		InstanceID: instanceID,
 		Logger:     slog.New(slog.DiscardHandler),
 	}

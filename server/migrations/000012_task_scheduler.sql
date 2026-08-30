@@ -82,3 +82,5 @@ CREATE TABLE schedules (
 
 CREATE INDEX idx_schedules_due ON schedules(enabled, next_run_at);
 CREATE INDEX idx_schedules_owner ON schedules(owner_user_id);
+
+

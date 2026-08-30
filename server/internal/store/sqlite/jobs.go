@@ -19,17 +19,18 @@ func NewJobStore(db *sql.DB) *JobStore { return &JobStore{db: db} }
 const jobColumns = `
 	id, type, status, owner_user_id, COALESCE(space_id, ''), payload, COALESCE(error, ''),
 	COALESCE(phase, ''), progress_current, progress_total, attempt, max_attempts,
-	COALESCE(cancel_requested_at, ''), scheduled_at, started_at, finished_at`
+	COALESCE(cancel_requested_at, ''), COALESCE(schedule_id, ''), scheduled_for,
+	scheduled_at, started_at, finished_at`
 
 func scanJob(row interface{ Scan(dest ...any) error }) (jobs.Job, error) {
 	var j jobs.Job
-	var typ, status, scheduledAt, cancelFlag string
-	var startedAt, finishedAt *string
+	var typ, status, scheduledAt, cancelFlag, scheduleID string
+	var scheduledFor, startedAt, finishedAt *string
 	var progressCur, progressTot *int64
 	var owner *string
 	if err := row.Scan(&j.ID, &typ, &status, &owner, &j.SpaceID, &j.Payload, &j.Error,
 		&j.Phase, &progressCur, &progressTot, &j.Attempt, &j.MaxAttempts,
-		&cancelFlag, &scheduledAt, &startedAt, &finishedAt); err != nil {
+		&cancelFlag, &scheduleID, &scheduledFor, &scheduledAt, &startedAt, &finishedAt); err != nil {
 		return j, err
 	}
 	if owner != nil {
@@ -38,6 +39,11 @@ func scanJob(row interface{ Scan(dest ...any) error }) (jobs.Job, error) {
 	j.CancelRequested = cancelFlag != ""
 	j.Type = jobs.Type(typ)
 	j.Status = jobs.Status(status)
+	j.ScheduleID = scheduleID
+	if scheduledFor != nil {
+		v, _ := time.Parse(time.RFC3339Nano, *scheduledFor)
+		j.ScheduledFor = &v
+	}
 	j.ScheduledAt, _ = time.Parse(time.RFC3339Nano, scheduledAt)
 	if startedAt != nil {
 		v, _ := time.Parse(time.RFC3339Nano, *startedAt)
@@ -187,6 +193,48 @@ func (s *JobStore) RecoverExpiredLeases(ctx context.Context, at time.Time) error
 		WHERE status = 'running' AND lease_until IS NOT NULL AND lease_until < ?`,
 		formatTime(at), formatTime(at))
 	return err
+}
+
+// EnqueueOccurrence inserts a scheduled-occurrence job. The partial unique
+// index on (schedule_id, scheduled_for) absorbs replays; created=false
+// reports a dedupe instead of an error (doc 13 §8).
+func (s *JobStore) EnqueueOccurrence(ctx context.Context, j jobs.Job) (bool, error) {
+	var owner any
+	if j.OwnerUserID != "" {
+		owner = j.OwnerUserID
+	}
+	var scheduledFor any
+	if j.ScheduledFor != nil {
+		scheduledFor = formatTime(*j.ScheduledFor)
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO jobs (id, type, status, owner_user_id, space_id, payload,
+			attempt, max_attempts, next_run_at, schedule_id, scheduled_for,
+			scheduled_at, created_at, updated_at)
+		VALUES (?, ?, 'queued', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT DO NOTHING`,
+		j.ID, string(j.Type), owner, nullableString(j.SpaceID), j.Payload,
+		j.MaxAttempts, formatTime(j.ScheduledAt), nullableString(j.ScheduleID),
+		scheduledFor, formatTime(j.ScheduledAt), formatTime(j.ScheduledAt),
+		formatTime(j.ScheduledAt))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// PurgeFinishedBefore deletes terminal jobs that finished before `at`
+// (job summary retention, doc 13 §7). Queued/running rows are never touched.
+func (s *JobStore) PurgeFinishedBefore(ctx context.Context, at time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		DELETE FROM jobs
+		WHERE status IN ('succeeded', 'failed', 'cancelled') AND finished_at < ?`,
+		formatTime(at))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func nullableString(s string) any {
