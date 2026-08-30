@@ -7,6 +7,7 @@ import SpaceActivityPage from './routes/space-activity';
 import SpaceOrganizerPage from './routes/space-organizer';
 import SpaceBackupsPage from './routes/space-backups';
 import SearchPage from './routes/search';
+import TasksPage from './routes/tasks';
 import SpacesIndexPage from './routes/spaces-index';
 import DevicesPage from './routes/devices';
 import PlazaPage from './routes/plaza';
@@ -48,6 +49,7 @@ export default function App() {
                   <Route path="/spaces/:spaceId/organizer" element={<SpaceOrganizerPage />} />
                   <Route path="/spaces/:spaceId/backups" element={<SpaceBackupsPage />} />
                   <Route path="/search" element={<SearchPage />} />
+                  <Route path="/tasks" element={<TasksPage />} />
                   <Route path="/devices" element={<DevicesPage />} />
                   <Route path="/plaza" element={<PlazaPage />} />
                   <Route path="/plaza/:publicationId" element={<PlazaDetailPage />} />

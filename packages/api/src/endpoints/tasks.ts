@@ -32,3 +32,8 @@ export function deleteSchedule(scheduleId: string) {
 export function runScheduleNow(scheduleId: string) {
   return client.post<{ id: string; status: string }>(`/schedules/${scheduleId}/run-now`, {});
 }
+
+/** Cancel one of the caller's own jobs (doc 13 §4.1). */
+export function cancelMyJob(jobId: string) {
+  return client.post<{ status: string }>(`/jobs/${jobId}/cancel`, {});
+}

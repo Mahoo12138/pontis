@@ -19,6 +19,7 @@ import {
   IconBan,
   IconDotsVertical,
   IconLoader2,
+  IconRefresh,
 } from '@tabler/icons-react';
 import type { JobStatus, JobView } from '@pontis/api';
 import Header from '../components/app-shell/Header';
@@ -26,7 +27,7 @@ import ErrorState from '../components/common/ErrorState';
 import { contentRegion } from '../styles/app-shell.css';
 import { pagePad, spin } from '../styles/management.css';
 import { tokens } from '../styles/semantic-tokens.css';
-import { useCancelJob, useJobs } from '../hooks/use-jobs';
+import { useCancelJob, useJobs, useRetryJob } from '../hooks/use-jobs';
 import { formatRelativeTime } from '../lib/format';
 
 const STATUS_META: Record<JobStatus, { label: string; color: string; quiet?: boolean }> = {
@@ -38,19 +39,27 @@ const STATUS_META: Record<JobStatus, { label: string; color: string; quiet?: boo
   cancelled: { label: '已取消', color: 'coolGray', quiet: true },
 };
 
+// Admin labels follow doc 13 §4.2: domain task names, private content
+// (titles / raw URLs) never shown.
 const TYPE_LABEL: Record<JobView['type'], string> = {
-  link_check: '链接检查',
-  backup: '备份',
-  maintenance: '系统维护',
-  email: '邮件',
-  import: '导入',
+  'backup.create': '备份',
+  'organizer.link_check': '链接检查',
+  'journal.gc': '日志清理',
+  'receipt.gc': '回执清理',
+  'session.cleanup': '会话清理',
+  'artifact.cleanup': '临时文件清理',
+  'backup.retention': '备份保留策略',
+  'mail.send': '邮件发送',
+  'import.run': '导入',
 };
 
 export default function JobsPage() {
   const navigate = useNavigate();
   const { data, isLoading, isError, refetch } = useJobs();
   const cancel = useCancelJob();
+  const retry = useRetryJob();
   const [cancelTarget, setCancelTarget] = useState<JobView | null>(null);
+  const [retryTarget, setRetryTarget] = useState<JobView | null>(null);
 
   const jobs = data?.jobs ?? [];
 
@@ -105,12 +114,51 @@ export default function JobsPage() {
             </Table.Thead>
             <Table.Tbody>
               {jobs.map((job) => (
-                <JobRow key={job.id} job={job} onCancel={() => setCancelTarget(job)} />
+                <JobRow
+                  key={job.id}
+                  job={job}
+                  onCancel={() => setCancelTarget(job)}
+                  onRetry={() => setRetryTarget(job)}
+                />
               ))}
             </Table.Tbody>
           </Table>
         )}
       </div>
+
+      <Modal
+        opened={retryTarget !== null}
+        onClose={() => setRetryTarget(null)}
+        title={`重试「${retryTarget ? TYPE_LABEL[retryTarget.type] : ''}」任务?`}
+        size={420}
+        styles={{ header: { fontSize: 15, fontWeight: 600 } }}
+      >
+        <Text fz={13}>
+          会以相同类型重新发起一次执行，原记录保留供审计。私有内容仍然不可见。
+        </Text>
+        <Group justify="flex-end" mt="lg">
+          <Button variant="subtle" color="coolGray" onClick={() => setRetryTarget(null)}>取消</Button>
+          <Button
+            color="accentBlue"
+            loading={retry.isPending}
+            onClick={() => {
+              if (!retryTarget) return;
+              retry.mutate(retryTarget.id, {
+                onSuccess: () => {
+                  notifications.show({ message: '已重新发起任务', color: 'coolGray' });
+                  setRetryTarget(null);
+                },
+                onError: () => {
+                  notifications.show({ message: '任务当前状态不可重试', color: 'errorRed' });
+                  setRetryTarget(null);
+                },
+              });
+            }}
+          >
+            确认重试
+          </Button>
+        </Group>
+      </Modal>
 
       <Modal
         opened={cancelTarget !== null}
@@ -145,14 +193,22 @@ export default function JobsPage() {
   );
 }
 
-function JobRow({ job, onCancel }: { job: JobView; onCancel: () => void }) {
+function JobRow({ job, onCancel, onRetry }: { job: JobView; onCancel: () => void; onRetry: () => void }) {
   const status = STATUS_META[job.status];
   const active = job.status === 'running' || job.status === 'queued' || job.status === 'retry_wait';
+  const retryable = job.status === 'failed' || job.status === 'cancelled';
   return (
     <Table.Tr>
       <Table.Td>
         <div style={{ minWidth: 0 }}>
-          <Text fz={13} fw={500}>{TYPE_LABEL[job.type]}</Text>
+          <Text fz={13} fw={500}>
+            {TYPE_LABEL[job.type] ?? job.type}
+            {job.attempt > 0 && job.status !== 'succeeded' && (
+              <Text component="span" fz={11} c="dimmed" ml={6}>
+                第 {job.attempt + 1}/{job.max_attempts} 次
+              </Text>
+            )}
+          </Text>
           {(job.space_name || job.error) && (
             <Text fz={12} c={job.status === 'failed' ? undefined : 'dimmed'} style={{ color: job.status === 'failed' ? tokens.syncError : undefined }} truncate>
               {job.error ?? job.space_name}
@@ -201,6 +257,13 @@ function JobRow({ job, onCancel }: { job: JobView; onCancel: () => void }) {
             </UnstyledButton>
           </Menu.Target>
           <Menu.Dropdown>
+            <Menu.Item
+              leftSection={<IconRefresh size={14} stroke={1.5} />}
+              disabled={!retryable}
+              onClick={onRetry}
+            >
+              重试任务
+            </Menu.Item>
             <Menu.Item
               color="errorRed"
               leftSection={<IconBan size={14} stroke={1.5} />}

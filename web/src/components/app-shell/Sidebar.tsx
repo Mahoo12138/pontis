@@ -15,6 +15,7 @@ import {
   IconLayoutGrid,
   IconClock,
   IconDeviceDesktop,
+  IconListCheck,
   IconSettings,
   IconSun,
   IconMoon,
@@ -147,6 +148,14 @@ export default function Sidebar() {
         >
           <IconDeviceDesktop size={16} stroke={1.5} className={sidebarItemIcon} />
           {t('sidebar:devices')}
+        </div>
+        <div
+          className={`${sidebarItem} ${currentPath === '/tasks' ? sidebarItemSelected : ''}`}
+          style={{ cursor: 'pointer' }}
+          onClick={() => navigate('/tasks')}
+        >
+          <IconListCheck size={16} stroke={1.5} className={sidebarItemIcon} />
+          任务
         </div>
         <div
           className={`${sidebarItem} ${currentPath === '/settings' ? sidebarItemSelected : ''}`}
