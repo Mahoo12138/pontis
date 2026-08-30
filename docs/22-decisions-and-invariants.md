@@ -34,7 +34,7 @@
 | Job queue | SQLite persistent jobs |
 | Scheduler | persistent SQLite state |
 | User task surface | 独立「任务」页，聚合用户-owned schedules/jobs；领域页面仍是主要配置入口 |
-| Admin task surface | `设置 / 后台任务`，用于全局 Job/Worker 运维，不暴露私人书签内容 |
+| Admin task surface | 独立 `管理 / 后台任务` 页面，用于全局 Job/Worker 运维，不得隐藏在系统设置中，不暴露私人书签内容 |
 | Generic task builder | No；用户只能创建注册过的领域 Task Definition |
 | Job delivery | at least once |
 | Undo | new inverse ChangeSet, never revision rollback |
@@ -45,6 +45,8 @@
 | Extension | TS + WXT + Dexie |
 | Repository | monorepo server/web/extension/packages |
 | Web production | dist embedded into Go binary |
+| Settings IA | `设置` 仅承载当前用户个人设置；实例级能力进入独立 `管理` 区 |
+| Admin IA | 管理员主导航固定提供 `用户` / `后台任务` / `系统设置` 三个一等入口 |
 
 ## B. Sync Invariants
 
@@ -99,7 +101,19 @@
 6. Pause/Delete Schedule 不自动取消已经创建或正在运行的 Job。
 7. 普通用户不能提交任意 Job Type / Payload / Cron，只能使用已注册的 User-visible Task Definition。
 
-## F. Retention Invariants
+
+## F. Information Architecture Invariants
+
+1. 「设置」表示当前用户自身配置，只包含账户、偏好、API Token 等个人范围内容。
+2. 「系统设置」表示实例级配置，只对管理员开放；不得与普通用户设置混在同一个 Tab 组中。
+3. 「用户管理」与「后台任务」是独立管理对象，不属于「系统设置」的子按钮或隐藏入口。
+4. 管理员登录后，主导航必须出现稳定的「管理」区域，并直接提供 `用户 / 后台任务 / 系统设置` 三个入口。
+5. 非管理员完全不渲染「管理」导航，同时 Server API 仍必须执行管理员权限校验；隐藏 UI 不能替代授权。
+6. 页面导航必须按“对象/任务”划分，而不是按“谁能访问”把不相关功能塞进「系统」。
+7. 允许在系统设置页面提供指向用户管理、后台任务的上下文快捷链接，但快捷链接不能成为这些页面唯一的可发现入口。
+8. 用户级「任务」与管理员级「后台任务」必须在命名、路由与页面语义上保持区分。
+
+## G. Retention Invariants
 
 1. Journal/Tombstone/Receipt 共享历史安全边界。
 2. Old offline Device 不无限阻止 Journal GC。
@@ -109,7 +123,7 @@
 6. 最后一份成功 Backup 不自动删除。
 7. Undo retention 与 Journal retention 独立。
 
-## G. 术语
+## H. 术语
 
 ### Canonical Tree
 Server 权威 Bookmark Tree。

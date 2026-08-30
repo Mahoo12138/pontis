@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Badge,
   Button,
@@ -38,10 +38,8 @@ import { useMe } from '../hooks/use-auth';
 import {
   useCreateToken,
   useRevokeToken,
-  useSystemSettings,
   useTokens,
   useUpdateProfile,
-  useUpdateSystemSettings,
 } from '../hooks/use-settings';
 
 const ALL_SCOPES = [
@@ -53,23 +51,30 @@ const ALL_SCOPES = [
   { value: 'backups:write', label: '写入备份' },
 ];
 
-export default function SettingsPage() {
+// Settings hosts only per-user settings (CHANGELOG v1.2); tabs follow the
+// URL so /settings/account, /settings/preferences, /settings/api-tokens are
+// each deep-linkable routes.
+export default function SettingsLayout() {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const value = pathname.split('/')[2] || 'account';
+
   return (
     <>
       <Header breadcrumb="设置" />
       <div className={`${contentRegion} ${pagePad}`} style={{ maxWidth: 860 }}>
-        <Tabs defaultValue="account" styles={{ tab: { fontSize: 13 } }}>
+        <Tabs
+          value={value}
+          onChange={(v) => v && navigate(`/settings/${v}`)}
+          styles={{ tab: { fontSize: 13 } }}
+        >
           <Tabs.List mb="md">
             <Tabs.Tab value="account">账户</Tabs.Tab>
             <Tabs.Tab value="preferences">偏好</Tabs.Tab>
-            <Tabs.Tab value="tokens">API Token</Tabs.Tab>
-            <Tabs.Tab value="system">系统</Tabs.Tab>
+            <Tabs.Tab value="api-tokens">API Token</Tabs.Tab>
           </Tabs.List>
 
-          <Tabs.Panel value="account"><AccountPanel /></Tabs.Panel>
-          <Tabs.Panel value="preferences"><PreferencesPanel /></Tabs.Panel>
-          <Tabs.Panel value="tokens"><TokensPanel /></Tabs.Panel>
-          <Tabs.Panel value="system"><SystemPanel /></Tabs.Panel>
+          <Outlet />
         </Tabs>
       </div>
     </>
@@ -78,7 +83,7 @@ export default function SettingsPage() {
 
 // ─── Account ──────────────────────────────────────────────────
 
-function AccountPanel() {
+export function AccountPanel() {
   const { data: me, isLoading } = useMe();
   const update = useUpdateProfile();
   const [displayName, setDisplayName] = useState('');
@@ -188,7 +193,7 @@ function PasswordForm() {
 
 // ─── Preferences ──────────────────────────────────────────────
 
-function PreferencesPanel() {
+export function PreferencesPanel() {
   const { i18n } = useTranslation();
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
 
@@ -227,7 +232,7 @@ function PreferencesPanel() {
 
 // ─── API Tokens ───────────────────────────────────────────────
 
-function TokensPanel() {
+export function TokensPanel() {
   const { data, isLoading, isError, refetch } = useTokens();
   const revoke = useRevokeToken();
   const [createOpen, createOpenHandlers] = useDisclosure(false);
@@ -475,74 +480,6 @@ function SecretBox({ secret }: { secret: string }) {
       >
         {copied ? <IconCheck size={15} stroke={1.7} /> : <IconCopy size={15} stroke={1.5} />}
       </UnstyledButton>
-    </div>
-  );
-}
-
-// ─── System (admin) ───────────────────────────────────────────
-
-function SystemPanel() {
-  const { data, isLoading, isError, refetch } = useSystemSettings();
-  const update = useUpdateSystemSettings();
-  const navigate = useNavigate();
-
-  if (isError) return <ErrorState onRetry={() => void refetch()} />;
-  if (isLoading) return <Skeleton height={200} />;
-
-  const s = data?.settings;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 480 }}>
-      <section>
-        <Text className={sectionTitle} mb={4}>注册模式</Text>
-        <Text className={sectionHint} mb="sm">closed 仅允许已有用户登录;open 允许自由注册。</Text>
-        <SegmentedControl
-          w={280}
-          value={s?.registration_mode ?? 'closed'}
-          onChange={(v) => update.mutate({ registration_mode: v as 'closed' | 'open' | 'invite' })}
-          data={[
-            { label: '关闭', value: 'closed' },
-            { label: '开放', value: 'open' },
-            { label: '邀请(预留)', value: 'invite' },
-          ]}
-          styles={{ root: { backgroundColor: tokens.hoverBg } }}
-        />
-      </section>
-      <section>
-        <Text className={sectionTitle} mb={4}>会话有效期</Text>
-        <NativeSelect
-          w={220}
-          value={String(s?.session_ttl_hours ?? 24)}
-          data={[
-            { value: '12', label: '12 小时' },
-            { value: '24', label: '24 小时' },
-            { value: '168', label: '7 天' },
-            { value: '720', label: '30 天' },
-          ]}
-          onChange={(e) => update.mutate({ session_ttl_hours: Number(e.currentTarget.value) })}
-        />
-      </section>
-      <section>
-        <Text className={sectionTitle} mb={4}>每用户空间上限</Text>
-        <NativeSelect
-          w={220}
-          value={String(s?.max_spaces_per_user ?? 16)}
-          data={['4', '8', '16', '32', '64'].map((v) => ({ value: v, label: `${v} 个` }))}
-          onChange={(e) => update.mutate({ max_spaces_per_user: Number(e.currentTarget.value) })}
-        />
-      </section>
-      <section>
-        <Text className={sectionTitle} mb={4}>用户管理</Text>
-        <Text className={sectionHint} mb="sm">管理员可以在此管理用户状态与角色。</Text>
-        <Group gap="sm">
-          <Button size="xs" variant="default" onClick={() => navigate('/admin/users')}>
-            打开用户管理
-          </Button>
-          <Button size="xs" variant="subtle" color="coolGray" onClick={() => navigate('/admin/jobs')}>
-            后台任务
-          </Button>
-        </Group>
-      </section>
     </div>
   );
 }

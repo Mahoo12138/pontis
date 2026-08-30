@@ -95,6 +95,14 @@ export const workspaceRegion = style({
   flexDirection: 'column',
   overflow: 'hidden',
   backgroundColor: tokens.workspaceBg,
+
+  // The shell collapses to a single column below the breakpoint;
+  // span the full row so no implicit empty column is created.
+  '@media': {
+    '(max-width: 1023px)': {
+      gridColumn: '1 / -1',
+    },
+  },
 });
 
 /** Header bar within workspace. */

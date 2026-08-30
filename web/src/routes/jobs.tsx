@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   Badge,
   Button,
@@ -15,17 +14,14 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import {
-  IconArrowLeft,
   IconBan,
   IconDotsVertical,
   IconLoader2,
   IconRefresh,
 } from '@tabler/icons-react';
 import type { JobStatus, JobView } from '@pontis/api';
-import Header from '../components/app-shell/Header';
 import ErrorState from '../components/common/ErrorState';
-import { contentRegion } from '../styles/app-shell.css';
-import { pagePad, spin } from '../styles/management.css';
+import { spin } from '../styles/management.css';
 import { tokens } from '../styles/semantic-tokens.css';
 import { useCancelJob, useJobs, useRetryJob } from '../hooks/use-jobs';
 import { formatRelativeTime } from '../lib/format';
@@ -54,7 +50,6 @@ const TYPE_LABEL: Record<JobView['type'], string> = {
 };
 
 export default function JobsPage() {
-  const navigate = useNavigate();
   const { data, isLoading, isError, refetch } = useJobs();
   const cancel = useCancelJob();
   const retry = useRetryJob();
@@ -65,66 +60,51 @@ export default function JobsPage() {
 
   return (
     <>
-      <Header breadcrumb="后台任务" />
-      <div className={`${contentRegion} ${pagePad}`}>
-        <Group gap="xs" mb="md">
-          <Button
-            variant="subtle"
-            color="coolGray"
-            size="compact-sm"
-            leftSection={<IconArrowLeft size={14} stroke={1.5} />}
-            onClick={() => navigate('/settings')}
-          >
-            返回设置
-          </Button>
-        </Group>
+      <Text fz={12} c="dimmed" mb="sm">
+        任务队列每 5 秒自动刷新。404 之类的链接检查结果是正常扫描结论,不会标记任务失败。
+      </Text>
 
-        <Text fz={12} c="dimmed" mb="sm">
-          任务队列每 5 秒自动刷新。404 之类的链接检查结果是正常扫描结论,不会标记任务失败。
-        </Text>
-
-        {isError ? (
-          <ErrorState onRetry={() => void refetch()} />
-        ) : isLoading ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {Array.from({ length: 5 }, (_, i) => (
-              <Skeleton key={i} height={40} />
+      {isError ? (
+        <ErrorState onRetry={() => void refetch()} />
+      ) : isLoading ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {Array.from({ length: 5 }, (_, i) => (
+            <Skeleton key={i} height={40} />
+          ))}
+        </div>
+      ) : (
+        <Table
+          verticalSpacing={9}
+          horizontalSpacing={12}
+          withRowBorders={false}
+          styles={{
+            table: { tableLayout: 'fixed' },
+            th: { fontSize: 12, fontWeight: 500, color: tokens.textSecondary },
+            td: { fontSize: 13 },
+          }}
+        >
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>任务</Table.Th>
+              <Table.Th w={110}>状态</Table.Th>
+              <Table.Th w={170}>进度</Table.Th>
+              <Table.Th w={110}>发起者</Table.Th>
+              <Table.Th w={110}>时间</Table.Th>
+              <Table.Th w={60} />
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {jobs.map((job) => (
+              <JobRow
+                key={job.id}
+                job={job}
+                onCancel={() => setCancelTarget(job)}
+                onRetry={() => setRetryTarget(job)}
+              />
             ))}
-          </div>
-        ) : (
-          <Table
-            verticalSpacing={9}
-            horizontalSpacing={12}
-            withRowBorders={false}
-            styles={{
-              table: { tableLayout: 'fixed' },
-              th: { fontSize: 12, fontWeight: 500, color: tokens.textSecondary },
-              td: { fontSize: 13 },
-            }}
-          >
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>任务</Table.Th>
-                <Table.Th w={110}>状态</Table.Th>
-                <Table.Th w={170}>进度</Table.Th>
-                <Table.Th w={110}>发起者</Table.Th>
-                <Table.Th w={110}>时间</Table.Th>
-                <Table.Th w={60} />
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {jobs.map((job) => (
-                <JobRow
-                  key={job.id}
-                  job={job}
-                  onCancel={() => setCancelTarget(job)}
-                  onRetry={() => setRetryTarget(job)}
-                />
-              ))}
-            </Table.Tbody>
-          </Table>
-        )}
-      </div>
+          </Table.Tbody>
+        </Table>
+      )}
 
       <Modal
         opened={retryTarget !== null}

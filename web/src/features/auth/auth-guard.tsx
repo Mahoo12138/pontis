@@ -24,6 +24,19 @@ export function RequireAuth({ children }: { children: ReactNode }) {
 }
 
 /**
+ * Gate for admin-only routes (/admin/*): non-admin users are sent back
+ * to the home page. Admin pages keep their own first-class navigation.
+ */
+export function RequireAdmin({ children }: { children: ReactNode }) {
+  const { data, isLoading, isError } = useMe();
+
+  if (isLoading) return <FullScreenLoader />;
+  if (isError || !data) return <Navigate to="/login" replace />;
+  if (data.role !== 'admin') return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
+/**
  * Gate for public pages (login/setup): an already-authenticated user is
  * sent straight into the app instead of seeing the form again.
  */

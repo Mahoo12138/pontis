@@ -14,7 +14,6 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import {
-  IconArrowLeft,
   IconCheck,
   IconCopy,
   IconDotsVertical,
@@ -24,17 +23,14 @@ import {
   IconUserCheck,
 } from '@tabler/icons-react';
 import type { AdminUserView } from '@pontis/api';
-import Header from '../components/app-shell/Header';
 import ErrorState from '../components/common/ErrorState';
-import { contentRegion } from '../styles/app-shell.css';
-import { pagePad, mono } from '../styles/management.css';
+import { mono } from '../styles/management.css';
 import { tokens } from '../styles/semantic-tokens.css';
 import { useMe } from '../hooks/use-auth';
 import { useAdminUsers, useSetUserStatus, useSetUserRole } from '../hooks/use-admin-users';
 import { formatRelativeTime } from '../lib/format';
 
 export default function AdminUsersPage() {
-  const navigate = window.history;
   const { data: me } = useMe();
   const { data, isLoading, isError, refetch } = useAdminUsers();
   const setStatus = useSetUserStatus();
@@ -65,69 +61,54 @@ export default function AdminUsersPage() {
 
   return (
     <>
-      <Header breadcrumb="用户管理" />
-      <div className={`${contentRegion} ${pagePad}`}>
-        <Group gap="xs" mb="md">
-          <Button
-            variant="subtle"
-            color="coolGray"
-            size="compact-sm"
-            leftSection={<IconArrowLeft size={14} stroke={1.5} />}
-            onClick={() => navigate.back()}
-          >
-            返回
-          </Button>
-        </Group>
+      <Text fz={12} c="dimmed" mb="sm">
+        管理员负责用户状态与角色,但无法浏览其他用户的私有书签内容。禁用后用户的会话、Token 与设备同步立即被拒绝,数据保留。
+      </Text>
 
-        <Text fz={12} c="dimmed" mb="sm">
-          管理员负责用户状态与角色,但无法浏览其他用户的私有书签内容。禁用后用户的会话、Token 与设备同步立即被拒绝,数据保留。
-        </Text>
-
-        {isError ? (
-          <ErrorState onRetry={() => void refetch()} />
-        ) : isLoading ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {Array.from({ length: 4 }, (_, i) => (
-              <Skeleton key={i} height={40} />
+      {isError ? (
+        <ErrorState onRetry={() => void refetch()} />
+      ) : isLoading ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {Array.from({ length: 4 }, (_, i) => (
+            <Skeleton key={i} height={40} />
+          ))}
+        </div>
+      ) : (
+        <Table
+          verticalSpacing={9}
+          horizontalSpacing={12}
+          withRowBorders={false}
+          styles={{
+            table: { tableLayout: 'fixed' },
+            th: { fontSize: 12, fontWeight: 500, color: tokens.textSecondary },
+            td: { fontSize: 13 },
+          }}
+        >
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>用户</Table.Th>
+              <Table.Th w={90}>角色</Table.Th>
+              <Table.Th w={90}>状态</Table.Th>
+              <Table.Th w={80}>空间</Table.Th>
+              <Table.Th w={120}>最近活跃</Table.Th>
+              <Table.Th w={60} />
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {users.map((user) => (
+              <UserRow
+                key={user.id}
+                user={user}
+                isSelf={user.id === me?.id}
+                onAction={(action) => setConfirmTarget({ user, action })}
+                onResetLink={(link) => {
+                  void navigator.clipboard.writeText(link).catch(() => undefined);
+                }}
+              />
             ))}
-          </div>
-        ) : (
-          <Table
-            verticalSpacing={9}
-            horizontalSpacing={12}
-            withRowBorders={false}
-            styles={{
-              table: { tableLayout: 'fixed' },
-              th: { fontSize: 12, fontWeight: 500, color: tokens.textSecondary },
-              td: { fontSize: 13 },
-            }}
-          >
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>用户</Table.Th>
-                <Table.Th w={90}>角色</Table.Th>
-                <Table.Th w={90}>状态</Table.Th>
-                <Table.Th w={80}>空间</Table.Th>
-                <Table.Th w={120}>最近活跃</Table.Th>
-                <Table.Th w={60} />
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {users.map((user) => (
-                <UserRow
-                  key={user.id}
-                  user={user}
-                  isSelf={user.id === me?.id}
-                  onAction={(action) => setConfirmTarget({ user, action })}
-                  onResetLink={(link) => {
-                    void navigator.clipboard.writeText(link).catch(() => undefined);
-                  }}
-                />
-              ))}
-            </Table.Tbody>
-          </Table>
-        )}
-      </div>
+          </Table.Tbody>
+        </Table>
+      )}
 
       <Modal
         opened={confirmTarget !== null}

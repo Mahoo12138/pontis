@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import AppShell from './components/app-shell/AppShell';
 import LoginPage from './routes/login';
 import SetupPage from './routes/setup';
@@ -12,10 +12,16 @@ import SpacesIndexPage from './routes/spaces-index';
 import DevicesPage from './routes/devices';
 import PlazaPage from './routes/plaza';
 import PlazaDetailPage from './routes/plaza-detail';
-import SettingsPage from './routes/settings';
+import SettingsLayout, {
+  AccountPanel as SettingsAccountPage,
+  PreferencesPanel as SettingsPreferencesPage,
+  TokensPanel as SettingsApiTokensPage,
+} from './routes/settings';
+import AdminLayout from './routes/admin';
 import AdminUsersPage from './routes/admin-users';
 import JobsPage from './routes/jobs';
-import { RequireAuth, RequirePublic } from './features/auth/auth-guard';
+import AdminSystemPage from './routes/admin-system';
+import { RequireAuth, RequirePublic, RequireAdmin } from './features/auth/auth-guard';
 
 export default function App() {
   return (
@@ -53,9 +59,25 @@ export default function App() {
                   <Route path="/devices" element={<DevicesPage />} />
                   <Route path="/plaza" element={<PlazaPage />} />
                   <Route path="/plaza/:publicationId" element={<PlazaDetailPage />} />
-                  <Route path="/settings" element={<SettingsPage />} />
-                  <Route path="/admin/users" element={<AdminUsersPage />} />
-                  <Route path="/admin/jobs" element={<JobsPage />} />
+                  <Route path="/settings" element={<SettingsLayout />}>
+                    <Route index element={<Navigate to="/settings/account" replace />} />
+                    <Route path="account" element={<SettingsAccountPage />} />
+                    <Route path="preferences" element={<SettingsPreferencesPage />} />
+                    <Route path="api-tokens" element={<SettingsApiTokensPage />} />
+                  </Route>
+                  <Route
+                    path="/admin"
+                    element={
+                      <RequireAdmin>
+                        <AdminLayout />
+                      </RequireAdmin>
+                    }
+                  >
+                    <Route index element={<Navigate to="/admin/users" replace />} />
+                    <Route path="users" element={<AdminUsersPage />} />
+                    <Route path="jobs" element={<JobsPage />} />
+                    <Route path="system" element={<AdminSystemPage />} />
+                  </Route>
                 </Routes>
               </AppShell>
             </RequireAuth>
