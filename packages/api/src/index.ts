@@ -76,4 +76,9 @@ export type {
   JobType,
   JobView,
   JobListResponse,
+  TaskJobView,
+  TaskListResponse,
+  ScheduleKind,
+  ScheduleView,
+  ScheduleRequest,
 } from './types';

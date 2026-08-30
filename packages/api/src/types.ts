@@ -520,16 +520,21 @@ export interface AdminUserListResponse {
   users: AdminUserView[];
 }
 
-// ─── Background jobs (gap endpoint — mock only) ──────────────
+// ─── Tasks (doc 13 §4) ───────────────────────────────────────────
 
 export type JobStatus = 'queued' | 'running' | 'retry_wait' | 'succeeded' | 'failed' | 'cancelled';
 
+/** Domain names from the Task Definition Registry (doc 13 §4.3). */
 export type JobType =
-  | 'link_check'
-  | 'backup'
-  | 'maintenance'
-  | 'email'
-  | 'import';
+  | 'backup.create'
+  | 'organizer.link_check'
+  | 'journal.gc'
+  | 'receipt.gc'
+  | 'session.cleanup'
+  | 'artifact.cleanup'
+  | 'backup.retention'
+  | 'mail.send'
+  | 'import.run';
 
 export interface JobView {
   id: string;
@@ -550,4 +555,58 @@ export interface JobView {
 
 export interface JobListResponse {
   jobs: JobView[];
+}
+
+/** One user task entry in GET /tasks (doc 13 §4.1). */
+export interface TaskJobView {
+  id: string;
+  type: JobType;
+  status: JobStatus;
+  title_key?: string;
+  space_id?: string;
+  space_name?: string;
+  phase?: string;
+  progress?: { current?: number; total?: number };
+  attempt: number;
+  max_attempts: number;
+  schedule_id?: string;
+  scheduled_at: string;
+  started_at?: string;
+  finished_at?: string;
+  error?: string;
+}
+
+export interface TaskListResponse {
+  schedules: ScheduleView[];
+  jobs: TaskJobView[];
+}
+
+export type ScheduleKind = 'daily' | 'weekly' | 'monthly';
+
+export interface ScheduleView {
+  id: string;
+  type: JobType;
+  title_key: string;
+  space_id?: string;
+  space_name?: string;
+  enabled: boolean;
+  kind: ScheduleKind;
+  time_of_day: string;
+  weekday: number;
+  day_of_month: number;
+  timezone: string;
+  next_run_at: string;
+  last_run_at?: string;
+  created_at: string;
+}
+
+export interface ScheduleRequest {
+  type?: JobType;
+  kind?: ScheduleKind;
+  time_of_day?: string;
+  weekday?: number;
+  day_of_month?: number;
+  timezone?: string;
+  space_id?: string;
+  enabled?: boolean;
 }
