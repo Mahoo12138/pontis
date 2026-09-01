@@ -20,5 +20,9 @@ node_modules/
 web/dist/
 web/test-results/
 
+# extension build output / generated types
+extension/.output/
+extension/.wxt/
+
 # os
 .DS_Store
