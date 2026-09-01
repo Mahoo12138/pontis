@@ -7,9 +7,11 @@ import { createChromiumAdapter } from '../core/browser/chromium';
 import type { BrowserEvent } from '../core/browser/types';
 import { ApiClient } from '../core/transport/client';
 import { BootstrapStore } from '../core/store/bootstrap';
-import { PontisDB, logDiagnostic } from '../core/store/db';
+import { PontisDB, logDiagnostic, type ReconDecision } from '../core/store/db';
 import { EventProcessor } from '../core/sync/eventProcessor';
+import { InitialSyncEngine } from '../core/sync/initialSync';
 import { RemoteChangeApplier } from '../core/sync/remoteChangeApplier';
+import { ResyncService } from '../core/sync/resync';
 import { SyncCoordinator } from '../core/sync/syncCoordinator';
 import { chromeApi } from '../runtime/chromeApi';
 
@@ -24,6 +26,8 @@ export default defineBackground(() => {
   });
   const applier = new RemoteChangeApplier(db, adapter);
   const coordinator = new SyncCoordinator(db, applier, client);
+  const engine = new InitialSyncEngine(db, adapter, client, coordinator);
+  const resync = new ResyncService(db, client, bootstrap, coordinator, engine);
 
   // --- sync triggers (doc 05 §15) ---
 
@@ -39,6 +43,19 @@ export default defineBackground(() => {
   async function runSync(trigger: string): Promise<void> {
     try {
       await coordinator.syncAll();
+      // Recovery is idempotent (doc 06 §7): attempt it on every trigger
+      // for bindings stuck in needs_recovery.
+      const stuck = await db.bindings.where('state').equals('needs_recovery').toArray();
+      for (const b of stuck) {
+        try {
+          await resync.attemptRecovery(b.id);
+        } catch (err) {
+          await logDiagnostic(db, 'warn', 'background', 'recovery attempt failed', {
+            bindingId: b.id,
+            error: String(err),
+          });
+        }
+      }
     } catch (err) {
       await logDiagnostic(db, 'error', 'background', `sync (${trigger}) crashed`, { error: String(err) });
     }
@@ -58,6 +75,22 @@ export default defineBackground(() => {
       );
       return true; // async response
     }
+    if (isMessage(msg, 'pontis/initial-decision')) {
+      const { bindingId, decision } = msg as { bindingId: string; decision: ReconDecision };
+      void engine
+        .resume(bindingId, decision)
+        .then((session) => sendResponse({ ok: true, state: session.state, error: session.error }))
+        .catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
+    if (isMessage(msg, 'pontis/remount')) {
+      const { bindingId, folderBrowserId } = msg as { bindingId: string; folderBrowserId: string };
+      void engine
+        .remount(bindingId, folderBrowserId)
+        .then((session) => sendResponse({ ok: true, state: session.state, error: session.error }))
+        .catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
     return undefined;
   });
 
@@ -69,7 +102,9 @@ export default defineBackground(() => {
   const dispatch = (event: BrowserEvent): void => {
     eventChain = eventChain
       .then(async () => {
-        const bindings = await db.bindings.where('state').equals('active').toArray();
+        // 'initializing' keeps processing so reconciliation-time user
+        // intent is captured (doc 05 §13).
+        const bindings = await db.bindings.where('state').anyOf(['active', 'initializing']).toArray();
         let producedLocalOp = false;
         for (const b of bindings) {
           const disposition = await new EventProcessor(db, adapter).handleEvent(b.id, event);

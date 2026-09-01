@@ -7,7 +7,17 @@ import type { NodeType, OpStatus, OpType, ParentRefWire } from '../protocol/type
 
 export type BindingMode = 'full' | 'partial';
 
-export type BindingState = 'active' | 'paused' | 'mount_missing' | 'needs_recovery';
+export type BindingState =
+  | 'active'
+  | 'paused'
+  | 'mount_missing'
+  | 'needs_recovery'
+  /** Initial sync / mapping-lost reconciliation running (doc 06 §4). */
+  | 'initializing'
+  /** Full resync running (doc 06 §7). */
+  | 'resyncing'
+  /** Waiting for a reconciliation decision (doc 06 §5). */
+  | 'waiting_user';
 
 /** Client-local mapping between canonical roots and browser roots (doc 03). */
 export interface BindingMount {
@@ -76,6 +86,8 @@ export interface PendingOpRecord {
   beforeId?: string | null;
   /** Browser node the intent came from; used for in-place edits pre-ack. */
   browserId?: string;
+  /** Survive settle: an import queue entry still needs the result. */
+  keepResolved?: boolean;
   result?: {
     status: OpStatus;
     reason: string;
@@ -118,6 +130,69 @@ export interface RemoteChangeRecord {
   payload: unknown;
 }
 
+// --- reconciliation sessions (doc 06 §3) ---
+
+export type ReconType = 'INITIAL' | 'FULL_RESYNC' | 'MAPPING_LOST';
+
+export type ReconState = 'RUNNING' | 'WAITING_USER' | 'COMPLETED' | 'FAILED';
+
+export type ReconPhase =
+  | 'prepare'
+  | 'fetch'
+  | 'snapshot'
+  | 'analyze'
+  | 'wait_user'
+  | 'commit'
+  | 'apply'
+  | 'verify'
+  | 'done';
+
+/** One binding allows at most one active reconciliation (doc 06 §3). */
+export type ReconDecision = 'merge' | 'use_server' | 'use_browser' | 'import';
+
+export interface ReconProgress {
+  matched: number;
+  localOnly: number;
+  serverOnly: number;
+  ambiguous: number;
+  uploaded: number;
+  applied: number;
+}
+
+export interface ReconSessionRecord {
+  id: string;
+  bindingId: string;
+  type: ReconType;
+  state: ReconState;
+  phase: ReconPhase;
+  /** Decision for the both-non-empty case; persisted so MV3 can resume. */
+  decision?: ReconDecision;
+  journalFloor: number;
+  serverRevision: number;
+  progress: ReconProgress;
+  /** Import mode: pending create ops → their source browser nodes. */
+  importQueue?: Array<{ opId: string; sourceBrowserId: string }>;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Client emergency snapshot before a destructive resync (doc 06 §9). */
+export interface EmergencySnapshotRecord {
+  id?: number;
+  bindingId: string;
+  ts: number;
+  reason: string;
+  data: {
+    mirrors: LocalNodeRecord[];
+    pending: PendingOpRecord[];
+    epoch: number;
+    appliedRevision: number;
+    receivedRevision: number;
+    clientSeq: number;
+  };
+}
+
 export interface DiagnosticEvent {
   id?: number;
   ts: number;
@@ -129,12 +204,30 @@ export interface DiagnosticEvent {
 
 const DIAGNOSTIC_CAP = 500;
 
+/** The single active reconciliation session of a binding, if any. */
+export async function activeReconSession(
+  db: PontisDB,
+  bindingId: string,
+): Promise<ReconSessionRecord | undefined> {
+  const rows = await db.reconSessions
+    .where('[bindingId+state]')
+    .anyOf([[bindingId, 'RUNNING'], [bindingId, 'WAITING_USER']])
+    .toArray();
+  return rows[0];
+}
+
+export function emptyReconProgress(): ReconProgress {
+  return { matched: 0, localOnly: 0, serverOnly: 0, ambiguous: 0, uploaded: 0, applied: 0 };
+}
+
 export class PontisDB extends Dexie {
   bindings!: Table<BindingRecord, string>;
   localNodes!: Table<LocalNodeRecord, [string, string]>;
   pendingOps!: Table<PendingOpRecord, string>;
   expectedMutations!: Table<ExpectedMutationRecord, number>;
   remoteChanges!: Table<RemoteChangeRecord, string>;
+  reconSessions!: Table<ReconSessionRecord, string>;
+  emergencySnapshots!: Table<EmergencySnapshotRecord, number>;
   diagnostics!: Table<DiagnosticEvent, number>;
 
   constructor(name = 'pontis-replica') {
@@ -148,6 +241,10 @@ export class PontisDB extends Dexie {
       expectedMutations: '++id, bindingId, revision, [bindingId+kind]',
       remoteChanges: 'id, bindingId, [bindingId+revision]',
       diagnostics: '++id, ts',
+    });
+    this.version(2).stores({
+      reconSessions: 'id, bindingId, [bindingId+state]',
+      emergencySnapshots: '++id, bindingId, ts',
     });
   }
 }
@@ -172,9 +269,6 @@ export async function logDiagnostic(
   }
 }
 
-/**
- * All mirror records of the subtree rooted at browserId (inclusive),
- * derived from the mapping itself.
 /**
  * Mirror lookup by canonical id — the primary key is browser-side, so
  * canonical identity must go through the [bindingId+canonicalId] index.

@@ -5,7 +5,7 @@
 //   alone; pending cleanup follows settle_after_revision (doc 04 §7).
 
 import { ApiError, type SyncTransport } from '../transport/client';
-import { logDiagnostic, type PontisDB, type PendingOpRecord } from '../store/db';
+import { activeReconSession, logDiagnostic, type BindingRecord, type PontisDB, type PendingOpRecord } from '../store/db';
 import {
   MAX_CHANGES_PER_ROUND,
   SYNC_PROTOCOL_VERSION,
@@ -30,14 +30,14 @@ export class SyncCoordinator {
 
   async syncBinding(bindingId: string): Promise<SyncOutcome> {
     const binding = await this.db.bindings.get(bindingId);
-    if (!binding || binding.state !== 'active') return 'inactive';
+    if (!binding || !(await this.canRun(binding))) return 'inactive';
 
     // Finish apply work interrupted by a previous crash (doc 05 §10).
     await this.applier.recover(bindingId);
 
     for (let round = 0; round < MAX_ROUNDS_PER_SYNC; round++) {
       const b = await this.db.bindings.get(bindingId);
-      if (!b || b.state !== 'active') return 'inactive';
+      if (!b || !(await this.canRun(b))) return 'inactive';
 
       const req = await this.buildRequest(b.id);
       let resp: SyncResponseWire;
@@ -134,6 +134,18 @@ export class SyncCoordinator {
     }
   }
 
+  /**
+   * Incremental rounds run when the binding is active, or when an active
+   * reconciliation session is in its apply/verify phases (the engine
+   * drives the loop then; WAITING_USER and other phases pause us).
+   */
+  private async canRun(binding: BindingRecord): Promise<boolean> {
+    if (binding.state === 'active') return true;
+    if (binding.state !== 'initializing' && binding.state !== 'resyncing') return false;
+    const session = await activeReconSession(this.db, binding.id);
+    return session != null && (session.phase === 'apply' || session.phase === 'verify');
+  }
+
   private async buildRequest(bindingId: string): Promise<SyncRequestWire> {
     const b = (await this.db.bindings.get(bindingId))!;
     const queued = await this.db.pendingOps
@@ -172,7 +184,7 @@ export class SyncCoordinator {
       .toArray();
     for (const p of resolved) {
       const settle = p.result?.settleAfterRevision ?? 0;
-      if (settle <= b.appliedRevision) {
+      if (settle <= b.appliedRevision && !p.keepResolved) {
         await this.db.pendingOps.delete(p.opId);
       }
     }

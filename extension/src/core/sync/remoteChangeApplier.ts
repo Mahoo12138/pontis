@@ -187,6 +187,13 @@ export class RemoteChangeApplier {
       return;
     }
 
+    // Two-phase CREATE (doc 05 §8): a local create that produced this
+    // canonical node already has a browser node — adopt it instead of
+    // duplicating. The outbox op carries the browser id pre-ack; the op
+    // whose result revision matches this change is the exact producer.
+    const adopted = await this.tryAdoptLocalCreate(binding, change, payload);
+    if (adopted) return;
+
     // Rule 2 (doc 05 §16): expectation BEFORE the browser API. Create is
     // provisional — the browser id is unknown until the event arrives.
     const exp: ExpectedMutationRecord = {
@@ -222,6 +229,46 @@ export class RemoteChangeApplier {
       });
       await this.advanceApplied(b, change.revision);
     });
+  }
+
+  /**
+   * Adopt the browser node of a local create op when the server ack
+   *回流 arrives. Exact match first (result revision), then shape match
+   * as the crash-recovery fallback. Returns true when adopted.
+   */
+  private async tryAdoptLocalCreate(
+    binding: BindingRecord,
+    change: ChangeWire,
+    payload: { type: 'folder' | 'bookmark'; title: string; url: string; position: number },
+  ): Promise<boolean> {
+    const ops = await this.db.pendingOps
+      .where('bindingId')
+      .equals(binding.id)
+      .filter((o) => o.type === 'create' && o.nodeId === '' && o.browserId != null)
+      .toArray();
+    if (ops.length === 0) return false;
+    const op =
+      ops.find((o) => o.result?.resultRevision === change.revision) ??
+      ops.find((o) => o.title === payload.title && (o.url ?? '') === payload.url);
+    if (!op?.browserId) return false;
+    const local = await this.db.localNodes.get([binding.id, op.browserId]);
+    if (!local || local.canonicalId != null) return false;
+    await this.db.transaction('rw', [this.db.bindings, this.db.localNodes, this.db.pendingOps], async () => {
+      const b = await this.db.bindings.get(binding.id);
+      if (!b) return;
+      await this.db.localNodes.put({
+        ...local,
+        canonicalId: change.node_id,
+        position: payload.position,
+      });
+      await this.advanceApplied(b, change.revision);
+    });
+    await logDiagnostic(this.db, 'info', 'applier', 'local create adopted canonical id from ack', {
+      bindingId: binding.id,
+      browserId: op.browserId,
+      canonicalId: change.node_id,
+    });
+    return true;
   }
 
   // --- update title/url ---

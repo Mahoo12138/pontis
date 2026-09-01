@@ -87,6 +87,9 @@ function StateBadge({ state }: { state: BindingRecord['state'] }) {
     paused: { color: 'gray', label: '已暂停' },
     mount_missing: { color: 'orange', label: '目录缺失' },
     needs_recovery: { color: 'red', label: '需要恢复' },
+    initializing: { color: 'blue', label: '初始化中' },
+    resyncing: { color: 'blue', label: '重新同步中' },
+    waiting_user: { color: 'yellow', label: '等待确认' },
   };
   const s = map[state];
   return (

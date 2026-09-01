@@ -18,7 +18,11 @@ export class EventProcessor {
 
   async handleEvent(bindingId: string, event: BrowserEvent): Promise<EventDisposition> {
     const binding = await this.db.bindings.get(bindingId);
-    if (!binding || binding.state !== 'active') return 'ignored';
+    // Event capture never pauses (doc 05 §13): 'initializing' keeps
+    // processing so reconciliation-time user intent is not dropped.
+    if (!binding || (binding.state !== 'active' && binding.state !== 'initializing')) {
+      return 'ignored';
+    }
     switch (event.kind) {
       case 'created':
         return this.handleCreated(binding, event.node);

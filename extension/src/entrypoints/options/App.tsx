@@ -6,9 +6,12 @@ import {
   Alert,
   Badge,
   Button,
+  Card,
+  Code,
   Container,
   Group,
   PasswordInput,
+  Progress,
   Select,
   Stack,
   Table,
@@ -19,7 +22,13 @@ import {
 import { createChromiumAdapter } from '../../core/browser/chromium';
 import { ApiClient } from '../../core/transport/client';
 import { BootstrapStore } from '../../core/store/bootstrap';
-import { PontisDB, type BindingRecord, type DiagnosticEvent } from '../../core/store/db';
+import {
+  PontisDB,
+  type BindingRecord,
+  type DiagnosticEvent,
+  type ReconDecision,
+  type ReconSessionRecord,
+} from '../../core/store/db';
 import { PairingService } from '../../core/pairing/pairing';
 import { chromeApi } from '../../runtime/chromeApi';
 
@@ -53,10 +62,13 @@ export function App() {
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
 
   const [bindings, setBindings] = useState<BindingRecord[]>([]);
+  const [sessions, setSessions] = useState<ReconSessionRecord[]>([]);
+  const [remountFolders, setRemountFolders] = useState<Record<string, string>>({});
   const [diagnostics, setDiagnostics] = useState<DiagnosticEvent[]>([]);
 
   const refresh = useCallback(async () => {
     setBindings(await db.bindings.toArray());
+    setSessions(await db.reconSessions.toArray());
     setDiagnostics((await db.diagnostics.orderBy('id').reverse().limit(30).toArray()).reverse());
     const b = await bootstrap.get();
     setPaired(Boolean(b.serverUrl && b.deviceToken));
@@ -74,6 +86,9 @@ export function App() {
   useEffect(() => {
     void refresh();
     void loadFolders();
+    // Reconciliation progress and decisions update asynchronously.
+    const id = setInterval(() => void refresh(), 2000);
+    return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -137,6 +152,40 @@ export function App() {
   const doUnpair = async () => {
     await bootstrap.clearPairing();
     await refresh();
+  };
+
+  const decide = async (bindingId: string, decision: ReconDecision) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const resp = (await chrome.runtime.sendMessage({ type: 'pontis/initial-decision', bindingId, decision })) as
+        | { ok: boolean; error?: string }
+        | undefined;
+      if (resp && !resp.ok) setError(resp.error ?? '决策执行失败');
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(false);
+      await refresh();
+    }
+  };
+
+  const doRemount = async (bindingId: string) => {
+    const folder = remountFolders[bindingId];
+    if (!folder) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const resp = (await chrome.runtime.sendMessage({ type: 'pontis/remount', bindingId, folderBrowserId: folder })) as
+        | { ok: boolean; error?: string }
+        | undefined;
+      if (resp && !resp.ok) setError(resp.error ?? '重新挂载失败');
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(false);
+      await refresh();
+    }
   };
 
   return (
@@ -249,6 +298,106 @@ export function App() {
               </Table.Tbody>
             </Table>
           )}
+        </Stack>
+
+        <Stack gap="sm">
+          <Title order={4}>初始化与恢复</Title>
+          {(() => {
+            const active = bindings.filter((b) =>
+              ['initializing', 'resyncing', 'waiting_user', 'mount_missing'].includes(b.state),
+            );
+            if (active.length === 0) {
+              return (
+                <Text size="sm" c="dimmed">
+                  所有绑定状态正常。
+                </Text>
+              );
+            }
+            return active.map((b) => {
+              const session = sessions.find(
+                (s) => s.bindingId === b.id && (s.state === 'RUNNING' || s.state === 'WAITING_USER'),
+              );
+              return (
+                <Card key={b.id} withBorder padding="sm">
+                  <Stack gap="xs">
+                    <Group justify="space-between">
+                      <Text fw={600}>{b.spaceName}</Text>
+                      <Badge
+                        color={
+                          b.state === 'waiting_user'
+                            ? 'yellow'
+                            : b.state === 'mount_missing'
+                              ? 'orange'
+                              : 'blue'
+                        }
+                        variant="light"
+                      >
+                        {b.state}
+                      </Badge>
+                    </Group>
+
+                    {session && (
+                      <Text size="xs" c="dimmed">
+                        阶段: <Code>{session.phase}</Code>
+                        {session.error ? ` · ${session.error}` : ''}
+                      </Text>
+                    )}
+                    {session && (session.phase === 'apply' || session.phase === 'verify') && (
+                      <Progress value={session.progress.uploaded > 0 ? 60 : 30} animated />
+                    )}
+
+                    {session?.state === 'WAITING_USER' && (
+                      <Stack gap="xs">
+                        <Text size="sm">
+                          浏览器与服务器均有内容,请选择初始化策略:
+                        </Text>
+                        <Group gap="xs">
+                          <Text size="xs" c="dimmed">
+                            已匹配 {session.progress.matched} · 仅本地 {session.progress.localOnly} · 仅服务器{' '}
+                            {session.progress.serverOnly} · 歧义 {session.progress.ambiguous}
+                          </Text>
+                        </Group>
+                        <Group gap="xs">
+                          <Button size="xs" loading={busy} onClick={() => void decide(b.id, 'merge')}>
+                            合并(推荐)
+                          </Button>
+                          <Button size="xs" variant="light" loading={busy} onClick={() => void decide(b.id, 'use_server')}>
+                            以服务器为准
+                          </Button>
+                          <Button size="xs" variant="light" loading={busy} onClick={() => void decide(b.id, 'use_browser')}>
+                            以浏览器为准
+                          </Button>
+                          <Button size="xs" variant="subtle" loading={busy} onClick={() => void decide(b.id, 'import')}>
+                            导入到独立文件夹
+                          </Button>
+                        </Group>
+                      </Stack>
+                    )}
+
+                    {b.state === 'mount_missing' && (
+                      <Group grow>
+                        <Select
+                          placeholder="重新选择挂载目录"
+                          data={folders}
+                          searchable
+                          value={remountFolders[b.id] ?? null}
+                          onChange={(v) => setRemountFolders((prev) => ({ ...prev, [b.id]: v ?? '' }))}
+                        />
+                        <Button
+                          size="sm"
+                          loading={busy}
+                          disabled={!remountFolders[b.id]}
+                          onClick={() => void doRemount(b.id)}
+                        >
+                          重新挂载并重建映射
+                        </Button>
+                      </Group>
+                    )}
+                  </Stack>
+                </Card>
+              );
+            });
+          })()}
         </Stack>
 
         <Stack gap="sm">
