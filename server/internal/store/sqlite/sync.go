@@ -71,6 +71,27 @@ func (s *SyncStore) UpdateBindingSync(ctx context.Context, bindingID string, app
 	return s.devices.UpdateBindingSync(ctx, bindingID, appliedRevision, receivedRevision, maxClientSeq, lastSyncAt)
 }
 
+// LoadSnapshotNodes returns all canonical nodes of a space, ordered
+// deterministically for a client snapshot rebuild.
+func (s *SyncStore) LoadSnapshotNodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error) {
+	rows, err := s.db.QueryContext(ctx, nodeColumns+`
+		FROM nodes WHERE space_id = ? ORDER BY root_key, position, id`, string(space))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []canonical.Node
+	for rows.Next() {
+		n, err := scanNode(rows)
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, rows.Err()
+}
+
 // syncTxImpl implements sync.Tx by extending the canonical transaction.
 type syncTxImpl struct {
 	*canonTx

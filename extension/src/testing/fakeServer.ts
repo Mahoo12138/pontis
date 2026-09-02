@@ -3,17 +3,19 @@
 // client pipeline: APPLIED results, journal回流, paging), and exposes
 // helpers to seed a canonical history deterministically.
 
-import { ApiError, type SyncTransport } from '../core/transport/client';
+import { ApiError, type SyncTransport, type SnapshotTransport } from '../core/transport/client';
 import {
   type ChangeWire,
   type OperationWire,
   type ParentRefWire,
+  type SnapshotNodeWire,
+  type SnapshotWire,
   type SyncRequestWire,
   type SyncResponseWire,
 } from '../core/protocol/types';
-import { parentKey } from '../core/sync/canonicalTree';
+import { parentKey, replayChanges } from '../core/sync/canonicalTree';
 
-export class FakeServerTransport implements SyncTransport {
+export class FakeServerTransport implements SyncTransport, SnapshotTransport {
   epoch = 1;
   floor = 0;
   revision = 0;
@@ -65,6 +67,26 @@ export class FakeServerTransport implements SyncTransport {
       has_more,
       operation_results: results,
       changes: page,
+    };
+  }
+
+  /** Read-only snapshot of the current canonical tree (doc 06 §8). */
+  async fetchSnapshot(_bindingId: string): Promise<SnapshotWire> {
+    const tree = replayChanges(this.journal);
+    const nodes: SnapshotNodeWire[] = [...tree.nodes.values()].map((n) => ({
+      id: n.id,
+      type: n.type,
+      title: n.title,
+      url: n.url || undefined,
+      parent: n.parent,
+      position: n.position,
+    }));
+    return {
+      protocol_version: 1,
+      epoch: this.epoch,
+      snapshot_revision: this.revision,
+      journal_floor_revision: this.floor,
+      nodes,
     };
   }
 

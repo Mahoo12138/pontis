@@ -23,6 +23,10 @@ type Store interface {
 	// revision, starting at fromRevision (inclusive), at most limit rows.
 	LoadJournalChanges(ctx context.Context, space canonical.SpaceID, epoch, fromRevision int64, limit int) ([]JournalChange, error)
 
+	// LoadSnapshotNodes returns every canonical node of the space for a
+	// snapshot rebuild, ordered deterministically (root key, position, id).
+	LoadSnapshotNodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error)
+
 	// UpdateBindingSync persists the binding watermarks reported by the
 	// client after a completed round.
 	UpdateBindingSync(ctx context.Context, bindingID string, appliedRevision, receivedRevision, maxClientSeq int64, lastSyncAt time.Time) error

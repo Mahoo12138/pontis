@@ -23,6 +23,7 @@ import {
   findMirrorByCanonical,
   logDiagnostic,
   type BindingRecord,
+  type ExpectedMutationRecord,
   type LocalNodeRecord,
   type PontisDB,
   type PendingOpRecord,
@@ -36,9 +37,10 @@ import {
   type ChangeWire,
   type NodeType,
   type ParentRefWire,
+  type SnapshotWire,
   type SyncRequestWire,
 } from '../protocol/types';
-import { ApiError, type SyncTransport } from '../transport/client';
+import { ApiError, type SnapshotTransport, type SyncTransport } from '../transport/client';
 import { uuidv7 } from '../util/ids';
 import {
   countBrowserSubtree,
@@ -47,7 +49,14 @@ import {
   type BrowserSnapshotNode,
   type MatchResult,
 } from './exactMatcher';
-import { canonicalChildren, countSubtree, replayChanges, type CanonicalTree } from './canonicalTree';
+import {
+  canonicalChildren,
+  countSubtree,
+  replayChanges,
+  snapshotToTree,
+  type CanonicalTree,
+  type CanonicalTreeNode,
+} from './canonicalTree';
 import type { SyncCoordinator } from './syncCoordinator';
 
 const MAX_FETCH_ROUNDS = 200;
@@ -76,7 +85,7 @@ export class InitialSyncEngine {
   constructor(
     private db: PontisDB,
     private adapter: BrowserAdapter,
-    private transport: SyncTransport,
+    private transport: SyncTransport & Partial<SnapshotTransport>,
     private coordinator: SyncCoordinator,
   ) {}
 
@@ -106,21 +115,18 @@ export class InitialSyncEngine {
 
     try {
       // FETCH_SERVER: pull the whole journal into the inbox without apply.
+      // A pruned journal (floor above our watermarks) falls back to the
+      // server snapshot endpoint (doc 06 §8).
       const fetched = await this.fetchIntoInbox(bindingId, session);
-      if (fetched === 'wait-user-journal-expired') {
-        return session; // state already flipped by fetchIntoInbox
-      }
-
-      // SNAPSHOT_BROWSER
-      const fresh = await this.mustGetBinding(bindingId);
       session.phase = 'snapshot';
       await this.touch(session);
+      const fresh = await this.mustGetBinding(bindingId);
       const snap = await snapshotBrowserTree(this.adapter, this.mountRootId(fresh));
 
       // ANALYZE: journal replay + four-case classification (doc 06 §5).
       session.phase = 'analyze';
       await this.touch(session);
-      const tree = await this.replayInbox(bindingId);
+      const tree = fetched.status === 'ok' ? await this.replayInbox(bindingId) : fetched.tree;
       const rootParent: ParentRefWire = { type: 'root', key: fresh.mount.rootKey };
       const serverCount = countSubtree(tree, rootParent);
       const browserCount = countBrowserSubtree(snap);
@@ -176,10 +182,14 @@ export class InitialSyncEngine {
     await this.touch(session);
 
     // Rebuild the analysis inputs deterministically (the fetch/match work
-    // is idempotent, so re-running it after a worker kill is safe).
+    // is idempotent, so re-running it after a worker kill is safe). A
+    // snapshot-rebuilt session re-fetches the read-only snapshot instead
+    // of replaying an empty inbox.
     const binding = await this.mustGetBinding(bindingId);
     const snap = await snapshotBrowserTree(this.adapter, this.mountRootId(binding));
-    const tree = await this.replayInbox(bindingId);
+    const tree = session.snapshotApplied
+      ? snapshotToTree((await this.fetchSnapshotWire(bindingId)).nodes)
+      : await this.replayInbox(bindingId);
     const rootParent: ParentRefWire = { type: 'root', key: binding.mount.rootKey };
     const serverCount = countSubtree(tree, rootParent);
     const browserCount = countBrowserSubtree(snap);
@@ -236,7 +246,7 @@ export class InitialSyncEngine {
     // only — no rename/move/delete inference).
     session.phase = 'commit';
     await this.touch(session);
-    const uploaded = await this.commitDecision(bindingId, session, snap, match, decision);
+    const uploaded = await this.commitDecision(bindingId, session, tree, snap, match, decision);
     session.progress.uploaded = uploaded;
     await this.touch(session);
 
@@ -245,6 +255,12 @@ export class InitialSyncEngine {
     session.phase = 'apply';
     await this.touch(session);
     await this.db.bindings.update(bindingId, { state: 'active' });
+    // Snapshot rebuild (doc 06 §8): canonical nodes are not in the inbox,
+    // so the server side is ensured straight into the browser (parent
+    // first). use_browser deletes the server-only nodes instead.
+    if (session.snapshotApplied && decision !== 'use_browser') {
+      await this.applySnapshotNodes(bindingId, tree);
+    }
     await this.quiesceLoop(bindingId, session);
 
     // VERIFY is mandatory (doc 06 §14).
@@ -281,13 +297,14 @@ export class InitialSyncEngine {
   private async commitDecision(
     bindingId: string,
     session: ReconSessionRecord,
+    tree: CanonicalTree,
     snap: BrowserSnapshotNode,
     match: MatchResult | null,
     decision: ReconDecision,
   ): Promise<number> {
     // Matched pairs establish identity in every both-non-empty decision.
     if (match) {
-      await this.writeMatchedMappings(bindingId, session, match);
+      await this.writeMatchedMappings(bindingId, session, match, tree);
     }
 
     if (decision === 'use_server') {
@@ -340,8 +357,8 @@ export class InitialSyncEngine {
     bindingId: string,
     session: ReconSessionRecord,
     match: MatchResult,
+    tree: CanonicalTree,
   ): Promise<void> {
-    const tree = await this.replayInbox(bindingId);
     for (const pair of match.matched) {
       const c = tree.nodes.get(pair.canonicalId);
       if (!c) continue;
@@ -526,7 +543,12 @@ export class InitialSyncEngine {
     return this.verifyScan(bindingId);
   }
 
-  private async verifyScan(bindingId: string): Promise<VerifyReport> {
+  /**
+   * Read-only integrity scan (doc 05 §14): browser ↔ mirror drift
+   * classification without side effects; also the verify half of
+   * verifyAndRepair.
+   */
+  async verifyScan(bindingId: string): Promise<VerifyReport> {
     const binding = await this.mustGetBinding(bindingId);
     const snap = await snapshotBrowserTree(this.adapter, this.mountRootId(binding));
     const mirrors = await this.db.localNodes.where('bindingId').equals(bindingId).toArray();
@@ -614,18 +636,20 @@ export class InitialSyncEngine {
   // --- fetch + replay ---
 
   /**
-   * Pull the full journal into the inbox without applying. Returns
-   * 'wait-user-journal-expired' when the journal floor makes a full
-   * replay impossible (server snapshot endpoint is future work).
+   * Pull the full journal into the inbox without applying. When the
+   * journal floor is above our watermarks the incremental stream is
+   * unreconstructable; the server snapshot endpoint (doc 06 §8) takes
+   * over: fetch the canonical tree, anchor the watermarks at
+   * snapshot_revision and hand the rebuilt tree to the caller.
    */
   private async fetchIntoInbox(
     bindingId: string,
     session: ReconSessionRecord,
-  ): Promise<'ok' | 'wait-user-journal-expired'> {
+  ): Promise<{ status: 'ok' } | { status: 'snapshot'; tree: CanonicalTree }> {
     let floor = 0;
     for (let round = 0; round < MAX_FETCH_ROUNDS; round++) {
       const b = await this.mustGetBinding(bindingId);
-      if (b.state !== 'initializing') return 'ok';
+      if (b.state !== 'initializing') return { status: 'ok' };
       const req: SyncRequestWire = {
         protocol_version: SYNC_PROTOCOL_VERSION,
         epoch: b.epoch,
@@ -639,16 +663,11 @@ export class InitialSyncEngine {
         resp = await this.transport.sync(bindingId, req);
       } catch (err) {
         // The server rejects a request whose received_revision is below
-        // the journal floor before we ever see the floor field — surface
-        // the same wait-user outcome as the in-band check below.
+        // the journal floor before we ever see the floor field — fall
+        // back to the snapshot just like the in-band check below.
         if (err instanceof ApiError && err.code === 'HISTORY_EXPIRED' && b.appliedRevision === 0 && b.receivedRevision === 0) {
-          session.state = 'WAITING_USER';
-          session.phase = 'wait_user';
-          session.error = 'journal history expired; server snapshot endpoint required (future work)';
-          await this.touch(session);
-          await this.db.bindings.update(bindingId, { state: 'waiting_user' });
-          await logDiagnostic(this.db, 'warn', 'initial-sync', 'journal floor blocks full replay', { bindingId });
-          return 'wait-user-journal-expired';
+          const tree = await this.recoverViaSnapshot(bindingId, session);
+          return { status: 'snapshot', tree };
         }
         if (err instanceof ApiError && err.isProtocolError) {
           await this.db.bindings.update(bindingId, {
@@ -660,17 +679,8 @@ export class InitialSyncEngine {
       }
       if (resp.journal_floor_revision > 0 && b.appliedRevision === 0 && b.receivedRevision === 0) {
         // Pruned history: the tree cannot be rebuilt from the journal.
-        session.state = 'WAITING_USER';
-        session.phase = 'wait_user';
-        session.journalFloor = resp.journal_floor_revision;
-        session.error = 'journal history expired; server snapshot endpoint required (future work)';
-        await this.touch(session);
-        await this.db.bindings.update(bindingId, { state: 'waiting_user' });
-        await logDiagnostic(this.db, 'warn', 'initial-sync', 'journal floor blocks full replay', {
-          bindingId,
-          floor: resp.journal_floor_revision,
-        });
-        return 'wait-user-journal-expired';
+        const tree = await this.recoverViaSnapshot(bindingId, session);
+        return { status: 'snapshot', tree };
       }
       // Rule 3 (doc 05 §16): inbox persisted, then received_revision.
       await this.db.transaction('rw', [this.db.bindings, this.db.remoteChanges], async () => {
@@ -700,7 +710,7 @@ export class InitialSyncEngine {
       session.serverRevision = resp.server_revision;
       session.progress.applied = resp.through_revision;
       await this.touch(session);
-      if (!resp.has_more) return 'ok';
+      if (!resp.has_more) return { status: 'ok' };
     }
     throw new Error('initialSync: fetch did not converge within round budget');
   }
@@ -714,6 +724,115 @@ export class InitialSyncEngine {
       payload: r.payload as ChangeWire['payload'],
     }));
     return replayChanges(changes);
+  }
+
+  // --- snapshot recovery (doc 06 §8) ---
+
+  /** Fetch the read-only snapshot; the transport must support it. */
+  private async fetchSnapshotWire(bindingId: string): Promise<SnapshotWire> {
+    if (!this.transport.fetchSnapshot) {
+      throw new Error('initialSync: transport cannot serve snapshots');
+    }
+    return this.transport.fetchSnapshot(bindingId);
+  }
+
+  /**
+   * Pruned-journal recovery: fetch the canonical snapshot, anchor the
+   * watermarks at (epoch, snapshot_revision) and rebuild the in-memory
+   * tree from the snapshot nodes. Browser-side ensure happens later, in
+   * applySnapshotNodes, after the four-case decision.
+   */
+  private async recoverViaSnapshot(bindingId: string, session: ReconSessionRecord): Promise<CanonicalTree> {
+    const snap = await this.fetchSnapshotWire(bindingId);
+    await this.db.transaction('rw', [this.db.bindings], async () => {
+      const b = await this.db.bindings.get(bindingId);
+      if (!b) return;
+      if (b.epoch !== snap.epoch) {
+        b.state = 'needs_recovery';
+        b.recovery = { code: 'EPOCH_MISMATCH', message: 'epoch changed before snapshot apply' };
+        await this.db.bindings.put(b);
+        return;
+      }
+      b.appliedRevision = snap.snapshot_revision;
+      b.receivedRevision = snap.snapshot_revision;
+      await this.db.bindings.put(b);
+    });
+    const b = await this.mustGetBinding(bindingId);
+    if (b.epoch !== snap.epoch) {
+      throw new Error('initialSync: epoch changed during snapshot fetch');
+    }
+    session.journalFloor = snap.journal_floor_revision;
+    session.serverRevision = snap.snapshot_revision;
+    session.snapshotApplied = true;
+    session.progress.applied = snap.snapshot_revision;
+    await this.touch(session);
+    await logDiagnostic(this.db, 'info', 'initial-sync', 'canonical snapshot fetched, rebuilding replica state', {
+      bindingId,
+      snapshotRevision: snap.snapshot_revision,
+      floor: snap.journal_floor_revision,
+      nodes: snap.nodes.length,
+    });
+    return snapshotToTree(snap.nodes);
+  }
+
+  /**
+   * Snapshot rebuild: create the canonical tree in the browser level by
+   * level (parent first) and record mirrors. Nodes that already have a
+   * mirror (crash-resume) are skipped; creation follows the applier's
+   * expected-mutation pattern so event capture never mistakes these
+   * ensures for local intent (doc 05 §8).
+   */
+  private async applySnapshotNodes(bindingId: string, tree: CanonicalTree): Promise<void> {
+    const binding = await this.mustGetBinding(bindingId);
+    const mountRootId = this.mountRootId(binding);
+    const rootParent: ParentRefWire = { type: 'root', key: binding.mount.rootKey };
+    const queue: Array<{ node: CanonicalTreeNode; parentBrowserId: string }> = [];
+    for (const node of canonicalChildren(tree, rootParent)) {
+      queue.push({ node, parentBrowserId: mountRootId });
+    }
+    while (queue.length > 0) {
+      const { node, parentBrowserId } = queue.shift()!;
+      const existing = await findMirrorByCanonical(this.db, bindingId, node.id);
+      let browserId: string;
+      if (existing) {
+        browserId = existing.browserId;
+      } else {
+        const exp: ExpectedMutationRecord = {
+          bindingId,
+          revision: node.revision,
+          kind: 'create',
+          canonicalId: node.id,
+          browserId: null,
+          parentBrowserId,
+          position: node.position,
+          title: node.title,
+          url: node.type === 'bookmark' ? node.url : '',
+          createdAt: Date.now(),
+        };
+        await this.db.expectedMutations.add(exp);
+        const created = await this.adapter.create(parentBrowserId, {
+          title: node.title,
+          url: node.type === 'bookmark' ? node.url || undefined : undefined,
+        });
+        await this.db.transaction('rw', [this.db.localNodes, this.db.expectedMutations], async () => {
+          await this.db.expectedMutations.delete(exp.id!);
+          await this.db.localNodes.put({
+            bindingId,
+            browserId: created.id,
+            canonicalId: node.id,
+            type: created.type,
+            title: created.title,
+            url: created.url,
+            parentBrowserId: created.parentId,
+            position: node.position,
+          });
+        });
+        browserId = created.id;
+      }
+      for (const child of canonicalChildren(tree, { type: 'node', id: node.id })) {
+        queue.push({ node: child, parentBrowserId: browserId });
+      }
+    }
   }
 
   // --- outbox helpers ---

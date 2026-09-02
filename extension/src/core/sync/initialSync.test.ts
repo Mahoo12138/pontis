@@ -305,9 +305,10 @@ describe('full resync (doc 06 §7)', () => {
     expect(binding?.state).toBe('active');
     expect(binding?.epoch).toBe(2);
     expect(binding?.appliedRevision).toBe(2);
-    // Mapping survived; ensure-state replay created no duplicates.
+    // Mapping survived; ensure-state replay created no duplicates. The
+    // emergency snapshot is cleaned up once the resync succeeds (doc 06 §9).
     expect(await adapter.getChildren('f1')).toHaveLength(2);
-    expect(await db.emergencySnapshots.count()).toBe(1);
+    expect(await db.emergencySnapshots.count()).toBe(0);
   });
 
   it('protects unsynced intent instead of resyncing (doc 06 §10/§11)', async () => {
@@ -384,15 +385,59 @@ describe('mount_missing recovery', () => {
   });
 });
 
-describe('journal floor', () => {
-  it('waits for the user when pruned history blocks a full replay', async () => {
+describe('journal floor → server snapshot (doc 06 §8)', () => {
+  it('rebuilds from the canonical snapshot when pruned history blocks replay', async () => {
     await seedBinding();
     server.floor = 1;
-    seedServerNode('n1', 'Docs', ''); // revision 2, revision 1 pruned
+    seedServerNode('n1', 'Docs', ''); // journal revision 1 (floor blocks fetching it incrementally)
+
+    const session = await engine.start(bindingId);
+    expect(session.state).toBe('COMPLETED');
+    expect(session.snapshotApplied).toBe(true);
+    expect(session.journalFloor).toBe(1);
+    // Watermarks anchored at the snapshot revision.
+    const binding = await db.bindings.get(bindingId);
+    expect(binding?.appliedRevision).toBe(1);
+    expect(binding?.receivedRevision).toBe(1);
+    expect(binding?.state).toBe('active');
+    // The snapshot node was ensured into the browser and mapped.
+    expect(await adapter.getChildren('f1')).toHaveLength(1);
+    expect((await db.localNodes.toArray()).some((m) => m.canonicalId === 'n1')).toBe(true);
+  });
+
+  it('keeps the snapshot and applies later increments above snapshot_revision', async () => {
+    await seedBinding();
+    server.floor = 1;
+    seedServerNode('n1', 'Docs', ''); // journal revision 1
+
+    const session = await engine.start(bindingId);
+    expect(session.state).toBe('COMPLETED');
+
+    // A change created after the snapshot flows in via normal /sync.
+    seedServerNode('n3', 'New', 'https://new.example.com'); // revision 2
+    await coordinator.syncBinding(bindingId);
+    const kids = await adapter.getChildren('f1');
+    expect(kids).toHaveLength(2);
+    expect((await db.bindings.get(bindingId))?.appliedRevision).toBe(2);
+  });
+
+  it('matches a non-empty browser against the snapshot and merges', async () => {
+    await seedBinding();
+    server.floor = 1;
+    seedServerNode('n1', 'Whatever', 'https://same.example.com');
+    adapter.seed({ id: 'b1', parentId: 'f1', title: 'Same', url: 'https://same.example.com' });
 
     const session = await engine.start(bindingId);
     expect(session.state).toBe('WAITING_USER');
-    expect(session.error).toContain('journal history expired');
-    expect((await db.bindings.get(bindingId))?.state).toBe('waiting_user');
+    expect(session.snapshotApplied).toBe(true);
+    expect(session.progress).toMatchObject({ matched: 1, serverOnly: 0, localOnly: 0 });
+
+    const done = await engine.resume(bindingId, 'merge');
+    expect(done.state).toBe('COMPLETED');
+    // No duplicates: the matched pair kept one browser node.
+    expect(await adapter.getChildren('f1')).toHaveLength(1);
+    expect((await db.localNodes.toArray()).some((m) => m.browserId === 'b1' && m.canonicalId === 'n1')).toBe(true);
+    // The matched node was never re-uploaded.
+    expect(server.journal).toHaveLength(1);
   });
 });

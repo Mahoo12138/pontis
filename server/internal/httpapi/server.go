@@ -187,7 +187,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/v1/device/spaces", s.handleDeviceSpaces)
 		r.Get("/api/v1/device/bindings", s.handleListBindings)
 		r.Post("/api/v1/device/bindings", s.handleCreateBinding)
-		r.Post("/api/v1/sync/bindings/{bindingID}", s.handleSync)
+		r.Post("/api/v1/sync/bindings/{bindingID}", s.handleSync)       
+		r.Get("/api/v1/sync/bindings/{bindingID}/snapshot", s.handleSnapshot)
 	})
 
 	return r

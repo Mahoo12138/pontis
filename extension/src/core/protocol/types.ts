@@ -104,6 +104,26 @@ export interface SyncResponseWire {
   changes: ChangeWire[];
 }
 
+// --- snapshot (doc 06 §8) ---
+
+export interface SnapshotNodeWire {
+  id: string;
+  type: string;
+  title: string;
+  url?: string;
+  parent: ParentRefWire;
+  position: number;
+}
+
+/** Read-only canonical snapshot bound to (epoch, snapshot_revision). */
+export interface SnapshotWire {
+  protocol_version: number;
+  epoch: number;
+  snapshot_revision: number;
+  journal_floor_revision: number;
+  nodes: SnapshotNodeWire[];
+}
+
 // --- binding/protocol level error codes (doc 04 §14) ---
 
 export const SYNC_PROTOCOL_ERROR_CODES = [

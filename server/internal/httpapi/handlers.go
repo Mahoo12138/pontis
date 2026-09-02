@@ -377,6 +377,66 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// --- handlers: /sync snapshot (doc 06 §8) ---
+
+type snapshotNodeDTO struct {
+	ID       string    `json:"id"`
+	Type     string    `json:"type"`
+	Title    string    `json:"title"`
+	URL      string    `json:"url,omitempty"`
+	Parent   parentDTO `json:"parent"`
+	Position int64     `json:"position"`
+}
+
+type snapshotResponseDTO struct {
+	ProtocolVersion      int               `json:"protocol_version"`
+	Epoch                int64             `json:"epoch"`
+	SnapshotRevision     int64             `json:"snapshot_revision"`
+	JournalFloorRevision int64             `json:"journal_floor_revision"`
+	Nodes                []snapshotNodeDTO `json:"nodes"`
+}
+
+func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
+	dev, _ := currentDevice(r)
+	bindingID := chi.URLParam(r, "bindingID")
+
+	binding, err := s.Devices.GetBindingByID(r.Context(), bindingID)
+	if err != nil {
+		s.writeError(w, r, http.StatusNotFound, "BINDING_NOT_FOUND", "unknown binding")
+		return
+	}
+	if binding.DeviceID != dev.ID {
+		// Resource ids are never authorization capabilities (doc 22 D.6).
+		s.writeError(w, r, http.StatusForbidden, "NOT_BINDING_OWNER", "binding belongs to another device")
+		return
+	}
+
+	resp, err := s.Sync.Snapshot(r.Context(), canonical.DeviceID(dev.ID), binding.SpaceID)
+	if err != nil {
+		s.writeSyncError(w, r, err)
+		return
+	}
+
+	out := snapshotResponseDTO{
+		ProtocolVersion:      resp.ProtocolVersion,
+		Epoch:                resp.Epoch,
+		SnapshotRevision:     resp.SnapshotRevision,
+		JournalFloorRevision: resp.JournalFloorRevision,
+		Nodes:                make([]snapshotNodeDTO, 0, len(resp.Nodes)),
+	}
+	for _, n := range resp.Nodes {
+		out.Nodes = append(out.Nodes, snapshotNodeDTO{
+			ID:       string(n.ID),
+			Type:     string(n.Type),
+			Title:    n.Title,
+			URL:      n.URL,
+			Parent:   parentDTO{Type: string(n.Parent.Type), ID: string(n.Parent.NodeID), Key: n.Parent.RootKey},
+			Position: n.Position,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // writeSyncError maps protocol failures to the unified error envelope.
 func (s *Server) writeSyncError(w http.ResponseWriter, r *http.Request, err error) {
 	var perr *sync.ProtocolError

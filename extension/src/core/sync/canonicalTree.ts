@@ -130,3 +130,22 @@ export function countSubtree(tree: CanonicalTree, parent: ParentRefWire): number
   }
   return count;
 }
+
+/** Build a canonical tree from server snapshot nodes (doc 06 §8). */
+export function snapshotToTree(
+  nodes: Array<{ id: string; type: string; title: string; url?: string; parent: ParentRefWire; position: number }>,
+): CanonicalTree {
+  const changes: ChangeWire[] = nodes.map((n, i) => ({
+    revision: i + 1,
+    type: 'create' as const,
+    node_id: n.id,
+    payload: {
+      type: n.type as NodeType,
+      title: n.title,
+      url: n.url ?? '',
+      parent: n.parent,
+      position: n.position,
+    },
+  }));
+  return replayChanges(changes);
+}

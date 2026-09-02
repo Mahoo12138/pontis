@@ -9,9 +9,10 @@ import { ApiClient } from '../core/transport/client';
 import { BootstrapStore } from '../core/store/bootstrap';
 import { PontisDB, logDiagnostic, type ReconDecision } from '../core/store/db';
 import { EventProcessor } from '../core/sync/eventProcessor';
+import { integrityCheck } from '../core/sync/integrity';
 import { InitialSyncEngine } from '../core/sync/initialSync';
 import { RemoteChangeApplier } from '../core/sync/remoteChangeApplier';
-import { ResyncService } from '../core/sync/resync';
+import { ResyncService, type IntentDecision } from '../core/sync/resync';
 import { SyncCoordinator } from '../core/sync/syncCoordinator';
 import { chromeApi } from '../runtime/chromeApi';
 
@@ -61,11 +62,32 @@ export default defineBackground(() => {
     }
   }
 
+  // --- periodic integrity (doc 05 §14) ---
+
+  async function runIntegrity(trigger: string): Promise<void> {
+    const actives = await db.bindings.where('state').equals('active').toArray();
+    for (const b of actives) {
+      try {
+        await integrityCheck(db, engine, b.id);
+      } catch (err) {
+        await logDiagnostic(db, 'warn', 'background', `integrity check (${trigger}) failed`, {
+          bindingId: b.id,
+          error: String(err),
+        });
+      }
+    }
+  }
+
   chrome.alarms.create('pontis-sync', { periodInMinutes: 5 });
+  chrome.alarms.create('pontis-integrity', { periodInMinutes: 24 * 60 });
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === 'pontis-sync') void runSync('alarm');
+    if (alarm.name === 'pontis-integrity') void runIntegrity('daily');
   });
-  chrome.runtime.onStartup.addListener(() => void runSync('startup'));
+  chrome.runtime.onStartup.addListener(() => {
+    void runSync('startup');
+    void runIntegrity('startup');
+  });
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (isMessage(msg, 'pontis/manual-sync')) {
@@ -80,6 +102,21 @@ export default defineBackground(() => {
       void engine
         .resume(bindingId, decision)
         .then((session) => sendResponse({ ok: true, state: session.state, error: session.error }))
+        .catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
+    if (isMessage(msg, 'pontis/resolve-intents')) {
+      const { bindingId, decisions } = msg as { bindingId: string; decisions: IntentDecision[] };
+      void resync
+        .resolveIntents(bindingId, decisions)
+        .then((outcome) => sendResponse({ ok: true, outcome }))
+        .catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
+    if (isMessage(msg, 'pontis/integrity-check')) {
+      const { bindingId } = msg as { bindingId: string };
+      void integrityCheck(db, engine, bindingId)
+        .then((result) => sendResponse({ ok: true, result }))
         .catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }

@@ -26,9 +26,11 @@ import {
   PontisDB,
   type BindingRecord,
   type DiagnosticEvent,
+  type PendingOpRecord,
   type ReconDecision,
   type ReconSessionRecord,
 } from '../../core/store/db';
+import type { IntentDecision } from '../../core/sync/resync';
 import { PairingService } from '../../core/pairing/pairing';
 import { chromeApi } from '../../runtime/chromeApi';
 
@@ -65,10 +67,13 @@ export function App() {
   const [sessions, setSessions] = useState<ReconSessionRecord[]>([]);
   const [remountFolders, setRemountFolders] = useState<Record<string, string>>({});
   const [diagnostics, setDiagnostics] = useState<DiagnosticEvent[]>([]);
+  const [intents, setIntents] = useState<PendingOpRecord[]>([]);
+  const [intentChoices, setIntentChoices] = useState<Record<string, IntentDecision['decision']>>({});
 
   const refresh = useCallback(async () => {
     setBindings(await db.bindings.toArray());
     setSessions(await db.reconSessions.toArray());
+    setIntents((await db.pendingOps.filter((o) => o.status === 'QUEUED').toArray()));
     setDiagnostics((await db.diagnostics.orderBy('id').reverse().limit(30).toArray()).reverse());
     const b = await bootstrap.get();
     setPaired(Boolean(b.serverUrl && b.deviceToken));
@@ -166,6 +171,48 @@ export function App() {
       setError(errText(err));
     } finally {
       setBusy(false);
+      await refresh();
+    }
+  };
+
+  /** Doc 06 §11 default policy: destructive delete defaults to discard. */
+  const defaultIntentDecision = (op: PendingOpRecord): IntentDecision['decision'] =>
+    op.type === 'delete' ? 'discard' : 'apply';
+
+  const setIntentChoice = (opId: string, decision: IntentDecision['decision']) =>
+    setIntentChoices((prev) => ({ ...prev, [opId]: decision }));
+
+  const resolveIntents = async (bindingId: string) => {
+    const list = intents.filter((o) => o.bindingId === bindingId);
+    const decisions: IntentDecision[] = list.map((o) => ({
+      opId: o.opId,
+      decision: intentChoices[o.opId] ?? defaultIntentDecision(o),
+    }));
+    setBusy(true);
+    setError(null);
+    try {
+      const resp = (await chrome.runtime.sendMessage({ type: 'pontis/resolve-intents', bindingId, decisions })) as
+        | { ok: boolean; error?: string }
+        | undefined;
+      if (resp && !resp.ok) setError(resp.error ?? '决策执行失败');
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(false);
+      await refresh();
+    }
+  };
+
+  const doIntegrityCheck = async (bindingId: string) => {
+    setError(null);
+    try {
+      const resp = (await chrome.runtime.sendMessage({ type: 'pontis/integrity-check', bindingId })) as
+        | { ok: boolean; result?: string; error?: string }
+        | undefined;
+      if (resp && !resp.ok) setError(resp.error ?? '完整性检查失败');
+    } catch (err) {
+      setError(errText(err));
+    } finally {
       await refresh();
     }
   };
@@ -289,9 +336,19 @@ export function App() {
                     </Table.Td>
                     <Table.Td>{b.lastSyncAt ? new Date(b.lastSyncAt).toLocaleString() : '—'}</Table.Td>
                     <Table.Td>
-                      <Button size="compact-xs" variant="subtle" color="red" onClick={() => void doUnbind(b.id)}>
-                        解绑
-                      </Button>
+                      <Group gap={4} wrap="nowrap">
+                        <Button
+                          size="compact-xs"
+                          variant="subtle"
+                          disabled={b.state !== 'active'}
+                          onClick={() => void doIntegrityCheck(b.id)}
+                        >
+                          完整性检查
+                        </Button>
+                        <Button size="compact-xs" variant="subtle" color="red" onClick={() => void doUnbind(b.id)}>
+                          解绑
+                        </Button>
+                      </Group>
                     </Table.Td>
                   </Table.Tr>
                 ))}
@@ -346,7 +403,100 @@ export function App() {
                       <Progress value={session.progress.uploaded > 0 ? 60 : 30} animated />
                     )}
 
-                    {session?.state === 'WAITING_USER' && (
+                    {session?.state === 'WAITING_USER' && session.type === 'FULL_RESYNC' &&
+                      (() => {
+                        const bindingIntents = intents.filter((o) => o.bindingId === b.id);
+                        const chosen = (op: PendingOpRecord) =>
+                          intentChoices[op.opId] ?? defaultIntentDecision(op);
+                        return (
+                          <Stack gap="xs">
+                            <Text size="sm">
+                              以下未同步的操作跨过了服务端重置,请逐条决定是否保留(旧操作将按当前服务器状态重新生成):
+                            </Text>
+                            {bindingIntents.length === 0 ? (
+                              <Text size="xs" c="dimmed">无待审操作,可直接重新同步。</Text>
+                            ) : (
+                              <Stack gap={4}>
+                                {bindingIntents.map((op) => (
+                                  <Group key={op.opId} justify="space-between" wrap="nowrap">
+                                    <Group gap="xs" wrap="nowrap">
+                                      <Badge
+                                        size="sm"
+                                        variant="light"
+                                        color={op.type === 'delete' ? 'red' : 'blue'}
+                                      >
+                                        {op.type}
+                                      </Badge>
+                                      <Text size="sm" truncate maw={340}>
+                                        {op.title || '(无标题)'}
+                                        {op.url ? ` · ${op.url}` : ''}
+                                      </Text>
+                                    </Group>
+                                    <Button.Group>
+                                      <Button
+                                        size="compact-xs"
+                                        variant={chosen(op) === 'apply' ? 'filled' : 'light'}
+                                        onClick={() => setIntentChoice(op.opId, 'apply')}
+                                      >
+                                        保留
+                                      </Button>
+                                      <Button
+                                        size="compact-xs"
+                                        color="gray"
+                                        variant={chosen(op) === 'discard' ? 'filled' : 'light'}
+                                        onClick={() => setIntentChoice(op.opId, 'discard')}
+                                      >
+                                        放弃
+                                      </Button>
+                                    </Button.Group>
+                                  </Group>
+                                ))}
+                              </Stack>
+                            )}
+                            <Group gap="xs">
+                              <Button
+                                size="xs"
+                                loading={busy}
+                                disabled={bindingIntents.length === 0}
+                                onClick={() =>
+                                  setIntentChoices((prev) => {
+                                    const next = { ...prev };
+                                    for (const op of bindingIntents) next[op.opId] = defaultIntentDecision(op);
+                                    return next;
+                                  })
+                                }
+                              >
+                                全部按建议
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="light"
+                                loading={busy}
+                                disabled={bindingIntents.length === 0}
+                                onClick={() =>
+                                  setIntentChoices((prev) => {
+                                    const next = { ...prev };
+                                    for (const op of bindingIntents) next[op.opId] = 'discard';
+                                    return next;
+                                  })
+                                }
+                              >
+                                全部放弃
+                              </Button>
+                              <Button
+                                size="xs"
+                                color="green"
+                                loading={busy}
+                                onClick={() => void resolveIntents(b.id)}
+                              >
+                                提交决策
+                              </Button>
+                            </Group>
+                          </Stack>
+                        );
+                      })()}
+
+                    {session?.state === 'WAITING_USER' && session.type !== 'FULL_RESYNC' && (
                       <Stack gap="xs">
                         <Text size="sm">
                           浏览器与服务器均有内容,请选择初始化策略:

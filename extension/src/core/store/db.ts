@@ -172,6 +172,10 @@ export interface ReconSessionRecord {
   progress: ReconProgress;
   /** Import mode: pending create ops → their source browser nodes. */
   importQueue?: Array<{ opId: string; sourceBrowserId: string }>;
+  /** Canonical tree came from a server snapshot, not journal replay. */
+  snapshotApplied?: boolean;
+  /** Recovery intents already reviewed; resync may replay the re-created ops. */
+  intentReviewed?: boolean;
   error?: string;
   createdAt: number;
   updatedAt: number;

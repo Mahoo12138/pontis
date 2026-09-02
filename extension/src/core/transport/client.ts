@@ -7,6 +7,7 @@ import {
   type BindingWire,
   type DeviceWire,
   type MetaWire,
+  type SnapshotWire,
   type SpaceWire,
   type SyncRequestWire,
   type SyncResponseWire,
@@ -43,7 +44,12 @@ export interface SyncTransport {
   sync(bindingId: string, req: SyncRequestWire): Promise<SyncResponseWire>;
 }
 
-export class ApiClient implements SyncTransport {
+/** Canonical snapshot read (doc 06 §8); optional transport extension. */
+export interface SnapshotTransport {
+  fetchSnapshot(bindingId: string): Promise<SnapshotWire>;
+}
+
+export class ApiClient implements SyncTransport, SnapshotTransport {
   constructor(private resolveConfig: () => Promise<ClientConfig>) {}
 
   private async request<T>(
@@ -99,5 +105,9 @@ export class ApiClient implements SyncTransport {
       method: 'POST',
       body: req,
     });
+  }
+
+  fetchSnapshot(bindingId: string): Promise<SnapshotWire> {
+    return this.request<SnapshotWire>(`/api/v1/sync/bindings/${bindingId}/snapshot`);
   }
 }
