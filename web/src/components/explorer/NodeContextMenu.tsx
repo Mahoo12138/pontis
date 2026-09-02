@@ -7,6 +7,7 @@ import {
   IconTrash,
   IconBookmark,
   IconFolderPlus,
+  IconTransferOut,
 } from '@tabler/icons-react';
 import type { Node } from '@pontis/api';
 import { openUrlSafely } from '../../lib/safe-url';
@@ -25,6 +26,7 @@ interface NodeContextMenuProps {
   onRename: (node: Node) => void;
   onCreateInside: (node: Node, mode: 'bookmark' | 'folder') => void;
   onDelete: (node: Node) => void;
+  onTransfer: (node: Node) => void;
 }
 
 const MENU_W = 176;
@@ -39,6 +41,7 @@ export default function NodeContextMenu({
   onRename,
   onCreateInside,
   onDelete,
+  onTransfer,
 }: NodeContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -70,12 +73,14 @@ export default function NodeContextMenu({
         { icon: <IconBookmark size={14} />, label: '新建书签', run: () => onCreateInside(node, 'bookmark') },
         { icon: <IconFolderPlus size={14} />, label: '新建文件夹', run: () => onCreateInside(node, 'folder') },
         { icon: <IconEdit size={14} />, label: '重命名', run: () => onRename(node) },
+        { icon: <IconTransferOut size={14} />, label: '转移到空间…', run: () => onTransfer(node) },
         { icon: <IconTrash size={14} />, label: '删除', danger: true, run: () => onDelete(node) },
       ]
     : [
         { icon: <IconExternalLink size={14} />, label: '打开链接', run: () => openUrlSafely(node.url ?? '') },
         { icon: <IconCopy size={14} />, label: '复制链接', run: () => onCopyUrl(node) },
         { icon: <IconEdit size={14} />, label: '重命名', run: () => onRename(node) },
+        { icon: <IconTransferOut size={14} />, label: '转移到空间…', run: () => onTransfer(node) },
         { icon: <IconTrash size={14} />, label: '删除', danger: true, run: () => onDelete(node) },
       ];
 

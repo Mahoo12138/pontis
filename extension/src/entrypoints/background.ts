@@ -26,7 +26,7 @@ export default defineBackground(() => {
     return { serverUrl: b.serverUrl ?? '', token: b.deviceToken };
   });
   const applier = new RemoteChangeApplier(db, adapter);
-  const coordinator = new SyncCoordinator(db, applier, client);
+  const coordinator = new SyncCoordinator(db, applier, client, client);
   const engine = new InitialSyncEngine(db, adapter, client, coordinator);
   const resync = new ResyncService(db, client, bootstrap, coordinator, engine);
 

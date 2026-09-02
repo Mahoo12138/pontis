@@ -255,6 +255,36 @@ export class EventProcessor {
       return 'local-op';
     }
 
+    // Cross-space drag (doc 03 §7): the new parent lives under another
+    // active binding's mount → the server must move the subtree atomically
+    // (target CREATE fresh ids + source DELETE). No browser delete is made;
+    // mirrors are rebuilt when the transfer is acked.
+    const cross = await this.crossBindingTarget(binding, node.parentId);
+    if (cross) {
+      await this.db.transaction('rw', [this.db.bindings, this.db.pendingOps], async () => {
+        const b = await this.db.bindings.get(binding.id);
+        if (!b) return;
+        const clientSeq = b.clientSeq + 1;
+        await this.db.pendingOps.add({
+          opId: uuidv7(),
+          bindingId: b.id,
+          clientSeq,
+          baseRevision: b.appliedRevision,
+          status: 'QUEUED',
+          type: 'transfer',
+          nodeId: mirror.canonicalId!,
+          targetSpaceId: cross.binding.spaceId,
+          targetParent: cross.parentRef,
+          browserId: node.id,
+          browserParentId: node.parentId ?? undefined,
+          createdAt: Date.now(),
+        });
+        b.clientSeq = clientSeq;
+        await this.db.bindings.put(b);
+      });
+      return 'local-op';
+    }
+
     const parentRef = await this.canonicalParentRef(binding, node.parentId);
     if (!parentRef) {
       await logDiagnostic(this.db, 'warn', 'event-processor', 'local move to unmapped parent, skipped', {
@@ -408,6 +438,33 @@ export class EventProcessor {
     return null;
   }
 
+  /**
+   * Does the browser parent live under another active binding's scope?
+   * Matches the other binding's mount roots (folderBrowserId / roots) and
+   * any node already mapped in that binding's mirrors; returns the target
+   * binding plus the canonical parent reference for the transfer request.
+   */
+  private async crossBindingTarget(
+    binding: BindingRecord,
+    parentBrowserId: string,
+  ): Promise<{ binding: BindingRecord; parentRef: ParentRefWire } | null> {
+    const others = await this.db.bindings.where('state').equals('active').toArray();
+    for (const other of others) {
+      if (other.id === binding.id) continue;
+      const mount = other.mount;
+      if (mount.mode === 'partial' && parentBrowserId === mount.folderBrowserId) {
+        return { binding: other, parentRef: { type: 'root', key: mount.rootKey } };
+      }
+      if (mount.mode === 'full' && mount.roots) {
+        for (const [key, browserId] of Object.entries(mount.roots)) {
+          if (browserId === parentBrowserId) return { binding: other, parentRef: { type: 'root', key } };
+        }
+      }
+      const parent = await this.db.localNodes.get([other.id, parentBrowserId]);
+      if (parent?.canonicalId) return { binding: other, parentRef: { type: 'node', id: parent.canonicalId } };
+    }
+    return null;
+  }
   /**
    * after_id → before_id translation (doc 05 §12): find the next syncable
    * canonical sibling after the moved node's browser index; null = append.

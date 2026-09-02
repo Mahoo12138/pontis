@@ -22,6 +22,7 @@ const (
 	OriginDevice   OriginType = "device"
 	OriginImport   OriginType = "import"
 	OriginRecovery OriginType = "recovery"
+	OriginTransfer OriginType = "transfer"
 )
 
 // Origin records the causal source of a Canonical Change. Empty values map

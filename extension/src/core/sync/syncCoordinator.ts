@@ -4,15 +4,17 @@
 //   → settle pending ops. Loops while has_more. Never trusts HTTP success
 //   alone; pending cleanup follows settle_after_revision (doc 04 §7).
 
-import { ApiError, type SyncTransport } from '../transport/client';
-import { activeReconSession, logDiagnostic, type BindingRecord, type PontisDB, type PendingOpRecord } from '../store/db';
+import { ApiError, type SyncTransport, type TransferTransport } from '../transport/client';
+import { activeReconSession, collectSubtree, logDiagnostic, type BindingRecord, type LocalNodeRecord, type PontisDB, type PendingOpRecord } from '../store/db';
 import {
   MAX_CHANGES_PER_ROUND,
   SYNC_PROTOCOL_VERSION,
+  type OpType,
   type OperationResultWire,
   type OperationWire,
   type SyncRequestWire,
   type SyncResponseWire,
+  type TransferResponseWire,
 } from '../protocol/types';
 import type { RemoteChangeApplier } from './remoteChangeApplier';
 
@@ -26,6 +28,7 @@ export class SyncCoordinator {
     private db: PontisDB,
     private applier: RemoteChangeApplier,
     private transport: SyncTransport,
+    private transfers?: TransferTransport,
   ) {}
 
   async syncBinding(bindingId: string): Promise<SyncOutcome> {
@@ -116,6 +119,10 @@ export class SyncCoordinator {
       if (!resp.has_more) break;
     }
 
+    // Cross-space transfers (doc 03 §7) ride their own endpoint; they are
+    // not /sync operations. Upload any QUEUED ones after the rounds.
+    await this.processTransfers(bindingId);
+
     await this.db.bindings.update(bindingId, { lastSyncAt: Date.now() });
     return 'synced';
   }
@@ -152,14 +159,114 @@ export class SyncCoordinator {
       .where('[bindingId+status]')
       .equals([bindingId, 'QUEUED'])
       .sortBy('clientSeq');
+    // Transfer intents never appear as /sync operations.
+    const syncOps = queued.filter((o): o is PendingOpRecord & { type: OpType } => o.type !== 'transfer');
     return {
       protocol_version: SYNC_PROTOCOL_VERSION,
       epoch: b.epoch,
       applied_revision: b.appliedRevision,
       received_revision: b.receivedRevision,
-      operations: queued.map(toWire),
+      operations: syncOps.map(toWire),
       max_changes: MAX_CHANGES_PER_ROUND,
     };
+  }
+
+  /**
+   * Upload QUEUED transfer intents to /sync/transfers (doc 08 §15).
+   * On ack, the source binding's subtree mirrors are dropped and the
+   * target binding's mirrors rebuilt from the response mapping (browser
+   * ids are reused); the pending op is deleted. The subsequent回流
+   * converges naturally: source delete → NOOP advance, target create →
+   * ensure-state advance (mirrors already satisfy the changes).
+   */
+  private async processTransfers(bindingId: string): Promise<void> {
+    if (!this.transfers) return;
+    const ops = await this.db.pendingOps
+      .where('[bindingId+status]')
+      .equals([bindingId, 'QUEUED'])
+      .filter((o) => o.type === 'transfer')
+      .toArray();
+    for (const op of ops) {
+      if (op.type !== 'transfer' || !op.targetSpaceId || !op.targetParent) continue;
+      const source = await this.db.bindings.get(op.bindingId);
+      if (!source) continue;
+      let resp: TransferResponseWire;
+      try {
+        resp = await this.transfers.createTransfer({
+          transfer_id: op.opId,
+          source_space_id: source.spaceId,
+          target_space_id: op.targetSpaceId,
+          node_id: op.nodeId,
+          target_parent: op.targetParent,
+        });
+      } catch (err) {
+        if (err instanceof ApiError && err.status >= 400 && err.status < 500 && err.status !== 429) {
+          // Permanent rejection (e.g. TRANSFER_ID_REUSED): surface it, do
+          // not retry forever.
+          await this.db.pendingOps.update(op.opId, {
+            status: 'RESOLVED',
+            keepResolved: true,
+            result: {
+              status: 'CONFLICT',
+              reason: err.code,
+              resultRevision: 0,
+              settleAfterRevision: Number.MAX_SAFE_INTEGER,
+            },
+          });
+          await logDiagnostic(this.db, 'error', 'coordinator', 'transfer rejected by server', {
+            bindingId: op.bindingId,
+            opId: op.opId,
+            code: err.code,
+          });
+          continue;
+        }
+        await logDiagnostic(this.db, 'warn', 'coordinator', 'transfer upload failed, will retry', {
+          bindingId: op.bindingId,
+          opId: op.opId,
+          error: String(err),
+        });
+        continue;
+      }
+      await this.commitTransferAck(op, resp);
+    }
+  }
+
+  /** Ack bookkeeping: rebuild mirrors on both sides in one transaction. */
+  private async commitTransferAck(op: PendingOpRecord, resp: TransferResponseWire): Promise<void> {
+    const sourceBinding = await this.db.bindings.get(op.bindingId);
+    if (!sourceBinding || !op.browserId) return;
+    const mapping = new Map(resp.mapping.map((m) => [m.source_node_id, m.target_node_id]));
+    const targetBinding = await this.db.bindings.where('spaceId').equals(op.targetSpaceId ?? '').first();
+
+    // The browser tree already holds the subtree at its new location, so
+    // the old source mirrors carry the browser ids to re-map.
+    const subtree = await collectSubtree(this.db, op.bindingId, op.browserId);
+    const targetMirrors: LocalNodeRecord[] = [];
+    for (const m of subtree) {
+      const canonical = m.canonicalId == null ? null : (mapping.get(m.canonicalId) ?? null);
+      if (canonical == null) continue;
+      targetMirrors.push({
+        ...m,
+        bindingId: targetBinding?.id ?? m.bindingId,
+        canonicalId: canonical,
+        // Only the moved root changes parents; children keep theirs.
+        parentBrowserId: m.browserId === op.browserId ? (op.browserParentId ?? m.parentBrowserId) : m.parentBrowserId,
+        position: null,
+      });
+    }
+
+    await this.db.transaction('rw', [this.db.bindings, this.db.localNodes, this.db.pendingOps], async () => {
+      await this.db.localNodes.bulkDelete(subtree.map((r) => [op.bindingId, r.browserId] as [string, string]));
+      if (targetBinding) {
+        await this.db.localNodes.bulkPut(targetMirrors);
+      }
+      await this.db.pendingOps.delete(op.opId);
+    });
+    await logDiagnostic(this.db, 'info', 'coordinator', 'cross-space transfer acked, mappings rebuilt', {
+      bindingId: op.bindingId,
+      opId: op.opId,
+      nodes: resp.mapping.length,
+    });
   }
 
   private async recordResult(bindingId: string, r: OperationResultWire): Promise<void> {
@@ -191,7 +298,7 @@ export class SyncCoordinator {
   }
 }
 
-function toWire(p: PendingOpRecord): OperationWire {
+function toWire(p: PendingOpRecord & { type: OpType }): OperationWire {
   return {
     op_id: p.opId,
     client_seq: p.clientSeq,

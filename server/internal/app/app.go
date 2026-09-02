@@ -19,15 +19,16 @@ import (
 	"pontis/internal/device"
 	"pontis/internal/httpapi"
 	"pontis/internal/library"
+	"pontis/internal/logging"
 	"pontis/internal/organizer"
 	"pontis/internal/plaza"
 	"pontis/internal/schedule"
-	"pontis/internal/transfer"
-	"pontis/internal/logging"
 	"pontis/internal/space"
+	"pontis/internal/spacetransfer"
 	"pontis/internal/store/sqlite"
 	"pontis/internal/sync"
 	"pontis/internal/token"
+	"pontis/internal/transfer"
 )
 
 // sessionTTL is the web session lifetime.
@@ -78,21 +79,22 @@ func Run(ctx context.Context, cfg config.Config) error {
 	scheduleSvc := schedule.NewService(scheduleStore, jobSvc)
 	scheduleSvc.Log = logger
 	api := &httpapi.Server{
-		Auth:       auth.NewService(sqlite.NewAuthStore(db), sessionTTL),
-		Devices:    device.NewService(sqlite.NewDeviceStore(db)),
-		Spaces:     space.NewService(sqlite.NewSpaceStore(db)),
-		Sync:       sync.NewService(sqlite.NewSyncStore(db)),
-		Library:    library.NewService(libraryStore, canonicalStore),
-		Tokens:     token.NewService(sqlite.NewTokenStore(db)),
-		Organizer:  organizerSvc,
-		Transfer:   transfer.NewService(libraryStore, canonicalStore),
-		Plaza:      plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(libraryStore, canonicalStore), canonicalStore),
-		Backups:    backupSvc,
-		Jobs:       jobSvc,
-		Schedules:  scheduleSvc,
-		Accounts:   accountStore,
-		InstanceID: instanceID,
-		Logger:     logger,
+		Auth:          auth.NewService(sqlite.NewAuthStore(db), sessionTTL),
+		Devices:       device.NewService(sqlite.NewDeviceStore(db)),
+		Spaces:        space.NewService(sqlite.NewSpaceStore(db)),
+		Sync:          sync.NewService(sqlite.NewSyncStore(db)),
+		Library:       library.NewService(libraryStore, canonicalStore),
+		Tokens:        token.NewService(sqlite.NewTokenStore(db)),
+		Organizer:     organizerSvc,
+		Transfer:      transfer.NewService(libraryStore, canonicalStore),
+		SpaceTransfer: spacetransfer.NewService(canonicalStore),
+		Plaza:         plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(libraryStore, canonicalStore), canonicalStore),
+		Backups:       backupSvc,
+		Jobs:          jobSvc,
+		Schedules:     scheduleSvc,
+		Accounts:      accountStore,
+		InstanceID:    instanceID,
+		Logger:        logger,
 	}
 
 	jobSvc.Start(ctx)

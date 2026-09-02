@@ -104,6 +104,31 @@ export interface SyncResponseWire {
   changes: ChangeWire[];
 }
 
+// --- cross-space transfer (doc 08 §15) ---
+
+export interface NodeMappingWire {
+  source_node_id: string;
+  target_node_id: string;
+}
+
+/** Device-initiated atomic transfer between two spaces of the same owner. */
+export interface TransferRequestWire {
+  transfer_id: string;
+  source_space_id: string;
+  target_space_id: string;
+  node_id: string;
+  target_parent: ParentRefWire;
+  before_id?: string | null;
+}
+
+/** The mapping lets the extension rebuild the target binding directly. */
+export interface TransferResponseWire {
+  transfer_id: string;
+  source_revision: number;
+  target_revision: number;
+  mapping: NodeMappingWire[];
+}
+
 // --- snapshot (doc 06 §8) ---
 
 export interface SnapshotNodeWire {

@@ -255,6 +255,28 @@ export interface MoveNodeRequest {
   before_id?: string;
 }
 
+// ─── Cross-space transfer (doc 08 §15) ──────────
+
+export interface NodeMapping {
+  source_node_id: string;
+  target_node_id: string;
+}
+
+export interface TransferRequest {
+  transfer_id: string;
+  target_space_id: string;
+  node_id: string;
+  target_parent: ParentRef;
+  before_id?: string | null;
+}
+
+export interface TransferResponse {
+  transfer_id: string;
+  source_revision: number;
+  target_revision: number;
+  mapping: NodeMapping[];
+}
+
 // ─── Activity (gap endpoint — mock only) ──────────────────
 
 export type ActivityAction = 'create' | 'update' | 'move' | 'delete';

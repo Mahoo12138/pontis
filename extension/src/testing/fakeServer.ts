@@ -3,7 +3,7 @@
 // client pipeline: APPLIED results, journal回流, paging), and exposes
 // helpers to seed a canonical history deterministically.
 
-import { ApiError, type SyncTransport, type SnapshotTransport } from '../core/transport/client';
+import { ApiError, type SyncTransport, type SnapshotTransport, type TransferTransport } from '../core/transport/client';
 import {
   type ChangeWire,
   type OperationWire,
@@ -12,16 +12,20 @@ import {
   type SnapshotWire,
   type SyncRequestWire,
   type SyncResponseWire,
+  type TransferRequestWire,
+  type TransferResponseWire,
 } from '../core/protocol/types';
 import { parentKey, replayChanges } from '../core/sync/canonicalTree';
 
-export class FakeServerTransport implements SyncTransport, SnapshotTransport {
+export class FakeServerTransport implements SyncTransport, SnapshotTransport, TransferTransport {
   epoch = 1;
   floor = 0;
   revision = 0;
   journal: ChangeWire[] = [];
   /** When set, the next sync call throws this protocol error. */
   protocolError: ApiError | null = null;
+  /** Transfer endpoint stub; tests install per-space behavior here. */
+  transferHandler: ((req: TransferRequestWire) => Promise<TransferResponseWire>) | null = null;
 
   private maxPosition = new Map<string, number>();
 
@@ -68,6 +72,14 @@ export class FakeServerTransport implements SyncTransport, SnapshotTransport {
       operation_results: results,
       changes: page,
     };
+  }
+
+  /** Cross-space transfer (doc 08 §15): delegates to the test handler. */
+  async createTransfer(req: TransferRequestWire): Promise<TransferResponseWire> {
+    if (!this.transferHandler) {
+      throw new ApiError(500, 'INTERNAL', 'fake server has no transfer handler');
+    }
+    return this.transferHandler(req);
   }
 
   /** Read-only snapshot of the current canonical tree (doc 06 §8). */

@@ -15,16 +15,17 @@ import (
 	"pontis/internal/auth"
 	"pontis/internal/backup"
 	"pontis/internal/device"
-	"pontis/internal/library"
 	"pontis/internal/jobs"
+	"pontis/internal/library"
 	"pontis/internal/organizer"
 	"pontis/internal/plaza"
 	"pontis/internal/schedule"
 	"pontis/internal/space"
+	"pontis/internal/spacetransfer"
 	"pontis/internal/store/sqlite"
-	"pontis/internal/transfer"
 	"pontis/internal/sync"
 	"pontis/internal/token"
+	"pontis/internal/transfer"
 )
 
 // ProductVersion is the server product version reported by /meta.
@@ -38,19 +39,20 @@ const SessionCookie = "pontis_session"
 
 // Server wires the HTTP API onto the domain services.
 type Server struct {
-	Auth     *auth.Service
-	Devices  *device.Service
-	Spaces   *space.Service
-	Sync     *sync.Service
-	Library   *library.Service
-	Tokens    *token.Service
-	Backups   *backup.Service
-	Organizer *organizer.Service
-	Plaza     *plaza.Service
-	Jobs      *jobs.Service
-	Schedules *schedule.Service
-	Transfer  *transfer.Service
-	Accounts  *sqlite.AccountStore
+	Auth          *auth.Service
+	Devices       *device.Service
+	Spaces        *space.Service
+	Sync          *sync.Service
+	Library       *library.Service
+	Tokens        *token.Service
+	Backups       *backup.Service
+	Organizer     *organizer.Service
+	Plaza         *plaza.Service
+	Jobs          *jobs.Service
+	Schedules     *schedule.Service
+	Transfer      *transfer.Service
+	SpaceTransfer *spacetransfer.Service
+	Accounts      *sqlite.AccountStore
 
 	// InstanceID identifies this server installation across URL changes.
 	InstanceID string
@@ -154,6 +156,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/v1/spaces/{spaceID}/organizer/link-check", s.handleRunLinkCheck)
 		r.Get("/api/v1/spaces/{spaceID}/organizer/link-check/results", s.handleLinkCheckResults)
 		r.Get("/api/v1/spaces/{spaceID}/organizer/duplicates", s.handleDuplicates)
+		r.Post("/api/v1/spaces/{spaceID}/transfers", s.handleSpaceTransfer)
 		r.Post("/api/v1/spaces/{spaceID}/export", s.handleExport)
 		r.Post("/api/v1/spaces/{spaceID}/import/preview", s.handleImportPreview)
 		r.Post("/api/v1/spaces/{spaceID}/import/apply", s.handleImportApply)
@@ -187,8 +190,9 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/v1/device/spaces", s.handleDeviceSpaces)
 		r.Get("/api/v1/device/bindings", s.handleListBindings)
 		r.Post("/api/v1/device/bindings", s.handleCreateBinding)
-		r.Post("/api/v1/sync/bindings/{bindingID}", s.handleSync)       
+		r.Post("/api/v1/sync/bindings/{bindingID}", s.handleSync)
 		r.Get("/api/v1/sync/bindings/{bindingID}/snapshot", s.handleSnapshot)
+		r.Post("/api/v1/sync/transfers", s.handleDeviceTransfer)
 	})
 
 	return r

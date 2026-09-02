@@ -76,7 +76,9 @@ export interface PendingOpRecord {
   clientSeq: number;
   baseRevision: number;
   status: PendingStatus;
-  type: OpType;
+  /** 'transfer' is a local extension (doc 03 §7): it never goes through
+   *  /sync operations — the coordinator uploads it to /sync/transfers. */
+  type: OpType | 'transfer';
   /** Canonical node id; '' for a local create not yet acked. */
   nodeId: string;
   nodeType?: NodeType;
@@ -86,6 +88,12 @@ export interface PendingOpRecord {
   beforeId?: string | null;
   /** Browser node the intent came from; used for in-place edits pre-ack. */
   browserId?: string;
+  /** Browser parent after the move; transfer ack uses it to re-root the
+   *  mirror inside the target binding's scope. */
+  browserParentId?: string;
+  // --- transfer-only fields (type === 'transfer') ---
+  targetSpaceId?: string;
+  targetParent?: ParentRefWire;
   /** Survive settle: an import queue entry still needs the result. */
   keepResolved?: boolean;
   result?: {

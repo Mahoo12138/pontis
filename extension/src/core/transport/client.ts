@@ -11,6 +11,8 @@ import {
   type SpaceWire,
   type SyncRequestWire,
   type SyncResponseWire,
+  type TransferRequestWire,
+  type TransferResponseWire,
 } from '../protocol/types';
 
 export class ApiError extends Error {
@@ -49,7 +51,12 @@ export interface SnapshotTransport {
   fetchSnapshot(bindingId: string): Promise<SnapshotWire>;
 }
 
-export class ApiClient implements SyncTransport, SnapshotTransport {
+/** Cross-space transfer upload (doc 08 §15); optional transport extension. */
+export interface TransferTransport {
+  createTransfer(req: TransferRequestWire): Promise<TransferResponseWire>;
+}
+
+export class ApiClient implements SyncTransport, SnapshotTransport, TransferTransport {
   constructor(private resolveConfig: () => Promise<ClientConfig>) {}
 
   private async request<T>(
@@ -109,5 +116,11 @@ export class ApiClient implements SyncTransport, SnapshotTransport {
 
   fetchSnapshot(bindingId: string): Promise<SnapshotWire> {
     return this.request<SnapshotWire>(`/api/v1/sync/bindings/${bindingId}/snapshot`);
+  }
+
+  createTransfer(req: TransferRequestWire): Promise<TransferResponseWire> {
+    // The resolved token is the device credential, matching the endpoint's
+    // auth group (POST /api/v1/sync/transfers).
+    return this.request<TransferResponseWire>('/api/v1/sync/transfers', { method: 'POST', body: req });
   }
 }

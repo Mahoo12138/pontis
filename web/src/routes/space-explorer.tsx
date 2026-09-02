@@ -10,6 +10,7 @@ import NodeContextMenu from '../components/explorer/NodeContextMenu';
 import type { ContextMenuPos } from '../components/explorer/NodeContextMenu';
 import { NewNodeModal, ConfirmDeleteDialog } from '../components/explorer/node-modals';
 import type { NewNodeMode } from '../components/explorer/node-modals';
+import TransferModal from '../components/explorer/TransferModal';
 import ImportModal from '../components/transfer/ImportModal';
 import ExportModal from '../components/transfer/ExportModal';
 import Inspector from '../components/inspector/Inspector';
@@ -49,6 +50,7 @@ export default function SpaceExplorerPage() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [transferNode, setTransferNode] = useState<Node | null>(null);
 
   const spaceName = spacesData?.spaces?.find((s) => s.id === spaceId)?.name ?? '空间';
 
@@ -240,6 +242,7 @@ export default function SpaceExplorerPage() {
           setCreateMode(mode);
         }}
         onDelete={() => setDeleteOpen(true)}
+        onTransfer={(n) => setTransferNode(n)}
       />
 
       <NewNodeModal
@@ -271,6 +274,13 @@ export default function SpaceExplorerPage() {
         spaceName={spaceName}
         opened={exportOpen}
         onClose={() => setExportOpen(false)}
+      />
+
+      <TransferModal
+        opened={transferNode !== null}
+        sourceSpaceId={spaceId ?? ''}
+        node={transferNode}
+        onClose={() => setTransferNode(null)}
       />
     </>
   );
