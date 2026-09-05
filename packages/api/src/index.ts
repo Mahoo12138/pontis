@@ -39,6 +39,8 @@ export type {
   ActivityAction,
   ActivityEntry,
   ActivityListResponse,
+  UndoStatus,
+  UndoActivityResult,
   PublicationVisibility,
   PublicationNodeDTO,
   PublicationSummary,

@@ -14,6 +14,7 @@ import (
 
 	"pontis/internal/auth"
 	"pontis/internal/backup"
+	"pontis/internal/changeset"
 	"pontis/internal/device"
 	"pontis/internal/jobs"
 	"pontis/internal/library"
@@ -44,6 +45,7 @@ type Server struct {
 	Spaces        *space.Service
 	Sync          *sync.Service
 	Library       *library.Service
+	Changesets    *changeset.Service
 	Tokens        *token.Service
 	Backups       *backup.Service
 	Organizer     *organizer.Service
@@ -153,6 +155,7 @@ func (s *Server) Router() http.Handler {
 		r.Patch("/api/v1/spaces/{spaceID}/nodes/{nodeID}/move", s.handleMoveNode)
 		r.Delete("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleDeleteNode)
 		r.Get("/api/v1/spaces/{spaceID}/activity", s.handleSpaceActivity)
+		r.Post("/api/v1/spaces/{spaceID}/changesets/{changeSetID}/undo", s.handleUndoChangeSet)
 		r.Post("/api/v1/spaces/{spaceID}/organizer/link-check", s.handleRunLinkCheck)
 		r.Get("/api/v1/spaces/{spaceID}/organizer/link-check/results", s.handleLinkCheckResults)
 		r.Get("/api/v1/spaces/{spaceID}/organizer/duplicates", s.handleDuplicates)
@@ -212,12 +215,19 @@ type errorBody struct {
 }
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+	s.writeErrorWithDetails(w, r, status, code, message, nil)
+}
+
+// writeErrorWithDetails emits the unified error envelope with optional
+// structured details (e.g. undo review reasons).
+func (s *Server) writeErrorWithDetails(w http.ResponseWriter, r *http.Request, status int, code, message string, details map[string]any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(errorEnvelope{Error: errorBody{
 		Code:      code,
 		Message:   message,
 		RequestID: requestID(r),
+		Details:   details,
 	}})
 }
 

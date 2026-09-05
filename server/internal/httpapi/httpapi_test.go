@@ -15,6 +15,7 @@ import (
 
 	"pontis/internal/auth"
 	"pontis/internal/backup"
+	"pontis/internal/changeset"
 	"pontis/internal/device"
 	"pontis/internal/jobs"
 	"pontis/internal/library"
@@ -52,18 +53,20 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	// The schedule service shares the job service so run-now and the tick
 	// loop can enqueue real jobs (same wiring as the app composition root).
 	jobSvc := jobs.NewService(sqlite.NewJobStore(db), 1)
+	changesetSvc := changeset.NewService(sqlite.NewChangeSetStore(db))
 
 	srv := &Server{
 		Auth:          auth.NewService(sqlite.NewAuthStore(db), 24*time.Hour),
 		Devices:       device.NewService(sqlite.NewDeviceStore(db)),
 		Spaces:        space.NewService(sqlite.NewSpaceStore(db)),
-		Sync:          sync.NewService(sqlite.NewSyncStore(db)),
-		SpaceTransfer: spacetransfer.NewService(sqlite.NewStore(db)),
-		Library:       library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
+		Sync:          sync.NewService(sqlite.NewSyncStore(db), changesetSvc),
+		SpaceTransfer: spacetransfer.NewService(sqlite.NewStore(db), changesetSvc),
+		Library:       library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db), changesetSvc),
+		Changesets:    changesetSvc,
 		Tokens:        token.NewService(sqlite.NewTokenStore(db)),
 		Organizer:     organizer.NewService(sqlite.NewLibraryStore(db)),
-		Transfer:      transfer.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)),
-		Plaza:         plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db)), sqlite.NewStore(db)),
+		Transfer:      transfer.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db), changesetSvc),
+		Plaza:         plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db), changesetSvc), changesetSvc, sqlite.NewStore(db)),
 		Backups:       backupSvc,
 		Accounts:      sqlite.NewAccountStore(db),
 		Jobs:          jobSvc,

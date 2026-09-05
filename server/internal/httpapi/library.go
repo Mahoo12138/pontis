@@ -3,11 +3,11 @@ package httpapi
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
 	"pontis/internal/canonical"
+	"pontis/internal/changeset"
 	"pontis/internal/library"
 )
 
@@ -42,20 +42,20 @@ func (s *Server) requireSpaceAccess(next http.Handler) http.Handler {
 // --- DTOs ---
 
 type nodeResponse struct {
-	ID                string `json:"id"`
-	SpaceID           string `json:"space_id"`
-	Type              string `json:"type"`
-	Title             string `json:"title"`
+	ID                string  `json:"id"`
+	SpaceID           string  `json:"space_id"`
+	Type              string  `json:"type"`
+	Title             string  `json:"title"`
 	URL               *string `json:"url"`
 	ParentID          *string `json:"parent_id"`
 	RootKey           *string `json:"root_key"`
-	Position          int64  `json:"position"`
-	CreatedRevision   int64  `json:"created_revision"`
-	TitleRevision     int64  `json:"title_revision"`
-	URLRevision       int64  `json:"url_revision"`
-	StructureRevision int64  `json:"structure_revision"`
-	CreatedAt         string `json:"created_at"`
-	UpdatedAt         string `json:"updated_at"`
+	Position          int64   `json:"position"`
+	CreatedRevision   int64   `json:"created_revision"`
+	TitleRevision     int64   `json:"title_revision"`
+	URLRevision       int64   `json:"url_revision"`
+	StructureRevision int64   `json:"structure_revision"`
+	CreatedAt         string  `json:"created_at"`
+	UpdatedAt         string  `json:"updated_at"`
 }
 
 func nodeDTO(n canonical.Node) nodeResponse {
@@ -136,11 +136,11 @@ func (s *Server) handleListRootSlots(w http.ResponseWriter, r *http.Request) {
 // --- handlers: node CRUD ---
 
 type createNodeRequest struct {
-	Type     string     `json:"type"`
-	Title    string     `json:"title"`
-	URL      string     `json:"url"`
-	Parent   parentDTO  `json:"parent"`
-	BeforeID *string    `json:"before_id"`
+	Type     string    `json:"type"`
+	Title    string    `json:"title"`
+	URL      string    `json:"url"`
+	Parent   parentDTO `json:"parent"`
+	BeforeID *string   `json:"before_id"`
 }
 
 func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
@@ -233,16 +233,17 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// --- handlers: activity ---
+// --- handlers: activity & undo ---
 
 type activityResponse struct {
 	ID        string `json:"id"`
 	Timestamp string `json:"timestamp"`
-	Revision  int64  `json:"revision"`
 	Actor     string `json:"actor"`
 	Action    string `json:"action"`
 	Summary   string `json:"summary"`
 	Undoable  bool   `json:"undoable"`
+	Undone    bool   `json:"undone"`
+	Expired   bool   `json:"expired"`
 }
 
 func (s *Server) handleSpaceActivity(w http.ResponseWriter, r *http.Request) {
@@ -255,16 +256,57 @@ func (s *Server) handleSpaceActivity(w http.ResponseWriter, r *http.Request) {
 	out := make([]activityResponse, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, activityResponse{
-			ID:        "rev-" + strconv.FormatInt(e.Revision, 10),
+			ID:        e.ID,
 			Timestamp: e.Timestamp,
-			Revision:  e.Revision,
 			Actor:     e.Actor,
 			Action:    e.Action,
 			Summary:   e.Summary,
-			Undoable:  true, // V1: recent canonical changes are undoable in principle.
+			Undoable:  e.Undoable,
+			Undone:    e.Undone,
+			Expired:   e.Expired,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"activity": out})
+}
+
+// handleUndoChangeSet builds the undo plan of one ChangeSet and executes it
+// when clean (doc 15 §8). Non-clean outcomes surface as structured errors
+// so the UI can explain why nothing was reverted.
+func (s *Server) handleUndoChangeSet(w http.ResponseWriter, r *http.Request) {
+	u, _ := currentUser(r)
+	spaceID := canonical.SpaceID(chi.URLParam(r, "spaceID"))
+	changeSetID := chi.URLParam(r, "changeSetID")
+
+	res, err := s.Changesets.Undo(r.Context(), spaceID, changeSetID, canonical.UserID(u.ID))
+	if err != nil {
+		switch {
+		case errors.Is(err, changeset.ErrChangeSetNotFound):
+			s.writeError(w, r, http.StatusNotFound, "CHANGESET_NOT_FOUND", "unknown change set")
+		case errors.Is(err, changeset.ErrAlreadyUndone):
+			s.writeError(w, r, http.StatusConflict, "ALREADY_UNDONE", "this change set was already undone")
+		default:
+			s.Logger.Error("undo internal error", "err", err)
+			s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		}
+		return
+	}
+	switch res.Status {
+	case changeset.PlanClean:
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":        string(res.Status),
+			"change_set_id": res.ChangeSetID,
+			"summary":       res.Summary,
+		})
+	case changeset.PlanReviewRequired:
+		s.writeErrorWithDetails(w, r, http.StatusConflict, "REVIEW_REQUIRED",
+			"later changes require review before undo", map[string]any{"reasons": res.Reasons})
+	case changeset.PlanExpired:
+		s.writeErrorWithDetails(w, r, http.StatusGone, "UNDO_EXPIRED",
+			"the undo window for this change set has expired", map[string]any{"reasons": []string{"撤销窗口已过（30 天）"}})
+	default: // PlanNotUndoable
+		s.writeErrorWithDetails(w, r, http.StatusConflict, "NOT_UNDOABLE",
+			"this change set cannot be undone", nil)
+	}
 }
 
 // writeLibraryError maps domain errors to the unified envelope.

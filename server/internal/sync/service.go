@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"pontis/internal/canonical"
+	"pontis/internal/changeset"
 	"pontis/internal/device"
 )
 
@@ -53,13 +54,14 @@ type Tx interface {
 
 // Service implements the /sync protocol core.
 type Service struct {
-	store    Store
-	executor *canonical.Executor
+	store      Store
+	changesets *changeset.Service
 }
 
-// NewService returns a sync service backed by store.
-func NewService(store Store) *Service {
-	return &Service{store: store, executor: canonical.NewExecutor()}
+// NewService returns a sync service backed by store. Every applied device
+// operation is recorded as an undoable ChangeSet (doc 15).
+func NewService(store Store, changesets *changeset.Service) *Service {
+	return &Service{store: store, changesets: changesets}
 }
 
 // Sync executes one /sync round: validate binding continuity, process

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"pontis/internal/canonical"
+	"pontis/internal/changeset"
 	"pontis/internal/library"
 )
 
@@ -78,19 +80,19 @@ type Store interface {
 
 // Service implements publishing and applying.
 type Service struct {
-	store   Store
-	library *library.Service
-	exec    *canonical.Executor
-	writer  interface {
+	store      Store
+	library    *library.Service
+	changesets *changeset.Service
+	writer     interface {
 		BeginTx(ctx context.Context) (canonical.Tx, error)
 	}
 }
 
 // NewService returns a plaza service.
-func NewService(store Store, lib *library.Service, writer interface {
+func NewService(store Store, lib *library.Service, changesets *changeset.Service, writer interface {
 	BeginTx(ctx context.Context) (canonical.Tx, error)
 }) *Service {
-	return &Service{store: store, library: lib, exec: canonical.NewExecutor(), writer: writer}
+	return &Service{store: store, library: lib, changesets: changesets, writer: writer}
 }
 
 // PublishParams carries a publish request.
@@ -289,22 +291,20 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, id string, p
 		}
 	}()
 
-	// Replace: clear the target's existing children first.
+	// One ChangeSet for the whole apply (doc 15 §8): undoable as a whole.
+	rec := s.changesets.BeginBatch(p.SpaceID, changeset.KindPublication, origin, true)
+
+	// Replace: clear the target's existing children first — as journaled,
+	// tombstoned DeleteNode commands so sync clients observe the removal
+	// and the undo keeps a full Before Image.
 	if p.Strategy == "replace" {
 		children, err := tx.Children(ctx, p.SpaceID, p.Parent)
 		if err != nil {
 			return ApplyResult{}, err
 		}
 		for _, child := range children {
-			ids, err := tx.SubtreeIDs(ctx, p.SpaceID, child.ID)
-			if err != nil {
+			if err := rec.Apply(ctx, tx, canonical.DeleteNode{SpaceID: p.SpaceID, NodeID: child.ID}); err != nil {
 				return ApplyResult{}, err
-			}
-			// Deepest first satisfies the parent FK.
-			for i := len(ids) - 1; i >= 0; i-- {
-				if err := tx.DeleteNodes(ctx, p.SpaceID, []canonical.NodeID{ids[i]}); err != nil {
-					return ApplyResult{}, err
-				}
 			}
 		}
 	}
@@ -348,7 +348,7 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, id string, p
 				if err != nil {
 					return err
 				}
-				if err := s.exec.ApplyTx(ctx, tx, origin, canonical.CreateNode{
+				if err := rec.Apply(ctx, tx, canonical.CreateNode{
 					SpaceID: p.SpaceID, NodeID: id, Type: canonical.NodeTypeFolder,
 					Title: child.Title, Parent: parent,
 				}); err != nil {
@@ -374,7 +374,7 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, id string, p
 			if err != nil {
 				return err
 			}
-			if err := s.exec.ApplyTx(ctx, tx, origin, canonical.CreateNode{
+			if err := rec.Apply(ctx, tx, canonical.CreateNode{
 				SpaceID: p.SpaceID, NodeID: id, Type: canonical.NodeTypeBookmark,
 				Title: child.Title, URL: childURL, Parent: parent,
 			}); err != nil {
@@ -387,6 +387,11 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, id string, p
 	}
 
 	if err := walk(pub.Tree, p.Parent); err != nil {
+		return ApplyResult{}, err
+	}
+
+	summary := fmt.Sprintf("应用订阅「%s」：新增 %d 项", pub.Title, res.Created)
+	if _, err := rec.Finish(ctx, tx, summary); err != nil {
 		return ApplyResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

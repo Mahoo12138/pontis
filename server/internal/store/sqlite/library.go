@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"pontis/internal/canonical"
-	"pontis/internal/library"
+	"pontis/internal/changeset"
 )
 
 // LibraryStore provides the read side of the canonical tree for the web
@@ -86,35 +86,10 @@ func (s *LibraryStore) ListRootSlots(ctx context.Context, space canonical.SpaceI
 	return out, rows.Err()
 }
 
-// JournalRow is one committed canonical change with its origin; the wire
-// type lives in the library package (store constructs domain types).
-type JournalRow = library.JournalRow
-
-// ListJournal returns the space's newest journal rows (current epoch)
-// ordered by descending revision.
-func (s *LibraryStore) ListJournal(ctx context.Context, space canonical.SpaceID, epoch int64, limit int) ([]JournalRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT revision, change_type, COALESCE(node_id, ''), payload,
-		       origin_type, COALESCE(origin_user_id, ''), COALESCE(origin_device_id, ''), created_at
-		FROM journal
-		WHERE space_id = ? AND epoch = ?
-		ORDER BY revision DESC
-		LIMIT ?`, string(space), epoch, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []JournalRow
-	for rows.Next() {
-		var r JournalRow
-		if err := rows.Scan(&r.Revision, &r.ChangeType, &r.NodeID, &r.PayloadJSON,
-			&r.OriginType, &r.OriginUserID, &r.OriginDeviceID, &r.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
+// ListChangeSets returns the space's ChangeSets (activity history, doc 15)
+// newest first; delegated to the changeset store over the same database.
+func (s *LibraryStore) ListChangeSets(ctx context.Context, space canonical.SpaceID, limit int) ([]changeset.ChangeSet, error) {
+	return NewChangeSetStore(s.db).ListChangeSets(ctx, space, limit)
 }
 
 // DeviceName returns the device's display name, empty when unknown.

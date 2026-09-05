@@ -15,6 +15,7 @@ import (
 
 	"pontis/internal/auth"
 	"pontis/internal/backup"
+	"pontis/internal/changeset"
 	"pontis/internal/config"
 	"pontis/internal/device"
 	"pontis/internal/httpapi"
@@ -65,6 +66,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	accountStore := sqlite.NewAccountStore(db)
 	libraryStore := sqlite.NewLibraryStore(db)
 	canonicalStore := sqlite.NewStore(db)
+	changesetSvc := changeset.NewService(sqlite.NewChangeSetStore(db))
 	backupSvc, err := backup.NewService(sqlite.NewBackupStore(db), libraryStore,
 		filepath.Join(cfg.DataDir, "backups"))
 	if err != nil {
@@ -82,13 +84,14 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Auth:          auth.NewService(sqlite.NewAuthStore(db), sessionTTL),
 		Devices:       device.NewService(sqlite.NewDeviceStore(db)),
 		Spaces:        space.NewService(sqlite.NewSpaceStore(db)),
-		Sync:          sync.NewService(sqlite.NewSyncStore(db)),
-		Library:       library.NewService(libraryStore, canonicalStore),
+		Sync:          sync.NewService(sqlite.NewSyncStore(db), changesetSvc),
+		Library:       library.NewService(libraryStore, canonicalStore, changesetSvc),
+		Changesets:    changesetSvc,
 		Tokens:        token.NewService(sqlite.NewTokenStore(db)),
 		Organizer:     organizerSvc,
-		Transfer:      transfer.NewService(libraryStore, canonicalStore),
-		SpaceTransfer: spacetransfer.NewService(canonicalStore),
-		Plaza:         plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(libraryStore, canonicalStore), canonicalStore),
+		Transfer:      transfer.NewService(libraryStore, canonicalStore, changesetSvc),
+		SpaceTransfer: spacetransfer.NewService(canonicalStore, changesetSvc),
+		Plaza:         plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(libraryStore, canonicalStore, changesetSvc), changesetSvc, canonicalStore),
 		Backups:       backupSvc,
 		Jobs:          jobSvc,
 		Schedules:     scheduleSvc,

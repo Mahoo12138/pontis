@@ -277,21 +277,46 @@ export interface TransferResponse {
   mapping: NodeMapping[];
 }
 
-// ─── Activity (gap endpoint — mock only) ──────────────────
+// ─── Activity & ChangeSet undo ──────────────────────────────
 
-export type ActivityAction = 'create' | 'update' | 'move' | 'delete';
+export type ActivityAction =
+  | 'create'
+  | 'update'
+  | 'move'
+  | 'delete'
+  | 'import'
+  | 'publish'
+  | 'transfer'
+  | 'undo';
 
 export interface ActivityEntry {
+  /** ChangeSet id — the undo target. */
   id: string;
   timestamp: string;
   actor: string;
   action: ActivityAction;
   summary: string;
+  /** True when the ChangeSet has undo data, is not undone and is inside the undo window. */
   undoable: boolean;
+  /** True when this ChangeSet was already undone. */
+  undone: boolean;
+  /** True when the undo window (30 days) has passed; the entry stays visible. */
+  expired: boolean;
 }
 
 export interface ActivityListResponse {
   activity: ActivityEntry[];
+}
+
+export type UndoStatus = 'clean' | 'review_required' | 'not_undoable' | 'expired';
+
+export interface UndoActivityResult {
+  status: UndoStatus;
+  /** The new inverse ChangeSet id (set when status is clean). */
+  change_set_id?: string;
+  summary?: string;
+  /** Human-readable blockers when status is review_required. */
+  reasons?: string[];
 }
 
 // ─── Plaza / Publications (gap endpoint — mock only) ────────

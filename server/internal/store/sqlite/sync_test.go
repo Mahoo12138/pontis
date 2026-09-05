@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"pontis/internal/canonical"
+	"pontis/internal/changeset"
 	"pontis/internal/device"
 	"pontis/internal/sync"
 )
@@ -34,7 +35,7 @@ func setupSyncTest(t *testing.T) (*sync.Service, *sql.DB, string) {
 		}
 	}
 	devID := registerBoundDevice(t, db, "Edge")
-	return sync.NewService(NewSyncStore(db)), db, devID
+	return sync.NewService(NewSyncStore(db), changeset.NewService(NewChangeSetStore(db))), db, devID
 }
 
 func registerBoundDevice(t *testing.T, db *sql.DB, name string) string {

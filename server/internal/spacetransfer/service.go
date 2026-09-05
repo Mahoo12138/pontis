@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"pontis/internal/canonical"
+	"pontis/internal/changeset"
 )
 
 // Errors surfaced to the HTTP layer.
@@ -98,13 +99,13 @@ type TransferResult struct {
 
 // Service executes atomic cross-space transfers.
 type Service struct {
-	store    Store
-	executor *canonical.Executor
+	store      Store
+	changesets *changeset.Service
 }
 
 // NewService builds a transfer service.
-func NewService(store Store) *Service {
-	return &Service{store: store, executor: canonical.NewExecutor()}
+func NewService(store Store, changesets *changeset.Service) *Service {
+	return &Service{store: store, changesets: changesets}
 }
 
 func hashRequest(req Request) string {
@@ -113,7 +114,7 @@ func hashRequest(req Request) string {
 		before = string(*req.BeforeID)
 	}
 	h := sha256.New()
-	fmt.Fprintf(h, "%s|%s|%s|%s|%d:%s:%s|%s",
+	fmt.Fprintf(h, "%s|%s|%s|%s|%s:%s:%s|%s",
 		req.TransferID, req.SourceSpace, req.TargetSpace, req.NodeID,
 		req.TargetParent.Type, req.TargetParent.NodeID, req.TargetParent.RootKey,
 		before)
@@ -188,10 +189,13 @@ func (s *Service) Transfer(ctx context.Context, owner canonical.UserID, req Requ
 		mapping[n.ID] = canonical.NodeID(id.String())
 	}
 	now := time.Now().UTC()
-	targetCS := uuid.NewString()
-	sourceCS := uuid.NewString()
-	originTarget := canonical.Origin{Type: canonical.OriginTransfer, UserID: owner, ChangeSetID: targetCS}
-	originSource := canonical.Origin{Type: canonical.OriginTransfer, UserID: owner, ChangeSetID: sourceCS}
+	// Each side of the transfer is its own ChangeSet (activity history,
+	// doc 15 §3). Transfers are not undoable in V1: undoing one means a
+	// reverse transfer, a separate high-level operation.
+	recTarget := s.changesets.BeginBatch(req.TargetSpace, changeset.KindTransferIn,
+		canonical.Origin{Type: canonical.OriginTransfer, UserID: owner}, false)
+	recSource := s.changesets.BeginBatch(req.SourceSpace, changeset.KindTransferOut,
+		canonical.Origin{Type: canonical.OriginTransfer, UserID: owner}, false)
 
 	creates := make([]canonical.Command, 0, len(subtree))
 	for _, n := range subtree {
@@ -214,13 +218,21 @@ func (s *Service) Transfer(ctx context.Context, owner canonical.UserID, req Requ
 			}(),
 		})
 	}
-	if err := s.executor.ApplyTx(ctx, tx, originTarget, creates...); err != nil {
+	for _, cmd := range creates {
+		if err := recTarget.Apply(ctx, tx, cmd); err != nil {
+			return TransferResult{}, err
+		}
+	}
+	if _, err := recTarget.Finish(ctx, tx, fmt.Sprintf("跨空间转入 %d 个条目", len(subtree))); err != nil {
 		return TransferResult{}, err
 	}
-	if err := s.executor.ApplyTx(ctx, tx, originSource, canonical.DeleteNode{
+	if err := recSource.Apply(ctx, tx, canonical.DeleteNode{
 		SpaceID: req.SourceSpace,
 		NodeID:  req.NodeID,
 	}); err != nil {
+		return TransferResult{}, err
+	}
+	if _, err := recSource.Finish(ctx, tx, fmt.Sprintf("跨空间转出 %d 个条目", len(subtree))); err != nil {
 		return TransferResult{}, err
 	}
 
@@ -248,8 +260,8 @@ func (s *Service) Transfer(ctx context.Context, owner canonical.UserID, req Requ
 		State:             StateCompleted,
 		RequestHash:       hash,
 		MappingJSON:       string(mappingJSON),
-		SourceChangeSetID: sourceCS,
-		TargetChangeSetID: targetCS,
+		SourceChangeSetID: recSource.ID(),
+		TargetChangeSetID: recTarget.ID(),
 		CreatedAt:         now,
 		CompletedAt:       &completed,
 	}

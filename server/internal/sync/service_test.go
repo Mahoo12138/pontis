@@ -87,14 +87,14 @@ func wantCode(t *testing.T, s *Service, req SyncRequest, want string) {
 }
 
 func TestSyncRejectsUnsupportedProtocolVersion(t *testing.T) {
-	s := NewService(&fakeSyncStore{binding: baseBinding(), space: baseSpace()})
+	s := NewService(&fakeSyncStore{binding: baseBinding(), space: baseSpace()}, nil)
 	req := baseRequest()
 	req.ProtocolVersion = ProtocolVersion + 1
 	wantCode(t, s, req, CodeSyncProtocolUnsupported)
 }
 
 func TestSyncRejectsInvalidWatermarks(t *testing.T) {
-	s := NewService(&fakeSyncStore{binding: baseBinding(), space: baseSpace()})
+	s := NewService(&fakeSyncStore{binding: baseBinding(), space: baseSpace()}, nil)
 
 	negative := baseRequest()
 	negative.AppliedRevision = -1
@@ -113,15 +113,15 @@ func TestSyncRejectsInvalidWatermarks(t *testing.T) {
 func TestSyncRejectsInactiveBinding(t *testing.T) {
 	suspended := baseBinding()
 	suspended.State = device.StateSuspended
-	s := NewService(&fakeSyncStore{binding: suspended, space: baseSpace()})
+	s := NewService(&fakeSyncStore{binding: suspended, space: baseSpace()}, nil)
 	wantCode(t, s, baseRequest(), CodeBindingNotActive)
 
-	s = NewService(&fakeSyncStore{binding: baseBinding(), bindErr: errors.New("db down"), space: baseSpace()})
+	s = NewService(&fakeSyncStore{binding: baseBinding(), bindErr: errors.New("db down"), space: baseSpace()}, nil)
 	wantCode(t, s, baseRequest(), CodeBindingNotActive)
 }
 
 func TestSyncRejectsMissingSpace(t *testing.T) {
-	s := NewService(&fakeSyncStore{binding: baseBinding(), spaceErr: canonical.ErrSpaceNotFound})
+	s := NewService(&fakeSyncStore{binding: baseBinding(), spaceErr: canonical.ErrSpaceNotFound}, nil)
 	wantCode(t, s, baseRequest(), CodeBindingNotActive)
 }
 
@@ -129,18 +129,18 @@ func TestSyncRejectsEpochMismatch(t *testing.T) {
 	// Request epoch disagrees with the space.
 	space := baseSpace()
 	space.Epoch = 4
-	s := NewService(&fakeSyncStore{binding: baseBinding(), space: space})
+	s := NewService(&fakeSyncStore{binding: baseBinding(), space: space}, nil)
 	wantCode(t, s, baseRequest(), CodeEpochMismatch)
 
 	// Binding epoch disagrees with the space (device missed a resync).
 	binding := baseBinding()
 	binding.Epoch = 2
-	s = NewService(&fakeSyncStore{binding: binding, space: baseSpace()})
+	s = NewService(&fakeSyncStore{binding: binding, space: baseSpace()}, nil)
 	wantCode(t, s, baseRequest(), CodeEpochMismatch)
 }
 
 func TestSyncRejectsExpiredHistory(t *testing.T) {
-	s := NewService(&fakeSyncStore{binding: baseBinding(), space: baseSpace()})
+	s := NewService(&fakeSyncStore{binding: baseBinding(), space: baseSpace()}, nil)
 	req := baseRequest()
 	req.AppliedRevision = 5
 	req.ReceivedRevision = 9 // below JournalFloorRevision = 10, but >= applied
@@ -153,7 +153,7 @@ func TestSyncBoundaryWatermarksAcceptedByValidation(t *testing.T) {
 	// validation (the fake store then fails on LoadJournalChanges,
 	// proving the request reached the change-stream stage).
 	store := &fakeSyncStore{binding: baseBinding(), space: baseSpace()}
-	s := NewService(store)
+	s := NewService(store, nil)
 	req := baseRequest()
 	req.AppliedRevision = 10
 	req.ReceivedRevision = 100 // == CurrentRevision, >= JournalFloor

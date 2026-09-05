@@ -3,6 +3,8 @@ package sqlite
 import (
 	"context"
 	"time"
+
+	"pontis/internal/changeset"
 )
 
 // Maintenance methods live on the stores that own their tables; no
@@ -68,6 +70,23 @@ func (s *LibraryStore) JournalGCSpace(ctx context.Context, spaceID string, now t
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE sync_spaces SET journal_floor_revision = MAX(journal_floor_revision, ?), updated_at = ?
 		WHERE id = ?`, floor, now.Format(time.RFC3339Nano), spaceID); err != nil {
+		return 0, 0, err
+	}
+
+	// ChangeSet retention is independent of the journal floor (doc 15 §12):
+	// undo data expires with the undo window, activity rows with the longer
+	// activity retention.
+	undoCutoff := now.Add(-changeset.UndoWindow).Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE changesets SET undo_data = NULL
+		WHERE space_id = ? AND undo_data IS NOT NULL AND created_at < ?`,
+		spaceID, undoCutoff); err != nil {
+		return 0, 0, err
+	}
+	activityCutoff := now.Add(-changeset.ActivityRetention).Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM changesets WHERE space_id = ? AND created_at < ?`,
+		spaceID, activityCutoff); err != nil {
 		return 0, 0, err
 	}
 	return floor, removed, tx.Commit()

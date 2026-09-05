@@ -1,17 +1,17 @@
 // Package library implements the web-side canonical tree access: reading
 // the explorer tree and applying user-initiated CRUD through the canonical
-// executor, plus the activity feed derived from the journal.
+// executor, plus the activity feed derived from ChangeSets (doc 15).
 package library
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
 	"pontis/internal/canonical"
+	"pontis/internal/changeset"
 )
 
 // Store is the read-side persistence contract required by the service.
@@ -20,21 +20,9 @@ type Store interface {
 	GetNode(ctx context.Context, space canonical.SpaceID, id canonical.NodeID) (canonical.Node, error)
 	ListNodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error)
 	ListRootSlots(ctx context.Context, space canonical.SpaceID) ([]canonical.RootSlot, error)
-	ListJournal(ctx context.Context, space canonical.SpaceID, epoch int64, limit int) ([]JournalRow, error)
+	ListChangeSets(ctx context.Context, space canonical.SpaceID, limit int) ([]changeset.ChangeSet, error)
 	DeviceName(ctx context.Context, id string) (string, error)
 	UserName(ctx context.Context, id string) (string, error)
-}
-
-// JournalRow is the storage representation of one committed change.
-type JournalRow struct {
-	Revision       int64
-	ChangeType     string
-	NodeID         string
-	PayloadJSON    string
-	OriginType     string
-	OriginUserID   string
-	OriginDeviceID string
-	CreatedAt      string
 }
 
 // Writer is the write-side contract: a canonical transaction factory.
@@ -54,14 +42,14 @@ const (
 
 // Service implements web-originated tree access.
 type Service struct {
-	store    Store
-	writer   Writer
-	executor *canonical.Executor
+	store      Store
+	writer     Writer
+	changesets *changeset.Service
 }
 
 // NewService returns a library service.
-func NewService(store Store, writer Writer) *Service {
-	return &Service{store: store, writer: writer, executor: canonical.NewExecutor()}
+func NewService(store Store, writer Writer, changesets *changeset.Service) *Service {
+	return &Service{store: store, writer: writer, changesets: changesets}
 }
 
 // Node and root-slot reads.
@@ -134,7 +122,7 @@ func (s *Service) CreateNode(ctx context.Context, space canonical.SpaceID, user 
 		Parent:   p.Parent,
 		BeforeID: p.BeforeID,
 	}
-	if err := s.executor.ApplyTx(ctx, tx, origin, cmd); err != nil {
+	if _, err := s.changesets.RecordNodeOp(ctx, tx, space, origin, cmd); err != nil {
 		return canonical.Node{}, err
 	}
 	created, err := tx.LoadNode(ctx, space, cmd.NodeID)
@@ -189,7 +177,7 @@ func (s *Service) UpdateNode(ctx context.Context, space canonical.SpaceID, user 
 		cmds = append(cmds, canonical.UpdateNodeURL{SpaceID: space, NodeID: node, URL: *p.URL})
 	}
 	if len(cmds) > 0 {
-		if err := s.executor.ApplyTx(ctx, tx, origin, cmds...); err != nil {
+		if _, err := s.changesets.RecordNodeOp(ctx, tx, space, origin, cmds...); err != nil {
 			return canonical.Node{}, err
 		}
 	}
@@ -226,7 +214,7 @@ func (s *Service) MoveNode(ctx context.Context, space canonical.SpaceID, user ca
 	}()
 
 	cmd := canonical.MoveNode{SpaceID: space, NodeID: node, Parent: p.Parent, BeforeID: p.BeforeID}
-	if err := s.executor.ApplyTx(ctx, tx, origin, cmd); err != nil {
+	if _, err := s.changesets.RecordNodeOp(ctx, tx, space, origin, cmd); err != nil {
 		return canonical.Node{}, err
 	}
 	moved, err := tx.LoadNode(ctx, space, node)
@@ -243,20 +231,41 @@ func (s *Service) MoveNode(ctx context.Context, space canonical.SpaceID, user ca
 // DeleteNode removes a node and its subtree.
 func (s *Service) DeleteNode(ctx context.Context, space canonical.SpaceID, user canonical.UserID, node canonical.NodeID) error {
 	origin := canonical.Origin{Type: canonical.OriginUser, UserID: user}
-	return s.executor.Execute(ctx, s.writer, origin, canonical.DeleteNode{SpaceID: space, NodeID: node})
+	tx, err := s.writer.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	if _, err := s.changesets.RecordNodeOp(ctx, tx, space, origin, canonical.DeleteNode{SpaceID: space, NodeID: node}); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 // ActivityEntry is one human-readable item of the space's recent history.
 type ActivityEntry struct {
-	Revision  int64
+	ID        string
 	Timestamp string
 	Actor     string
-	Action    string // create | update | move | delete
+	Action    string // create | update | move | delete | import | publish | transfer | undo
 	Summary   string
+	Undoable  bool
+	Undone    bool
+	Expired   bool
 }
 
-// Activity derives a compact recent-history feed from the journal. The V1
-// web UI renders server-side summaries in the instance default language.
+// Activity derives the user-level history feed from ChangeSets (doc 15
+// §1: Activity is business history, not machine journal). Entries whose
+// undo window passed stay visible but are marked expired.
 func (s *Service) Activity(ctx context.Context, space canonical.SpaceID, limit int) ([]ActivityEntry, error) {
 	sp, err := s.store.GetSpace(ctx, space)
 	if err != nil {
@@ -265,102 +274,81 @@ func (s *Service) Activity(ctx context.Context, space canonical.SpaceID, limit i
 	if limit <= 0 || limit > DefaultActivityLimit {
 		limit = DefaultActivityLimit
 	}
-	rows, err := s.store.ListJournal(ctx, space, sp.Epoch, limit)
+	sets, err := s.store.ListChangeSets(ctx, space, limit)
 	if err != nil {
 		return nil, err
 	}
 
-	// Title resolution for change rows: prefer the current node title;
-	// fall back to a generic object noun after deletion.
-	titles := make(map[canonical.NodeID]string)
-	nodes, _ := s.store.ListNodes(ctx, space)
-	for _, n := range nodes {
-		titles[n.ID] = n.Title
-	}
-
-	out := make([]ActivityEntry, 0, len(rows))
-	for _, row := range rows {
-		actor, err := s.actor(ctx, row)
-		if err != nil {
-			return nil, err
-		}
+	now := time.Now().UTC()
+	out := make([]ActivityEntry, 0, len(sets))
+	for _, cs := range sets {
+		undone := cs.UndoneByChangeSet != ""
 		entry := ActivityEntry{
-			Revision:  row.Revision,
-			Timestamp: row.CreatedAt,
-			Actor:     actor,
-			Action:    mapAction(row.ChangeType),
+			ID:        cs.ID,
+			Timestamp: cs.CreatedAt.Format(time.RFC3339Nano),
+			Actor:     s.changesetActor(ctx, cs),
+			Action:    mapKindAction(cs.Kind),
+			Summary:   cs.Summary,
+			Undone:    undone,
 		}
-		title := titles[canonical.NodeID(row.NodeID)]
-		if title == "" {
-			title = "条目"
-		}
-		switch row.ChangeType {
-		case "create":
-			entry.Summary = fmt.Sprintf("新建了「%s」", title)
-		case "update_title":
-			entry.Summary = fmt.Sprintf("修改了「%s」的标题", title)
-		case "update_url":
-			entry.Summary = fmt.Sprintf("修改了「%s」的链接", title)
-		case "move":
-			entry.Summary = fmt.Sprintf("移动了「%s」", title)
-		case "delete":
-			count := deleteCount(row.PayloadJSON)
-			entry.Summary = fmt.Sprintf("删除了 %d 个条目", count)
-		default:
-			entry.Summary = row.ChangeType
+		if cs.UndoDataJSON != "" && !undone && cs.Epoch == sp.Epoch {
+			if now.Sub(cs.CreatedAt) > changeset.UndoWindow {
+				entry.Expired = true
+			} else {
+				entry.Undoable = true
+			}
 		}
 		out = append(out, entry)
 	}
 	return out, nil
 }
 
-func (s *Service) actor(ctx context.Context, row JournalRow) (string, error) {
-	switch canonical.OriginType(row.OriginType) {
+func (s *Service) changesetActor(ctx context.Context, cs changeset.ChangeSet) string {
+	switch cs.OriginType {
 	case canonical.OriginDevice:
-		name, err := s.store.DeviceName(ctx, row.OriginDeviceID)
-		if err != nil || name == "" {
-			return "浏览器设备", err
+		name, _ := s.store.DeviceName(ctx, string(cs.ActorDeviceID))
+		if name == "" {
+			return "浏览器设备"
 		}
-		return name, nil
+		return name
 	case canonical.OriginUser:
-		name, err := s.store.UserName(ctx, row.OriginUserID)
-		if err != nil || name == "" {
-			return "网页", err
+		name, _ := s.store.UserName(ctx, string(cs.ActorUserID))
+		if name == "" {
+			return "网页"
 		}
-		return name + " (网页)", nil
+		return name + " (网页)"
 	case canonical.OriginImport:
-		return "导入", nil
+		return "导入"
+	case canonical.OriginTransfer:
+		return "跨空间转移"
 	case canonical.OriginSystem, canonical.OriginRecovery:
-		return "系统", nil
+		return "系统"
 	default:
-		return "未知", nil
+		return "未知"
 	}
 }
 
-func mapAction(changeType string) string {
-	switch changeType {
-	case "create":
+func mapKindAction(kind changeset.Kind) string {
+	switch kind {
+	case changeset.KindNodeCreate:
 		return "create"
-	case "update_title", "update_url":
+	case changeset.KindNodeUpdate:
 		return "update"
-	case "move":
+	case changeset.KindNodeMove:
 		return "move"
-	case "delete":
+	case changeset.KindNodeDelete:
 		return "delete"
+	case changeset.KindImport:
+		return "import"
+	case changeset.KindPublication:
+		return "publish"
+	case changeset.KindTransferIn, changeset.KindTransferOut:
+		return "transfer"
+	case changeset.KindUndo:
+		return "undo"
 	default:
 		return "update"
 	}
-}
-
-// deleteCount extracts {"count":N} from a delete payload; 1 on doubt.
-func deleteCount(payloadJSON string) int64 {
-	var p struct {
-		Count int64 `json:"count"`
-	}
-	if err := json.Unmarshal([]byte(payloadJSON), &p); err != nil || p.Count <= 0 {
-		return 1
-	}
-	return p.Count
 }
 
 // Service-level errors carrying HTTP semantics.

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"pontis/internal/canonical"
+	"pontis/internal/changeset"
 )
 
 // TreeSource reads the canonical tree.
@@ -31,12 +32,12 @@ type Writer interface {
 type EntryAction string
 
 const (
-	ActionCreate     EntryAction = "create"
-	ActionUpdate     EntryAction = "update"
-	ActionMove       EntryAction = "move"
-	ActionDelete     EntryAction = "delete"
-	ActionKeep       EntryAction = "keep"
-	ActionAmbiguous  EntryAction = "ambiguous"
+	ActionCreate      EntryAction = "create"
+	ActionUpdate      EntryAction = "update"
+	ActionMove        EntryAction = "move"
+	ActionDelete      EntryAction = "delete"
+	ActionKeep        EntryAction = "keep"
+	ActionAmbiguous   EntryAction = "ambiguous"
 	ActionUnsupported EntryAction = "unsupported"
 )
 
@@ -51,16 +52,16 @@ type Entry struct {
 
 // Plan is the persisted-in-memory result of Parse → Validate → Plan.
 type Plan struct {
-	ID            string            `json:"plan_id"`
-	SpaceID       string            `json:"space_id"`
-	Format        Format            `json:"format"`
-	Total         int               `json:"total"`
-	Counts        map[string]int    `json:"counts"`
-	Warnings      []string          `json:"warnings"`
-	Entries       []Entry           `json:"entries"`
-	BoundRevision int64             `json:"bound_revision"`
-	CreatedAt     time.Time         `json:"-"`
-	Tree          *ImportNode       `json:"-"`
+	ID            string         `json:"plan_id"`
+	SpaceID       string         `json:"space_id"`
+	Format        Format         `json:"format"`
+	Total         int            `json:"total"`
+	Counts        map[string]int `json:"counts"`
+	Warnings      []string       `json:"warnings"`
+	Entries       []Entry        `json:"entries"`
+	BoundRevision int64          `json:"bound_revision"`
+	CreatedAt     time.Time      `json:"-"`
+	Tree          *ImportNode    `json:"-"`
 }
 
 // ApplyResult reports real counters from the committed transaction.
@@ -77,16 +78,17 @@ const planTTL = time.Hour
 
 // Service implements export and import planning/application.
 type Service struct {
-	trees  TreeSource
-	writer Writer
+	trees      TreeSource
+	writer     Writer
+	changesets *changeset.Service
 
 	mu    sync.Mutex
 	plans map[string]Plan
 }
 
 // NewService returns a transfer service.
-func NewService(trees TreeSource, writer Writer) *Service {
-	return &Service{trees: trees, writer: writer, plans: map[string]Plan{}}
+func NewService(trees TreeSource, writer Writer, changesets *changeset.Service) *Service {
+	return &Service{trees: trees, writer: writer, changesets: changesets, plans: map[string]Plan{}}
 }
 
 // --- export (side-effect free) ---
@@ -323,7 +325,9 @@ func (s *Service) Preview(ctx context.Context, space canonical.SpaceID, format F
 }
 
 // Apply re-plans against the concrete target parent with the chosen
-// strategy and commits the result through the canonical executor.
+// strategy and commits the result through the canonical executor. The
+// whole apply — replace deletes plus every merge create — is ONE ChangeSet
+// with an atomic Before Image, so it can be undone as a whole (doc 15 §8).
 func (s *Service) Apply(ctx context.Context, user canonical.UserID, space canonical.SpaceID, planID string, parent canonical.ParentRef, strategy string) (ApplyResult, error) {
 	s.mu.Lock()
 	plan, ok := s.plans[planID]
@@ -355,8 +359,13 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, space canoni
 		}
 	}()
 
+	rec := s.changesets.BeginBatch(space, changeset.KindImport, origin, true)
+
 	var res ApplyResult
 	if strategy == "replace" {
+		// Replace clears the target's children first — as journaled,
+		// tombstoned DeleteNode commands so sync clients observe the
+		// removal and the undo has a full Before Image.
 		children, err := tx.Children(ctx, space, parent)
 		if err != nil {
 			return ApplyResult{}, err
@@ -366,10 +375,8 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, space canoni
 			if err != nil {
 				return ApplyResult{}, err
 			}
-			for i := len(ids) - 1; i >= 0; i-- {
-				if err := tx.DeleteNodes(ctx, space, []canonical.NodeID{ids[i]}); err != nil {
-					return ApplyResult{}, err
-				}
+			if err := rec.Apply(ctx, tx, canonical.DeleteNode{SpaceID: space, NodeID: child.ID}); err != nil {
+				return ApplyResult{}, err
 			}
 			res.Deleted += int64(len(ids))
 		}
@@ -425,7 +432,10 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, space canoni
 				if err != nil {
 					return err
 				}
-				if err := s.applyCreate(ctx, tx, origin, space, id, canonical.NodeTypeFolder, c.Title, "", parent); err != nil {
+				if err := rec.Apply(ctx, tx, canonical.CreateNode{
+					SpaceID: space, NodeID: id, Type: canonical.NodeTypeFolder,
+					Title: c.Title, Parent: parent,
+				}); err != nil {
 					return err
 				}
 				byTitle[c.Title] = id
@@ -444,7 +454,10 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, space canoni
 			if err != nil {
 				return err
 			}
-			if err := s.applyCreate(ctx, tx, origin, space, id, canonical.NodeTypeBookmark, c.Title, c.URL, parent); err != nil {
+			if err := rec.Apply(ctx, tx, canonical.CreateNode{
+				SpaceID: space, NodeID: id, Type: canonical.NodeTypeBookmark,
+				Title: c.Title, URL: c.URL, Parent: parent,
+			}); err != nil {
 				return err
 			}
 			byURL[c.URL] = id
@@ -453,6 +466,14 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, space canoni
 		return nil
 	}
 	if err := walk(*plan.Tree, parent, byTitle, byURL); err != nil {
+		return ApplyResult{}, err
+	}
+
+	summary := fmt.Sprintf("导入合并：新增 %d 项", res.Created)
+	if strategy == "replace" {
+		summary = fmt.Sprintf("导入替换：删除 %d 项，新增 %d 项", res.Deleted, res.Created)
+	}
+	if _, err := rec.Finish(ctx, tx, summary); err != nil {
 		return ApplyResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -464,12 +485,6 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, space canoni
 	delete(s.plans, planID)
 	s.mu.Unlock()
 	return res, nil
-}
-
-func (s *Service) applyCreate(ctx context.Context, tx canonical.Tx, origin canonical.Origin, space canonical.SpaceID, id canonical.NodeID, typ canonical.NodeType, title, url string, parent canonical.ParentRef) error {
-	return canonical.NewExecutor().ApplyTx(ctx, tx, origin, canonical.CreateNode{
-		SpaceID: space, NodeID: id, Type: typ, Title: title, URL: url, Parent: parent,
-	})
 }
 
 // Service-level errors mapped by the HTTP layer.

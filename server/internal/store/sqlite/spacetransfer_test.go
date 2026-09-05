@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"pontis/internal/canonical"
+	"pontis/internal/changeset"
 	"pontis/internal/spacetransfer"
 )
 
@@ -36,7 +37,7 @@ func setupTransferTest(t *testing.T) (*spacetransfer.Service, *Store) {
 			t.Fatal(err)
 		}
 	}
-	return spacetransfer.NewService(store), store
+	return spacetransfer.NewService(store, changeset.NewService(NewChangeSetStore(db))), store
 }
 
 func seedTransferSource(t *testing.T, store *Store) canonical.NodeID {
