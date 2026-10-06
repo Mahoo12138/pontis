@@ -15,6 +15,7 @@ import (
 
 	"pontis/internal/auth"
 	"pontis/internal/device"
+	"pontis/internal/reconcile"
 	"pontis/internal/space"
 	"pontis/internal/store/sqlite"
 	"pontis/internal/sync"
@@ -40,6 +41,7 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 		Devices:    device.NewService(sqlite.NewDeviceStore(db)),
 		Spaces:     space.NewService(sqlite.NewSpaceStore(db)),
 		Sync:       sync.NewService(sqlite.NewSyncStore(db)),
+		Reconcile:  reconcile.NewService(sqlite.NewReconcileStore(db)),
 		InstanceID: instanceID,
 		Logger:     slog.New(slog.DiscardHandler),
 	}

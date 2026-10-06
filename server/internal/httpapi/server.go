@@ -14,6 +14,7 @@ import (
 
 	"pontis/internal/auth"
 	"pontis/internal/device"
+	"pontis/internal/reconcile"
 	"pontis/internal/space"
 	"pontis/internal/sync"
 )
@@ -29,10 +30,11 @@ const SessionCookie = "pontis_session"
 
 // Server wires the HTTP API onto the domain services.
 type Server struct {
-	Auth    *auth.Service
-	Devices *device.Service
-	Spaces  *space.Service
-	Sync    *sync.Service
+	Auth      *auth.Service
+	Devices   *device.Service
+	Spaces    *space.Service
+	Sync      *sync.Service
+	Reconcile *reconcile.Service
 
 	// InstanceID identifies this server installation across URL changes.
 	InstanceID string
@@ -96,6 +98,19 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/v1/device/bindings", s.handleListBindings)
 		r.Post("/api/v1/device/bindings", s.handleCreateBinding)
 		r.Post("/api/v1/sync/bindings/{bindingID}", s.handleSync)
+
+		// Snapshots and reconciliation (doc 08 §9-11).
+		r.Post("/api/v1/sync/bindings/{bindingID}/client-snapshots", s.handleSubmitClientSnapshot)
+		r.Post("/api/v1/sync/bindings/{bindingID}/server-snapshots", s.handleCreateServerSnapshot)
+		r.Get("/api/v1/sync/server-snapshots/{snapshotID}", s.handleGetServerSnapshot)
+		r.Get("/api/v1/sync/server-snapshots/{snapshotID}/nodes", s.handleListServerSnapshotNodes)
+		r.Post("/api/v1/sync/bindings/{bindingID}/reconciliations", s.handleCreateReconciliation)
+		r.Get("/api/v1/sync/reconciliations/{reconciliationID}", s.handleGetReconciliation)
+		r.Post("/api/v1/sync/reconciliations/{reconciliationID}/plan", s.handlePlanReconciliation)
+		r.Put("/api/v1/sync/reconciliations/{reconciliationID}/decisions", s.handleDecideReconciliation)
+		r.Post("/api/v1/sync/reconciliations/{reconciliationID}/commit", s.handleCommitReconciliation)
+		r.Get("/api/v1/sync/reconciliations/{reconciliationID}/steps", s.handleReconciliationSteps)
+		r.Post("/api/v1/sync/reconciliations/{reconciliationID}/complete", s.handleCompleteReconciliation)
 	})
 
 	return r
