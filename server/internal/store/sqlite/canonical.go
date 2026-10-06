@@ -109,6 +109,17 @@ func scanNode(row interface{ Scan(dest ...any) error }) (canonical.Node, error) 
 	return n, nil
 }
 
+// EnsureRootSlot creates the root slot if it does not exist yet
+// (recovery containers, doc 04 §11).
+func (t *canonTx) EnsureRootSlot(ctx context.Context, space canonical.SpaceID, key, displayName string) error {
+	_, err := t.tx.ExecContext(ctx, `
+		INSERT INTO root_slots (space_id, key, display_name, position, created_at)
+		SELECT ?, ?, ?, COALESCE(MAX(position) + 1, 0), ?
+		FROM root_slots WHERE space_id = ?`,
+		string(space), key, displayName, formatTime(time.Now().UTC()), string(space))
+	return err
+}
+
 func (t *canonTx) Children(ctx context.Context, space canonical.SpaceID, parent canonical.ParentRef) ([]canonical.Node, error) {
 	var query string
 	var args []any

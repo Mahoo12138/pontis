@@ -49,6 +49,18 @@ type Tx interface {
 	// AppendJournal records a committed Canonical Change.
 	AppendJournal(ctx context.Context, ch Change) error
 
+	// EnsureRootSlot creates the root slot if it does not exist yet
+	// (recovery containers, doc 04 §11).
+	EnsureRootSlot(ctx context.Context, space SpaceID, key, displayName string) error
+
+	// ChangeSets: user-facing activity history and undo (doc 15).
+	InsertChangeSet(ctx context.Context, cs ChangeSet) error
+	InsertUndoData(ctx context.Context, data UndoData) error
+	UpdateUndoData(ctx context.Context, data UndoData) error
+	LoadChangeSet(ctx context.Context, space SpaceID, id string) (ChangeSet, error)
+	LoadUndoData(ctx context.Context, changeSetID string) (UndoData, bool, error)
+	ListChangeSets(ctx context.Context, space SpaceID, limit int) ([]ChangeSet, bool, error)
+
 	// InsertTombstones records deleted node identity for all ids at the
 	// given epoch/revision.
 	InsertTombstones(ctx context.Context, space SpaceID, epoch, revision int64, ids []NodeID, deletedAt time.Time) error

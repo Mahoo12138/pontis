@@ -136,16 +136,6 @@ func (t *syncTxImpl) InsertReceipt(ctx context.Context, r sync.Receipt) error {
 	return err
 }
 
-// EnsureRootSlot creates the root slot if it does not exist yet.
-func (t *syncTxImpl) EnsureRootSlot(ctx context.Context, space canonical.SpaceID, key, displayName string) error {
-	_, err := t.canonTx.tx.ExecContext(ctx, `
-		INSERT INTO root_slots (space_id, key, display_name, position, created_at)
-		SELECT ?, ?, ?, COALESCE(MAX(position) + 1, 0), ?
-		FROM root_slots WHERE space_id = ?`,
-		string(space), key, displayName, formatTime(time.Now().UTC()), string(space))
-	return err
-}
-
 // LoadJournalOrigin returns the origin binding and client seq of the
 // journal entry at (epoch, revision).
 func (t *syncTxImpl) LoadJournalOrigin(ctx context.Context, space canonical.SpaceID, epoch, revision int64) (string, *int64, bool, error) {
