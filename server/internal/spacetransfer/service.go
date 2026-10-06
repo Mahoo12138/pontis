@@ -8,6 +8,7 @@ package spacetransfer
 
 import (
 	"context"
+	"sort"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -334,6 +335,9 @@ func mappingSlice(m map[canonical.NodeID]canonical.NodeID) []NodeMapping {
 	for src, tgt := range m {
 		out = append(out, NodeMapping{SourceNodeID: src, TargetNodeID: tgt})
 	}
+	// Deterministic order: the idempotent replay must reproduce the
+	// original response exactly, and map iteration would not.
+	sort.Slice(out, func(i, j int) bool { return out[i].SourceNodeID < out[j].SourceNodeID })
 	return out
 }
 

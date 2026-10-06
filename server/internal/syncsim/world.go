@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"pontis/internal/canonical"
+	"pontis/internal/changeset"
 	"pontis/internal/device"
 	"pontis/internal/reconcile"
 	"pontis/internal/space"
@@ -28,6 +29,8 @@ type World struct {
 	Devices   *device.Service
 	Sync      *sync.Service
 	Reconcile *reconcile.Service
+
+	changesets *changeset.Service
 
 	Browsers []*FakeBrowser
 
@@ -78,7 +81,8 @@ func NewWorld(t *testing.T) *World {
 func (w *World) wireServices() {
 	w.Space = space.NewService(sqlite.NewSpaceStore(w.db))
 	w.Devices = device.NewService(sqlite.NewDeviceStore(w.db))
-	w.Sync = sync.NewService(sqlite.NewSyncStore(w.db))
+	w.changesets = changeset.NewService(sqlite.NewChangeSetStore(w.db))
+	w.Sync = sync.NewService(sqlite.NewSyncStore(w.db), w.changesets)
 	w.Reconcile = reconcile.NewService(sqlite.NewReconcileStore(w.db))
 }
 

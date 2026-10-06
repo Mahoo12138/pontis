@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@mantine/core": "^7.15.0",
+    "@pontis/protocol": "workspace:*",
     "dexie": "^4.0.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
