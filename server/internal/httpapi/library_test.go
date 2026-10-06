@@ -97,21 +97,47 @@ func TestLibraryNodeLifecycle(t *testing.T) {
 		t.Fatalf("activity entries = %v", body)
 	}
 	first := activity[0].(map[string]any)
-	if first["action"] != "move" || first["undoable"] != false || first["id"] == "" {
+	if first["action"] != "move" || first["undoable"] != true || first["id"] == "" {
 		t.Fatalf("newest activity entry = %v", first)
 	}
 
-	// Delete the folder (empty now): 204 and gone from the list.
+	// Undo the move: the bookmark returns to its folder (doc 15 §2: a
+	// new revision, never a rollback).
+	undoURL := st.ts.URL + "/api/v1/spaces/" + st.spaceID + "/activity/" + first["id"].(string) + "/undo"
+	code, body = doJSON(t, "POST", undoURL, auth, nil)
+	if code != http.StatusOK || body["status"] != "undone" {
+		t.Fatalf("undo = %d %v", code, body)
+	}
+	_, body = doJSON(t, "GET", st.ts.URL+"/api/v1/spaces/"+st.spaceID+"/nodes", auth, nil)
+	nodes = body["nodes"].([]any)
+	var restoredParent any
+	for _, raw := range nodes {
+		n := raw.(map[string]any)
+		if n["id"] == bookmarkID {
+			restoredParent = n["parent_id"]
+		}
+	}
+	if restoredParent != folderID {
+		t.Fatalf("bookmark parent after undo = %v, want the folder", restoredParent)
+	}
+
+	// Undoing the same ChangeSet again is rejected: the restored node is
+	// live and the plan requires review (doc 15 §4).
+	code, body = doJSON(t, "POST", undoURL, auth, nil)
+	if code != http.StatusConflict || errCode(t, body) != "REVIEW_REQUIRED" {
+		t.Fatalf("second undo = %d %v", code, body)
+	}
+
+	// Delete the folder: the undo moved the bookmark back inside, so the
+	// recursive delete takes both.
 	code, body = doJSON(t, "DELETE", st.ts.URL+"/api/v1/spaces/"+st.spaceID+"/nodes/"+folderID, auth, nil)
 	if code != http.StatusNoContent {
 		t.Fatalf("delete = %d %v", code, body)
 	}
 	_, body = doJSON(t, "GET", st.ts.URL+"/api/v1/spaces/"+st.spaceID+"/nodes", auth, nil)
-	nodes = body["nodes"].([]any)
-	if len(nodes) != 1 {
+	if nodes = body["nodes"].([]any); len(nodes) != 0 {
 		t.Fatalf("node list after delete = %v", body)
 	}
-
 	// Deleting an unknown node is a 404.
 	code, body = doJSON(t, "DELETE", st.ts.URL+"/api/v1/spaces/"+st.spaceID+"/nodes/"+folderID, auth, nil)
 	if code != http.StatusNotFound || errCode(t, body) != "NODE_NOT_FOUND" {

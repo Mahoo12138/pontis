@@ -37,10 +37,6 @@ type Tx interface {
 	LoadReceipt(ctx context.Context, bindingID, opID string) (Receipt, bool, error)
 	InsertReceipt(ctx context.Context, r Receipt) error
 
-	// EnsureRootSlot creates the root slot if it does not exist yet
-	// (used for Recovered/<Device> containers).
-	EnsureRootSlot(ctx context.Context, space canonical.SpaceID, key, displayName string) error
-
 	// LoadJournalOrigin returns the origin binding and client seq of the
 	// journal entry at (epoch, revision); used for same-binding
 	// causality decisions.

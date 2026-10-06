@@ -837,8 +837,19 @@ func (s *Service) Commit(ctx context.Context, sessionID string) (Session, error)
 			}
 			cmds = append(cmds, cmd)
 		}
-		if err := s.executor.ApplyTx(ctx, tx, origin, cmds...); err != nil {
-			return Session{}, err
+		// An empty plan (e.g. empty space meeting an empty browser)
+		// records no ChangeSet at all.
+		if len(cmds) > 0 {
+			planSummary := "初始导入浏览器书签"
+			if sess.Type == TypeRecovery {
+				planSummary = "恢复合并"
+			}
+			if _, err := s.executor.ApplyTxChangeSet(ctx, tx, origin, space.ID, canonical.ChangeSetInput{
+				Kind:    "reconciliation",
+				Summary: planSummary,
+			}, cmds...); err != nil {
+				return Session{}, err
+			}
 		}
 		head, err := tx.LoadSpace(ctx, sess.SpaceID)
 		if err != nil {

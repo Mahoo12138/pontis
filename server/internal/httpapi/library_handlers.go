@@ -296,6 +296,41 @@ func (s *Server) handleSettings(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// handleUndoActivity applies the inverse of one ChangeSet (doc 15 §8).
+// Review-required plans surface as 409 with stable codes; newer state
+// is never clobbered.
+func (s *Server) handleUndoActivity(w http.ResponseWriter, r *http.Request) {
+	space, ok := s.requireOwnedSpace(w, r)
+	if !ok {
+		return
+	}
+	u, _ := currentUser(r)
+	plan, err := s.Library.UndoChangeSet(r.Context(), space.ID, canonical.UserID(u.ID),
+		chi.URLParam(r, "changeSetID"))
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	switch plan.Status {
+	case canonical.UndoClean:
+		if plan.ChangeSet.ID == "" {
+			writeJSON(w, http.StatusOK, map[string]any{"status": "nothing_to_undo"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":         "undone",
+			"change_set_id":  plan.ChangeSet.ID,
+			"last_revision":  plan.ChangeSet.LastRevision,
+		})
+	case canonical.UndoReviewRequired:
+		s.writeError(w, r, http.StatusConflict, "REVIEW_REQUIRED", "undoing would clobber newer state")
+	case canonical.UndoExpired:
+		s.writeError(w, r, http.StatusConflict, "UNDO_EXPIRED", "the undo window has passed")
+	default:
+		s.writeError(w, r, http.StatusConflict, "NOT_UNDOABLE", "this operation cannot be undone")
+	}
+}
+
 // writeLibraryError maps library failures onto the unified envelope.
 func (s *Server) writeLibraryError(w http.ResponseWriter, r *http.Request, err error) {
 	status := http.StatusInternalServerError

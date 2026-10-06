@@ -97,6 +97,7 @@ func (s *Server) Router() http.Handler {
 		r.Patch("/api/v1/spaces/{spaceID}/nodes/{nodeID}/move", s.handleMoveNode)
 		r.Delete("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleDeleteNode)
 		r.Get("/api/v1/spaces/{spaceID}/activity", s.handleListActivity)
+		r.Post("/api/v1/spaces/{spaceID}/activity/{changeSetID}/undo", s.handleUndoActivity)
 		r.Get("/api/v1/devices", s.handleListDevices)
 		r.Get("/api/v1/settings", s.handleSettings)
 	})

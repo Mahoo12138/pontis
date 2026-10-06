@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"pontis/internal/canonical"
-	"pontis/internal/library"
 )
 
 // LibraryStore implements library.Store on top of SQLite.
@@ -67,35 +66,6 @@ func (s *LibraryStore) ListRootSlots(ctx context.Context, space canonical.SpaceI
 		slots = append(slots, slot)
 	}
 	return slots, rows.Err()
-}
-
-// ListRecentJournal returns the newest journal entries of the space's
-// current epoch, newest first.
-func (s *LibraryStore) ListRecentJournal(ctx context.Context, space canonical.SpaceID, limit int) ([]library.JournalRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT j.epoch, j.revision, j.change_type, COALESCE(j.node_id, ''), j.payload,
-		       COALESCE(j.origin_type, ''), COALESCE(j.origin_user_id, ''), COALESCE(j.origin_device_id, ''), j.created_at
-		FROM journal j
-		JOIN sync_spaces sp ON sp.id = j.space_id AND sp.epoch = j.epoch
-		WHERE j.space_id = ?
-		ORDER BY j.revision DESC
-		LIMIT ?`, string(space), limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []library.JournalRow
-	for rows.Next() {
-		var row library.JournalRow
-		var createdAt string
-		if err := rows.Scan(&row.Epoch, &row.Revision, &row.Type, &row.NodeID, &row.PayloadJSON,
-			&row.OriginType, &row.OriginUserID, &row.OriginDeviceID, &createdAt); err != nil {
-			return nil, err
-		}
-		row.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-		out = append(out, row)
-	}
-	return out, rows.Err()
 }
 
 // DeviceName resolves a device display name.
