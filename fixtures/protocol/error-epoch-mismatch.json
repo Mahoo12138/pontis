@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "EPOCH_MISMATCH",
+    "message": "canonical epoch changed",
+    "request_id": "req_fixture"
+  }
+}

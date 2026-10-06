@@ -1,0 +1,14 @@
+{
+  "op_id": "0198c0de-7000-7000-8000-000000000001",
+  "client_seq": 42,
+  "base_revision": 100,
+  "type": "create",
+  "node_id": "0198c0de-7000-7000-8000-0000000000aa",
+  "node_type": "bookmark",
+  "title": "GitHub",
+  "url": "https://github.com",
+  "parent": {
+    "type": "node",
+    "id": "0198c0de-7000-7000-8000-0000000000bb"
+  }
+}

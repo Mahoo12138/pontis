@@ -1,0 +1,12 @@
+{
+  "op_id": "0198c0de-7000-7000-8000-000000000002",
+  "client_seq": 43,
+  "base_revision": 100,
+  "type": "move",
+  "node_id": "0198c0de-7000-7000-8000-0000000000aa",
+  "parent": {
+    "type": "root",
+    "key": "main"
+  },
+  "before_id": "0198c0de-7000-7000-8000-0000000000cc"
+}

@@ -1,0 +1,48 @@
+{
+  "protocol_version": 1,
+  "epoch": 1,
+  "journal_floor_revision": 0,
+  "from_revision": 121,
+  "through_revision": 122,
+  "server_revision": 130,
+  "has_more": false,
+  "operation_results": [
+    {
+      "op_id": "0198c0de-7000-7000-8000-000000000001",
+      "client_seq": 42,
+      "status": "APPLIED",
+      "reason": "",
+      "result_revision": 121,
+      "settle_after_revision": 121
+    }
+  ],
+  "changes": [
+    {
+      "revision": 121,
+      "type": "create",
+      "node_id": "0198c0de-7000-7000-8000-0000000000aa",
+      "payload": {
+        "type": "bookmark",
+        "title": "GitHub",
+        "url": "https://github.com",
+        "parent": {
+          "type": "node",
+          "id": "0198c0de-7000-7000-8000-0000000000bb"
+        },
+        "position": 3
+      }
+    },
+    {
+      "revision": 122,
+      "type": "move",
+      "node_id": "0198c0de-7000-7000-8000-0000000000aa",
+      "payload": {
+        "parent": {
+          "type": "root",
+          "key": "main"
+        },
+        "position": 0
+      }
+    }
+  ]
+}
