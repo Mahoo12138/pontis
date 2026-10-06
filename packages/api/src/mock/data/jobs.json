@@ -1,0 +1,92 @@
+{
+  "jobs": [
+    {
+      "id": "job001",
+      "type": "link_check",
+      "status": "running",
+      "owner": "admin",
+      "space_name": "个人",
+      "phase": "检查链接可达性",
+      "progress": { "current": 14, "total": 22 },
+      "attempt": 1,
+      "max_attempts": 3,
+      "scheduled_at": "2026-08-29T07:40:00Z",
+      "started_at": "2026-08-29T07:40:02Z"
+    },
+    {
+      "id": "job002",
+      "type": "backup",
+      "status": "succeeded",
+      "owner": "admin",
+      "space_name": "个人",
+      "phase": "已完成",
+      "attempt": 1,
+      "max_attempts": 3,
+      "scheduled_at": "2026-08-29T03:00:00Z",
+      "started_at": "2026-08-29T03:00:01Z",
+      "finished_at": "2026-08-29T03:00:09Z"
+    },
+    {
+      "id": "job003",
+      "type": "maintenance",
+      "status": "succeeded",
+      "owner": "system",
+      "phase": "journal/tombstone GC 完成",
+      "attempt": 1,
+      "max_attempts": 1,
+      "scheduled_at": "2026-08-29T02:30:00Z",
+      "started_at": "2026-08-29T02:30:00Z",
+      "finished_at": "2026-08-29T02:31:12Z"
+    },
+    {
+      "id": "job004",
+      "type": "backup",
+      "status": "retry_wait",
+      "owner": "xiaoman",
+      "space_name": "工作",
+      "phase": "等待第 2 次尝试",
+      "attempt": 1,
+      "max_attempts": 3,
+      "scheduled_at": "2026-08-28T22:00:00Z",
+      "started_at": "2026-08-28T22:00:01Z",
+      "error": "存储后端暂时不可用(S3 timeout),将按指数退避重试"
+    },
+    {
+      "id": "job005",
+      "type": "import",
+      "status": "failed",
+      "owner": "chenmo",
+      "space_name": "工作",
+      "phase": "解析失败",
+      "attempt": 3,
+      "max_attempts": 3,
+      "scheduled_at": "2026-08-27T15:00:00Z",
+      "started_at": "2026-08-27T15:00:00Z",
+      "finished_at": "2026-08-27T15:00:03Z",
+      "error": "导入文件不是合法的 Netscape HTML / Native JSON(fatal,不再重试)"
+    },
+    {
+      "id": "job006",
+      "type": "link_check",
+      "status": "cancelled",
+      "owner": "admin",
+      "space_name": "工作",
+      "phase": "已取消",
+      "attempt": 1,
+      "max_attempts": 3,
+      "scheduled_at": "2026-08-26T11:00:00Z",
+      "started_at": "2026-08-26T11:00:00Z",
+      "finished_at": "2026-08-26T11:02:24Z"
+    },
+    {
+      "id": "job007",
+      "type": "email",
+      "status": "queued",
+      "owner": "system",
+      "phase": "排队中",
+      "attempt": 0,
+      "max_attempts": 3,
+      "scheduled_at": "2026-08-29T08:00:00Z"
+    }
+  ]
+}

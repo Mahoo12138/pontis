@@ -1,11 +1,15 @@
 import { client } from '../client';
-import type { ActivityListResponse, UndoResponse } from '../types';
+import type { ActivityListResponse, UndoActivityResult } from '../types';
 
 export function listActivity(spaceId: string) {
   return client.get<ActivityListResponse>(`/spaces/${spaceId}/activity`);
 }
 
-/** Applies the inverse of one ChangeSet as a new ChangeSet (doc 15). */
+/**
+ * Undo one ChangeSet. Resolves with the clean result; rejects with an
+ * ApiError whose `details.reasons` explain review/expiry blockers
+ * (REVIEW_REQUIRED, UNDO_EXPIRED, NOT_UNDOABLE, ALREADY_UNDONE).
+ */
 export function undoActivity(spaceId: string, changeSetId: string) {
-  return client.post<UndoResponse>(`/spaces/${spaceId}/activity/${changeSetId}/undo`);
+  return client.post<UndoActivityResult>(`/spaces/${spaceId}/changesets/${changeSetId}/undo`);
 }

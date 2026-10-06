@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import type { Node, ParentRef } from '@pontis/api';
@@ -10,6 +10,9 @@ import NodeContextMenu from '../components/explorer/NodeContextMenu';
 import type { ContextMenuPos } from '../components/explorer/NodeContextMenu';
 import { NewNodeModal, ConfirmDeleteDialog } from '../components/explorer/node-modals';
 import type { NewNodeMode } from '../components/explorer/node-modals';
+import TransferModal from '../components/explorer/TransferModal';
+import ImportModal from '../components/transfer/ImportModal';
+import ExportModal from '../components/transfer/ExportModal';
 import Inspector from '../components/inspector/Inspector';
 import ErrorState from '../components/common/ErrorState';
 import {
@@ -27,6 +30,7 @@ import type { ExplorerFilter } from '../features/explorer';
 
 export default function SpaceExplorerPage() {
   const { spaceId } = useParams();
+  const navigate = useNavigate();
   const [filter, setFilter] = useState<ExplorerFilter>('all');
 
   const { data: nodesData, isLoading, isError, refetch } = useNodes(spaceId);
@@ -44,6 +48,9 @@ export default function SpaceExplorerPage() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [menu, setMenu] = useState<(ContextMenuPos & { nodeId: string }) | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [transferNode, setTransferNode] = useState<Node | null>(null);
 
   const spaceName = spacesData?.spaces?.find((s) => s.id === spaceId)?.name ?? '空间';
 
@@ -181,6 +188,10 @@ export default function SpaceExplorerPage() {
         onFilterChange={setFilter}
         inspectorOpen={inspectorOpen}
         onToggleInspector={() => setInspectorOpen((v) => !v)}
+        onImport={() => setImportOpen(true)}
+        onExport={() => setExportOpen(true)}
+        onCheckLinks={() => navigate(`/spaces/${spaceId}/organizer`)}
+        onBackups={() => navigate(`/spaces/${spaceId}/backups`)}
       />
       <div className={contentRegion} style={{ display: 'flex' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -231,6 +242,7 @@ export default function SpaceExplorerPage() {
           setCreateMode(mode);
         }}
         onDelete={() => setDeleteOpen(true)}
+        onTransfer={(n) => setTransferNode(n)}
       />
 
       <NewNodeModal
@@ -248,6 +260,27 @@ export default function SpaceExplorerPage() {
         pending={crud.remove.isPending}
         onClose={() => setDeleteOpen(false)}
         onConfirm={handleDeleteConfirm}
+      />
+
+      <ImportModal
+        spaceId={spaceId ?? ''}
+        spaceName={spaceName}
+        opened={importOpen}
+        onClose={() => setImportOpen(false)}
+      />
+
+      <ExportModal
+        spaceId={spaceId ?? ''}
+        spaceName={spaceName}
+        opened={exportOpen}
+        onClose={() => setExportOpen(false)}
+      />
+
+      <TransferModal
+        opened={transferNode !== null}
+        sourceSpaceId={spaceId ?? ''}
+        node={transferNode}
+        onClose={() => setTransferNode(null)}
       />
     </>
   );

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"pontis/internal/canonical"
+	"pontis/internal/changeset"
 	"pontis/internal/device"
 )
 
@@ -22,6 +23,10 @@ type Store interface {
 	// LoadJournalChanges returns journal rows of one epoch ordered by
 	// revision, starting at fromRevision (inclusive), at most limit rows.
 	LoadJournalChanges(ctx context.Context, space canonical.SpaceID, epoch, fromRevision int64, limit int) ([]JournalChange, error)
+
+	// LoadSnapshotNodes returns every canonical node of the space for a
+	// snapshot rebuild, ordered deterministically (root key, position, id).
+	LoadSnapshotNodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error)
 
 	// UpdateBindingSync persists the binding watermarks reported by the
 	// client after a completed round.
@@ -45,13 +50,14 @@ type Tx interface {
 
 // Service implements the /sync protocol core.
 type Service struct {
-	store    Store
-	executor *canonical.Executor
+	store      Store
+	changesets *changeset.Service
 }
 
-// NewService returns a sync service backed by store.
-func NewService(store Store) *Service {
-	return &Service{store: store, executor: canonical.NewExecutor()}
+// NewService returns a sync service backed by store. Every applied device
+// operation is recorded as an undoable ChangeSet (doc 15).
+func NewService(store Store, changesets *changeset.Service) *Service {
+	return &Service{store: store, changesets: changesets}
 }
 
 // Sync executes one /sync round: validate binding continuity, process

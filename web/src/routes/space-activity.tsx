@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Skeleton, Text } from '@mantine/core';
@@ -8,18 +8,18 @@ import {
   IconPencil,
   IconTrash,
   IconArrowForwardUp,
+  IconArrowBackUp,
   IconHistory,
-  IconArrowsLeft,
-  IconSparkles,
+  IconDownload,
+  IconWorld,
+  IconArrowsExchange,
 } from '@tabler/icons-react';
-import { ApiError } from '@pontis/api';
-import { undoActivity } from '@pontis/api/endpoints/activity';
-import type { ActivityAction, ActivityEntry } from '@pontis/api';
+import { ApiError, type ActivityAction, type ActivityEntry } from '@pontis/api';
 import Header from '../components/app-shell/Header';
 import ErrorState from '../components/common/ErrorState';
 import { contentRegion } from '../styles/app-shell.css';
 import { tokens } from '../styles/semantic-tokens.css';
-import { useActivity } from '../hooks/use-activity';
+import { useActivity, useUndoActivity } from '../hooks/use-activity';
 import { useSpaces } from '../hooks/use-spaces';
 import { formatDayLabel, formatShortTime } from '../lib/format';
 
@@ -28,8 +28,10 @@ const ACTION_META: Record<ActivityAction, { icon: typeof IconPlus; color: string
   update: { icon: IconPencil, color: 'var(--mantine-color-accentBlue-6)', label: '修改' },
   move: { icon: IconArrowForwardUp, color: 'var(--mantine-color-accentBlue-6)', label: '移动' },
   delete: { icon: IconTrash, color: 'var(--mantine-color-errorRed-6)', label: '删除' },
-  undo: { icon: IconArrowsLeft, color: 'var(--mantine-color-coolGray-6)', label: '撤销' },
-  reconciliation: { icon: IconSparkles, color: 'var(--mantine-color-grape-6)', label: '对账' },
+  import: { icon: IconDownload, color: 'var(--mantine-color-accentBlue-6)', label: '导入' },
+  publish: { icon: IconWorld, color: 'var(--mantine-color-healthyGreen-6)', label: '订阅' },
+  transfer: { icon: IconArrowsExchange, color: 'var(--mantine-color-recoveryOrange-6)', label: '转移' },
+  undo: { icon: IconArrowBackUp, color: 'var(--mantine-color-coolGray-6)', label: '撤销' },
 };
 
 export default function SpaceActivityPage() {
@@ -37,33 +39,7 @@ export default function SpaceActivityPage() {
   const { data, isLoading, isError, refetch } = useActivity(spaceId);
   const { data: spacesData } = useSpaces();
   const spaceName = spacesData?.spaces?.find((s) => s.id === spaceId)?.name ?? '空间';
-
-  // Entries undone through the backend; activity invalidation keeps the
-  // feed authoritative, the set only covers the in-flight render.
-  const [undone, setUndone] = useState<Set<string>>(new Set());
-  const queryClient = useQueryClient();
-  const undoMutation = useMutation({
-    mutationFn: (entry: ActivityEntry) => undoActivity(spaceId!, entry.id),
-    onSuccess: (result, entry) => {
-      if (result.status === 'undone') {
-        setUndone((prev) => new Set(prev).add(entry.id));
-        notifications.show({ title: '已撤销', message: entry.summary, color: 'healthyGreen' });
-      } else {
-        notifications.show({ title: '没有需要撤销的内容', message: entry.summary, color: 'coolGray' });
-      }
-      void queryClient.invalidateQueries({ queryKey: ['spaces', spaceId, 'activity'] });
-      void queryClient.invalidateQueries({ queryKey: ['spaces', spaceId, 'nodes'] });
-    },
-    onError: (error) => {
-      const message =
-        error instanceof ApiError && error.code === 'REVIEW_REQUIRED'
-          ? '该操作之后有新的修改，撤销需要人工确认'
-          : error instanceof ApiError && error.code === 'UNDO_EXPIRED'
-            ? '撤销窗口已过期'
-            : '撤销失败，请稍后重试';
-      notifications.show({ title: '无法撤销', message, color: 'errorRed' });
-    },
-  });
+  const undoMutation = useUndoActivity(spaceId);
 
   const groups = useMemo(() => {
     const entries = data?.activity ?? [];
@@ -78,7 +54,19 @@ export default function SpaceActivityPage() {
   }, [data]);
 
   const handleUndo = (entry: ActivityEntry) => {
-    undoMutation.mutate(entry);
+    undoMutation.mutate(
+      { changeSetId: entry.id },
+      {
+        onSuccess: (result) => {
+          notifications.show({
+            title: '已撤销',
+            message: result.summary ?? entry.summary,
+            color: 'healthyGreen',
+          });
+        },
+        onError: (error) => showUndoError(error),
+      },
+    );
   };
 
   return (
@@ -130,9 +118,11 @@ export default function SpaceActivityPage() {
                   }}
                 />
                 {entries.map((entry) => {
-                  const meta = ACTION_META[entry.action] ?? ACTION_META.create;
+                  const meta = ACTION_META[entry.action] ?? ACTION_META.update;
                   const Icon = meta.icon;
-                  const isUndone = undone.has(entry.id);
+                  const isUndone = entry.undone;
+                  const isPending =
+                    undoMutation.isPending && undoMutation.variables?.changeSetId === entry.id;
                   return (
                     <div
                       key={entry.id}
@@ -171,6 +161,7 @@ export default function SpaceActivityPage() {
                           size="compact-xs"
                           variant="subtle"
                           color="coolGray"
+                          loading={isPending}
                           onClick={() => handleUndo(entry)}
                         >
                           撤销
@@ -179,7 +170,7 @@ export default function SpaceActivityPage() {
                       {isUndone && (
                         <Text fz="xs" c="dimmed">已撤销</Text>
                       )}
-                      {!entry.undoable && (
+                      {!entry.undoable && !isUndone && entry.expired && (
                         <Text fz="xs" c="dimmed">撤销已过期</Text>
                       )}
                     </div>
@@ -192,4 +183,54 @@ export default function SpaceActivityPage() {
       </div>
     </>
   );
+}
+
+/** Map the server's structured undo blockers to user-facing notifications. */
+function showUndoError(error: unknown) {
+  if (!(error instanceof ApiError)) {
+    notifications.show({
+      title: '撤销失败',
+      message: '网络错误，请稍后重试。',
+      color: 'errorRed',
+    });
+    return;
+  }
+  const reasons = (error.details?.reasons as string[] | undefined) ?? [];
+  switch (error.code) {
+    case 'REVIEW_REQUIRED':
+      notifications.show({
+        title: '需要人工确认',
+        message: reasons.length > 0 ? reasons.join('；') : '该操作之后又有新的修改，无法自动撤销。',
+        color: 'warningAmber',
+        autoClose: 8000,
+      });
+      break;
+    case 'UNDO_EXPIRED':
+      notifications.show({
+        title: '撤销已过期',
+        message: '该操作已超过 30 天撤销窗口。',
+        color: 'warningAmber',
+      });
+      break;
+    case 'NOT_UNDOABLE':
+      notifications.show({
+        title: '无法撤销',
+        message: '该操作不支持撤销。',
+        color: 'coolGray',
+      });
+      break;
+    case 'ALREADY_UNDONE':
+      notifications.show({
+        title: '已撤销',
+        message: '该操作已经被撤销过了。',
+        color: 'coolGray',
+      });
+      break;
+    default:
+      notifications.show({
+        title: '撤销失败',
+        message: error.message,
+        color: 'errorRed',
+      });
+  }
 }

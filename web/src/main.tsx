@@ -25,9 +25,10 @@ const queryClient = new QueryClient({
 });
 
 async function bootstrap() {
-  // Start MSW for gap endpoints in development
+  // Start MSW in development. 'all' mocks every endpoint so the web app
+  // runs without the Go backend; 'partial' only mocks gap endpoints.
   if (import.meta.env.DEV) {
-    const mockMode = import.meta.env.VITE_API_MOCK ?? 'partial';
+    const mockMode = import.meta.env.VITE_API_MOCK ?? 'all';
     if (mockMode !== 'off') {
       const { startMsw } = await import('@pontis/api/mock/server');
       await startMsw(mockMode as 'partial' | 'all');

@@ -1,0 +1,409 @@
+{
+  "publications": [
+    {
+      "id": "pub-go-dev",
+      "slug": "go-dev-map",
+      "title": "Go 开发资源导航",
+      "description": "从入门到生产实践:官方文档、标准库速查、工程化模板与常用第三方库。",
+      "publisher": "Mahoo",
+      "version": 3,
+      "visibility": "plaza",
+      "bookmark_count": 14,
+      "folder_count": 5,
+      "tags": ["Go", "后端", "学习路线"],
+      "created_at": "2026-08-10T09:00:00Z",
+      "updated_at": "2026-08-27T12:30:00Z",
+      "is_mine": true,
+      "tree": {
+        "id": "pn-root",
+        "type": "folder",
+        "title": "Go 开发资源导航",
+        "children": [
+          {
+            "id": "pn-g1",
+            "type": "folder",
+            "title": "官方文档",
+            "children": [
+              { "id": "pn-g1a", "type": "bookmark", "title": "Go 官方文档", "url": "https://go.dev/doc/" },
+              { "id": "pn-g1b", "type": "bookmark", "title": "标准库参考", "url": "https://pkg.go.dev/std" },
+              { "id": "pn-g1c", "type": "bookmark", "title": "Effective Go", "url": "https://go.dev/doc/effective_go" },
+              { "id": "pn-g1d", "type": "bookmark", "title": "Go FAQ", "url": "https://go.dev/doc/faq" }
+            ]
+          },
+          {
+            "id": "pn-g2",
+            "type": "folder",
+            "title": "工程化",
+            "children": [
+              { "id": "pn-g2a", "type": "bookmark", "title": "Google Go Style Guide", "url": "https://google.github.io/styleguide/go/" },
+              { "id": "pn-g2b", "type": "bookmark", "title": "golang-standards/project-layout", "url": "https://github.com/golang-standards/project-layout" },
+              { "id": "pn-g2c", "type": "bookmark", "title": "Go Modules Reference", "url": "https://go.dev/ref/mod" }
+            ]
+          },
+          {
+            "id": "pn-g3",
+            "type": "folder",
+            "title": "并发与运行时",
+            "children": [
+              { "id": "pn-g3a", "type": "bookmark", "title": "Go Memory Model", "url": "https://go.dev/ref/mem" },
+              { "id": "pn-g3b", "type": "bookmark", "title": "Concurrency Patterns (Pike)", "url": "https://go.dev/talks/2012/concurrency.slide" },
+              { "id": "pn-g3c", "type": "bookmark", "title": "uber-go/guide", "url": "https://github.com/uber-go/guide" }
+            ]
+          },
+          {
+            "id": "pn-g4",
+            "type": "folder",
+            "title": "常用库",
+            "children": [
+              { "id": "pn-g4a", "type": "bookmark", "title": "gin-gonic/gin", "url": "https://github.com/gin-gonic/gin" },
+              { "id": "pn-g4b", "type": "bookmark", "title": "sqlx", "url": "https://github.com/jmoiron/sqlx" },
+              { "id": "pn-g4c", "type": "bookmark", "title": "zap 日志", "url": "https://github.com/uber-go/zap" },
+              { "id": "pn-g4d", "type": "bookmark", "title": "cobra CLI", "url": "https://github.com/spf13/cobra" }
+            ]
+          },
+          {
+            "id": "pn-g5",
+            "type": "folder",
+            "title": "测试与性能",
+            "children": [
+              { "id": "pn-g5a", "type": "bookmark", "title": "testing 包文档", "url": "https://pkg.go.dev/testing" },
+              { "id": "pn-g5b", "type": "bookmark", "title": "pprof 性能分析", "url": "https://go.dev/blog/pprof" },
+              { "id": "pn-g5c", "type": "bookmark", "title": "Go Benchmark 汇总", "url": "https://github.com/golang/go/issues" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "pub-frontend",
+      "slug": "frontend-eng",
+      "title": "前端工程化收藏",
+      "description": "构建工具、monorepo、测试与部署流水线相关的精选链接,持续更新。",
+      "publisher": "林小满",
+      "version": 5,
+      "visibility": "plaza",
+      "bookmark_count": 10,
+      "folder_count": 3,
+      "tags": ["前端", "工程化"],
+      "created_at": "2026-07-28T10:00:00Z",
+      "updated_at": "2026-08-28T09:10:00Z",
+      "is_mine": false,
+      "tree": {
+        "id": "pn-f-root",
+        "type": "folder",
+        "title": "前端工程化收藏",
+        "children": [
+          {
+            "id": "pn-f1",
+            "type": "folder",
+            "title": "构建工具",
+            "children": [
+              { "id": "pn-f1a", "type": "bookmark", "title": "Vite 指南", "url": "https://vite.dev/guide/" },
+              { "id": "pn-f1b", "type": "bookmark", "title": "esbuild 文档", "url": "https://esbuild.github.io/" },
+              { "id": "pn-f1c", "type": "bookmark", "title": "Rolldown", "url": "https://rolldown.rs/" },
+              { "id": "pn-f1d", "type": "bookmark", "title": "Turbopack", "url": "https://turbo.build/pack" }
+            ]
+          },
+          {
+            "id": "pn-f2",
+            "type": "folder",
+            "title": "Monorepo",
+            "children": [
+              { "id": "pn-f2a", "type": "bookmark", "title": "pnpm workspace", "url": "https://pnpm.io/workspaces" },
+              { "id": "pn-f2b", "type": "bookmark", "title": "Turborepo 文档", "url": "https://turborepo.com/docs" },
+              { "id": "pn-f2c", "type": "bookmark", "title": "Nx 文档", "url": "https://nx.dev/getting-started/intro" }
+            ]
+          },
+          {
+            "id": "pn-f3",
+            "type": "folder",
+            "title": "测试与质量",
+            "children": [
+              { "id": "pn-f3a", "type": "bookmark", "title": "Vitest", "url": "https://vitest.dev/guide/" },
+              { "id": "pn-f3b", "type": "bookmark", "title": "Playwright", "url": "https://playwright.dev/docs/intro" },
+              { "id": "pn-f3c", "type": "bookmark", "title": "Testing Library", "url": "https://testing-library.com/docs/" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "pub-design",
+      "slug": "design-notes",
+      "title": "设计灵感手册",
+      "description": "排版、配色与交互模式参考,偏工具型设计系统而非视觉炫技。",
+      "publisher": "Mahoo",
+      "version": 2,
+      "visibility": "plaza",
+      "bookmark_count": 8,
+      "folder_count": 2,
+      "tags": ["设计", "UI"],
+      "created_at": "2026-08-05T14:00:00Z",
+      "updated_at": "2026-08-25T18:00:00Z",
+      "is_mine": true,
+      "tree": {
+        "id": "pn-d-root",
+        "type": "folder",
+        "title": "设计灵感手册",
+        "children": [
+          {
+            "id": "pn-d1",
+            "type": "folder",
+            "title": "设计系统",
+            "children": [
+              { "id": "pn-d1a", "type": "bookmark", "title": "Refactoring UI", "url": "https://www.refactoringui.com/" },
+              { "id": "pn-d1b", "type": "bookmark", "title": "Primer (GitHub)", "url": "https://primer.style/foundations" },
+              { "id": "pn-d1c", "type": "bookmark", "title": "Polaris (Shopify)", "url": "https://polaris.shopify.com/" },
+              { "id": "pn-d1d", "type": "bookmark", "title": "Radix Colors", "url": "https://www.radix-ui.com/colors" }
+            ]
+          },
+          {
+            "id": "pn-d2",
+            "type": "folder",
+            "title": "排版与字体",
+            "children": [
+              { "id": "pn-d2a", "type": "bookmark", "title": "Inter 官方站", "url": "https://rsms.me/inter/" },
+              { "id": "pn-d2b", "type": "bookmark", "title": "Practical Typography", "url": "https://practicaltypography.com/" },
+              { "id": "pn-d2c", "type": "bookmark", "title": "Google Fonts", "url": "https://fonts.google.com/" },
+              { "id": "pn-d2d", "type": "bookmark", "title": "Fontsource", "url": "https://fontsource.org/" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "pub-llm-papers",
+      "slug": "llm-papers",
+      "title": "LLM 论文精读清单",
+      "description": "Transformer 之后的架构演进与推理优化论文,按主题分组。",
+      "publisher": "陈默",
+      "version": 1,
+      "visibility": "plaza",
+      "bookmark_count": 6,
+      "folder_count": 1,
+      "tags": ["AI", "论文"],
+      "created_at": "2026-08-18T08:00:00Z",
+      "updated_at": "2026-08-18T08:00:00Z",
+      "is_mine": false,
+      "tree": {
+        "id": "pn-l-root",
+        "type": "folder",
+        "title": "LLM 论文精读清单",
+        "children": [
+          {
+            "id": "pn-l1",
+            "type": "folder",
+            "title": "推理与解码",
+            "children": [
+              { "id": "pn-l1a", "type": "bookmark", "title": "Attention Is All You Need", "url": "https://arxiv.org/abs/1706.03762" },
+              { "id": "pn-l1b", "type": "bookmark", "title": "FlashAttention", "url": "https://arxiv.org/abs/2205.14135" },
+              { "id": "pn-l1c", "type": "bookmark", "title": "Speculative Decoding", "url": "https://arxiv.org/abs/2211.17192" },
+              { "id": "pn-l1d", "type": "bookmark", "title": "vLLM: PagedAttention", "url": "https://arxiv.org/abs/2309.06180" },
+              { "id": "pn-l1e", "type": "bookmark", "title": "Chain-of-Thought", "url": "https://arxiv.org/abs/2201.11903" },
+              { "id": "pn-l1f", "type": "bookmark", "title": "LoRA", "url": "https://arxiv.org/abs/2106.09685" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "pub-rust",
+      "slug": "rust-path",
+      "title": "Rust 学习路径",
+      "description": "按阶段排列的 Rust 入门材料:The Book、练习、异步与实战项目。",
+      "publisher": "kenji",
+      "version": 2,
+      "visibility": "plaza",
+      "bookmark_count": 9,
+      "folder_count": 3,
+      "tags": ["Rust", "学习路线"],
+      "created_at": "2026-08-02T10:00:00Z",
+      "updated_at": "2026-08-22T15:40:00Z",
+      "is_mine": false,
+      "tree": {
+        "id": "pn-r-root",
+        "type": "folder",
+        "title": "Rust 学习路径",
+        "children": [
+          {
+            "id": "pn-r1",
+            "type": "folder",
+            "title": "入门",
+            "children": [
+              { "id": "pn-r1a", "type": "bookmark", "title": "The Rust Book", "url": "https://doc.rust-lang.org/book/" },
+              { "id": "pn-r1b", "type": "bookmark", "title": "Rust by Example", "url": "https://doc.rust-lang.org/rust-by-example/" },
+              { "id": "pn-r1c", "type": "bookmark", "title": "Rustlings 练习", "url": "https://github.com/rust-lang/rustlings" }
+            ]
+          },
+          {
+            "id": "pn-r2",
+            "type": "folder",
+            "title": "进阶",
+            "children": [
+              { "id": "pn-r2a", "type": "bookmark", "title": "Rust Nomicon", "url": "https://doc.rust-lang.org/nomicon/" },
+              { "id": "pn-r2b", "type": "bookmark", "title": "Async Book", "url": "https://rust-lang.github.io/async-book/" },
+              { "id": "pn-r2c", "type": "bookmark", "title": "Tokio Tutorial", "url": "https://tokio.rs/tokio/tutorial" }
+            ]
+          },
+          {
+            "id": "pn-r3",
+            "type": "folder",
+            "title": "实战",
+            "children": [
+              { "id": "pn-r3a", "type": "bookmark", "title": "axum 示例", "url": "https://github.com/tokio-rs/axum" },
+              { "id": "pn-r3b", "type": "bookmark", "title": "SQLx", "url": "https://github.com/launchbadge/sqlx" },
+              { "id": "pn-r3c", "type": "bookmark", "title": "serde 文档", "url": "https://serde.rs/" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "pub-selfhost",
+      "slug": "selfhost-kit",
+      "title": "自托管工具箱",
+      "description": "家庭服务器上值得部署的开源服务:网盘、相册、监控与自动化。",
+      "publisher": "阿伟",
+      "version": 4,
+      "visibility": "plaza",
+      "bookmark_count": 12,
+      "folder_count": 4,
+      "tags": ["自托管", "Docker", "homelab"],
+      "created_at": "2026-06-15T10:00:00Z",
+      "updated_at": "2026-08-26T11:20:00Z",
+      "is_mine": false,
+      "tree": {
+        "id": "pn-s-root",
+        "type": "folder",
+        "title": "自托管工具箱",
+        "children": [
+          {
+            "id": "pn-s1",
+            "type": "folder",
+            "title": "文件与同步",
+            "children": [
+              { "id": "pn-s1a", "type": "bookmark", "title": "Syncthing", "url": "https://syncthing.net/" },
+              { "id": "pn-s1b", "type": "bookmark", "title": "Nextcloud", "url": "https://nextcloud.com/" },
+              { "id": "pn-s1c", "type": "bookmark", "title": "MinIO", "url": "https://min.io/" }
+            ]
+          },
+          {
+            "id": "pn-s2",
+            "type": "folder",
+            "title": "媒体与相册",
+            "children": [
+              { "id": "pn-s2a", "type": "bookmark", "title": "Immich", "url": "https://immich.app/" },
+              { "id": "pn-s2b", "type": "bookmark", "title": "Jellyfin", "url": "https://jellyfin.org/" }
+            ]
+          },
+          {
+            "id": "pn-s3",
+            "type": "folder",
+            "title": "监控",
+            "children": [
+              { "id": "pn-s3a", "type": "bookmark", "title": "Uptime Kuma", "url": "https://uptime.kuma.pet/" },
+              { "id": "pn-s3b", "type": "bookmark", "title": "Grafana", "url": "https://grafana.com/oss/grafana/" },
+              { "id": "pn-s3c", "type": "bookmark", "title": "Prometheus", "url": "https://prometheus.io/" }
+            ]
+          },
+          {
+            "id": "pn-s4",
+            "type": "folder",
+            "title": "自动化",
+            "children": [
+              { "id": "pn-s4a", "type": "bookmark", "title": "Home Assistant", "url": "https://www.home-assistant.io/" },
+              { "id": "pn-s4b", "type": "bookmark", "title": "n8n", "url": "https://n8n.io/" },
+              { "id": "pn-s4c", "type": "bookmark", "title": "Gitea Actions", "url": "https://docs.gitea.com/usage/actions/overview" },
+              { "id": "pn-s4d", "type": "bookmark", "title": "Watchtower", "url": "https://containrrr.dev/watchtower/" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "pub-sre",
+      "slug": "sre-handbook",
+      "title": "SRE 运维手册",
+      "description": "告警、容量、故障复盘的参考手册与模板,来自公开的工程实践。",
+      "publisher": "Mahoo",
+      "version": 1,
+      "visibility": "private",
+      "bookmark_count": 7,
+      "folder_count": 2,
+      "tags": ["运维", "SRE"],
+      "created_at": "2026-08-24T10:00:00Z",
+      "updated_at": "2026-08-24T10:00:00Z",
+      "is_mine": true,
+      "tree": {
+        "id": "pn-o-root",
+        "type": "folder",
+        "title": "SRE 运维手册",
+        "children": [
+          {
+            "id": "pn-o1",
+            "type": "folder",
+            "title": "方法论",
+            "children": [
+              { "id": "pn-o1a", "type": "bookmark", "title": "Google SRE Book", "url": "https://sre.google/sre-book/table-of-contents/" },
+              { "id": "pn-o1b", "type": "bookmark", "title": "Postmortem 模板", "url": "https://sre.google/sre-book/postmortem-culture/" },
+              { "id": "pn-o1c", "type": "bookmark", "title": "SLO 计算", "url": "https://sre.google/workbook/implementing-slos/" }
+            ]
+          },
+          {
+            "id": "pn-o2",
+            "type": "folder",
+            "title": "工具参考",
+            "children": [
+              { "id": "pn-o2a", "type": "bookmark", "title": "OpenTelemetry", "url": "https://opentelemetry.io/docs/" },
+              { "id": "pn-o2b", "type": "bookmark", "title": "Kubernetes 文档", "url": "https://kubernetes.io/docs/home/" },
+              { "id": "pn-o2c", "type": "bookmark", "title": "systemd 速查", "url": "https://www.freedesktop.org/wiki/Software/systemd/" },
+              { "id": "pn-o2d", "type": "bookmark", "title": "pg_stat_statements", "url": "https://www.postgresql.org/docs/current/pgstatstatements.html" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "pub-cooking",
+      "slug": "home-cooking",
+      "title": "家常菜谱索引",
+      "description": "按荤素和难度分类的家常菜谱,周末备菜参考。",
+      "publisher": "小鹿",
+      "version": 2,
+      "visibility": "plaza",
+      "bookmark_count": 6,
+      "folder_count": 2,
+      "tags": ["生活", "菜谱"],
+      "created_at": "2026-07-10T10:00:00Z",
+      "updated_at": "2026-08-20T19:00:00Z",
+      "is_mine": false,
+      "tree": {
+        "id": "pn-c-root",
+        "type": "folder",
+        "title": "家常菜谱索引",
+        "children": [
+          {
+            "id": "pn-c1",
+            "type": "folder",
+            "title": "快手菜",
+            "children": [
+              { "id": "pn-c1a", "type": "bookmark", "title": "番茄炒蛋的三种做法", "url": "https://example.com/recipes/tomato-egg" },
+              { "id": "pn-c1b", "type": "bookmark", "title": "蒜蓉西兰花", "url": "https://example.com/recipes/broccoli" },
+              { "id": "pn-c1c", "type": "bookmark", "title": "10 分钟葱油拌面", "url": "https://example.com/recipes/scallion-noodle" }
+            ]
+          },
+          {
+            "id": "pn-c2",
+            "type": "folder",
+            "title": "硬菜",
+            "children": [
+              { "id": "pn-c2a", "type": "bookmark", "title": "红烧肉零失败指南", "url": "https://example.com/recipes/pork-belly" },
+              { "id": "pn-c2b", "type": "bookmark", "title": "可乐鸡翅", "url": "https://example.com/recipes/cola-chicken" },
+              { "id": "pn-c2c", "type": "bookmark", "title": "清蒸鲈鱼", "url": "https://example.com/recipes/steamed-fish" }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

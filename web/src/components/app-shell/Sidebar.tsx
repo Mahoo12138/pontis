@@ -15,7 +15,9 @@ import {
   IconLayoutGrid,
   IconClock,
   IconDeviceDesktop,
+  IconListCheck,
   IconSettings,
+  IconShieldHalf,
   IconSun,
   IconMoon,
   IconLogout,
@@ -119,7 +121,11 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <div className={sidebarSection}>
-        <div className={`${sidebarItem} ${currentPath === '/plaza' ? sidebarItemSelected : ''}`}>
+        <div
+          className={`${sidebarItem} ${currentPath.startsWith('/plaza') ? sidebarItemSelected : ''}`}
+          style={{ cursor: 'pointer' }}
+          onClick={() => navigate('/plaza')}
+        >
           <IconLayoutGrid size={16} stroke={1.5} className={sidebarItemIcon} />
           {t('sidebar:plaza')}
         </div>
@@ -136,14 +142,40 @@ export default function Sidebar() {
       <hr className={sidebarDivider} />
 
       <div className={sidebarSection}>
-        <div className={`${sidebarItem} ${currentPath === '/devices' ? sidebarItemSelected : ''}`}>
+        <div
+          className={`${sidebarItem} ${currentPath === '/devices' ? sidebarItemSelected : ''}`}
+          style={{ cursor: 'pointer' }}
+          onClick={() => navigate('/devices')}
+        >
           <IconDeviceDesktop size={16} stroke={1.5} className={sidebarItemIcon} />
           {t('sidebar:devices')}
         </div>
-        <div className={`${sidebarItem} ${currentPath === '/settings' ? sidebarItemSelected : ''}`}>
+        <div
+          className={`${sidebarItem} ${currentPath === '/tasks' ? sidebarItemSelected : ''}`}
+          style={{ cursor: 'pointer' }}
+          onClick={() => navigate('/tasks')}
+        >
+          <IconListCheck size={16} stroke={1.5} className={sidebarItemIcon} />
+          任务
+        </div>
+        <div
+          className={`${sidebarItem} ${currentPath.startsWith('/settings') ? sidebarItemSelected : ''}`}
+          style={{ cursor: 'pointer' }}
+          onClick={() => navigate('/settings')}
+        >
           <IconSettings size={16} stroke={1.5} className={sidebarItemIcon} />
           {t('sidebar:settings')}
         </div>
+        {me?.role === 'admin' && (
+          <div
+            className={`${sidebarItem} ${currentPath.startsWith('/admin') ? sidebarItemSelected : ''}`}
+            style={{ cursor: 'pointer' }}
+            onClick={() => navigate('/admin')}
+          >
+            <IconShieldHalf size={16} stroke={1.5} className={sidebarItemIcon} />
+            {t('sidebar:admin')}
+          </div>
+        )}
       </div>
 
       {/* User area at bottom */}

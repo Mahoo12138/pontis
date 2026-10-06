@@ -255,10 +255,11 @@ func (s *Service) decideDelete(ctx context.Context, tx Tx, space canonical.SyncS
 }
 
 // applyCommand executes a canonical command inside the open transaction
-// and reports the resulting revision. Canonical validation failures map
-// to per-operation rejections.
+// and reports the resulting revision. The command is recorded as one
+// undoable ChangeSet together with its Before Image (doc 15). Canonical
+// validation failures map to per-operation rejections.
 func (s *Service) applyCommand(ctx context.Context, tx Tx, space canonical.SyncSpace, origin canonical.Origin, op Operation, cmd canonical.Command) (OperationResult, error) {
-	if err := s.executor.ApplyTx(ctx, tx, origin, cmd); err != nil {
+	if _, err := s.changesets.RecordNodeOp(ctx, tx, space.ID, origin, cmd); err != nil {
 		if reason, ok := rejectionReason(err); ok {
 			return rejectedResult(op, reason), nil
 		}

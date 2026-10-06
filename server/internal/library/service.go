@@ -1,42 +1,81 @@
-// Package library implements the web-facing bookmark REST operations
-// (doc 08 §4): session-authenticated CRUD on a space's canonical tree
-// plus the user-facing activity history and undo (doc 15). Every
-// mutation goes through the canonical executor as one ChangeSet.
+// Package library implements the web-side canonical tree access: reading
+// the explorer tree and applying user-initiated CRUD through the canonical
+// executor, plus the activity feed derived from ChangeSets (doc 15).
 package library
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 
 	"pontis/internal/canonical"
+	"pontis/internal/changeset"
 )
 
-// Store is the persistence contract required by the library service,
-// defined on the consumer side.
+// Store is the read-side persistence contract required by the service.
 type Store interface {
-	BeginTx(ctx context.Context) (canonical.Tx, error)
-
-	LoadSpace(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error)
+	GetSpace(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error)
+	GetNode(ctx context.Context, space canonical.SpaceID, id canonical.NodeID) (canonical.Node, error)
 	ListNodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error)
 	ListRootSlots(ctx context.Context, space canonical.SpaceID) ([]canonical.RootSlot, error)
-
-	DeviceName(ctx context.Context, deviceID string) (string, error)
-	Username(ctx context.Context, userID string) (string, error)
+	ListChangeSets(ctx context.Context, space canonical.SpaceID, limit int) ([]changeset.ChangeSet, error)
+	DeviceName(ctx context.Context, id string) (string, error)
+	UserName(ctx context.Context, id string) (string, error)
 }
 
-// Errors.
-var (
-	// ErrNodeNotFound is returned for unknown node ids.
-	ErrNodeNotFound = errors.New("library: node not found")
-	// ErrNothingToUpdate is returned when an update carries no fields.
-	ErrNothingToUpdate = errors.New("library: nothing to update")
+// Writer is the write-side contract: a canonical transaction factory.
+type Writer interface {
+	BeginTx(ctx context.Context) (canonical.Tx, error)
+}
+
+// Limits.
+const (
+	// MaxTitleLength is the V1 title bound shared with the sync protocol.
+	MaxTitleLength = 255
+	// MaxURLLength guards against abuse from web-originated writes.
+	MaxURLLength = 2048
+	// DefaultActivityLimit caps the activity feed response.
+	DefaultActivityLimit = 100
 )
 
-// CreateParams are the parameters of a web-side node creation.
+// Service implements web-originated tree access.
+type Service struct {
+	store      Store
+	writer     Writer
+	changesets *changeset.Service
+}
+
+// NewService returns a library service.
+func NewService(store Store, writer Writer, changesets *changeset.Service) *Service {
+	return &Service{store: store, writer: writer, changesets: changesets}
+}
+
+// Node and root-slot reads.
+
+// Space loads one space or canonical.ErrSpaceNotFound.
+func (s *Service) Space(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error) {
+	return s.store.GetSpace(ctx, id)
+}
+
+// Nodes returns the space's full node list; the client builds the tree.
+func (s *Service) Nodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error) {
+	if _, err := s.store.GetSpace(ctx, space); err != nil {
+		return nil, err
+	}
+	return s.store.ListNodes(ctx, space)
+}
+
+// RootSlots returns the space's root slots.
+func (s *Service) RootSlots(ctx context.Context, space canonical.SpaceID) ([]canonical.RootSlot, error) {
+	if _, err := s.store.GetSpace(ctx, space); err != nil {
+		return nil, err
+	}
+	return s.store.ListRootSlots(ctx, space)
+}
+
+// CreateParams carries a web-originated node creation.
 type CreateParams struct {
 	Type     canonical.NodeType
 	Title    string
@@ -45,240 +84,281 @@ type CreateParams struct {
 	BeforeID *canonical.NodeID
 }
 
-// ActivityEntry is one user-facing activity row backed by a ChangeSet
-// (doc 15 §10).
-type ActivityEntry struct {
-	ID        string
-	Timestamp time.Time
-	Actor     string
-	Action    string // create | update | move | delete | undo | reconciliation
-	Summary   string
-	Undoable  bool
-}
+// CreateNode validates and applies a user's node creation.
+func (s *Service) CreateNode(ctx context.Context, space canonical.SpaceID, user canonical.UserID, p CreateParams) (canonical.Node, error) {
+	if p.Title == "" {
+		return canonical.Node{}, canonical.ErrTitleRequired
+	}
+	if len(p.Title) > MaxTitleLength {
+		return canonical.Node{}, ErrTitleTooLong
+	}
+	if len(p.URL) > MaxURLLength {
+		return canonical.Node{}, ErrURLTooLong
+	}
 
-// Service implements the web-facing library operations.
-type Service struct {
-	store    Store
-	executor *canonical.Executor
-}
-
-// NewService returns a library service backed by store.
-func NewService(store Store) *Service {
-	return &Service{store: store, executor: canonical.NewExecutor()}
-}
-
-// ListNodes returns every node of the space ordered for tree building.
-func (s *Service) ListNodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error) {
-	return s.store.ListNodes(ctx, space)
-}
-
-// RootSlots returns the space's root slots ordered by position.
-func (s *Service) RootSlots(ctx context.Context, space canonical.SpaceID) ([]canonical.RootSlot, error) {
-	return s.store.ListRootSlots(ctx, space)
-}
-
-// Create inserts a node as one ChangeSet and returns the stored row.
-func (s *Service) Create(ctx context.Context, space canonical.SpaceID, user canonical.UserID, p CreateParams) (canonical.Node, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		return canonical.Node{}, err
 	}
-	nodeID := canonical.NodeID(id.String())
-	kind := "书签"
-	if p.Type == canonical.NodeTypeFolder {
-		kind = "文件夹"
-	}
 	origin := canonical.Origin{Type: canonical.OriginUser, UserID: user}
-	if _, err := s.executor.ExecuteChangeSet(ctx, s.store, origin, space, canonical.ChangeSetInput{
-		Kind:    "create",
-		Summary: fmt.Sprintf("新建了「%s」%s", p.Title, kind),
-	}, canonical.CreateNode{
+
+	tx, err := s.writer.BeginTx(ctx)
+	if err != nil {
+		return canonical.Node{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	cmd := canonical.CreateNode{
 		SpaceID:  space,
-		NodeID:   nodeID,
+		NodeID:   canonical.NodeID(id.String()),
 		Type:     p.Type,
 		Title:    p.Title,
 		URL:      p.URL,
 		Parent:   p.Parent,
 		BeforeID: p.BeforeID,
-	}); err != nil {
+	}
+	if _, err := s.changesets.RecordNodeOp(ctx, tx, space, origin, cmd); err != nil {
 		return canonical.Node{}, err
 	}
-	return s.loadNode(ctx, space, nodeID)
-}
-
-// Update changes a node's title and/or URL as one ChangeSet.
-func (s *Service) Update(ctx context.Context, space canonical.SpaceID, user canonical.UserID, node canonical.NodeID, title, url *string) (canonical.Node, error) {
-	if title == nil && url == nil {
-		return canonical.Node{}, ErrNothingToUpdate
-	}
-	current, err := s.loadNode(ctx, space, node)
+	created, err := tx.LoadNode(ctx, space, cmd.NodeID)
 	if err != nil {
 		return canonical.Node{}, err
 	}
-	origin := canonical.Origin{Type: canonical.OriginUser, UserID: user}
-	var cmds []canonical.Command
-	var summary string
-	if title != nil && *title != current.Title {
-		cmds = append(cmds, canonical.UpdateNodeTitle{SpaceID: space, NodeID: node, Title: *title})
-		summary = fmt.Sprintf("将「%s」重命名为「%s」", current.Title, *title)
+	if err := tx.Commit(ctx); err != nil {
+		return canonical.Node{}, err
 	}
-	if url != nil && *url != current.URL {
-		cmds = append(cmds, canonical.UpdateNodeURL{SpaceID: space, NodeID: node, URL: *url})
-		if summary == "" {
-			summary = fmt.Sprintf("更新了「%s」的链接", current.Title)
-		} else {
-			summary = fmt.Sprintf("重命名并更新了「%s」的链接", current.Title)
+	committed = true
+	return created, nil
+}
+
+// UpdateParams carries an optional title/url change; nil fields are no-ops.
+type UpdateParams struct {
+	Title *string
+	URL   *string
+}
+
+// UpdateNode applies title and/or URL changes to one node.
+func (s *Service) UpdateNode(ctx context.Context, space canonical.SpaceID, user canonical.UserID, node canonical.NodeID, p UpdateParams) (canonical.Node, error) {
+	if p.Title != nil {
+		if *p.Title == "" {
+			return canonical.Node{}, canonical.ErrTitleRequired
+		}
+		if len(*p.Title) > MaxTitleLength {
+			return canonical.Node{}, ErrTitleTooLong
 		}
 	}
-	if len(cmds) == 0 {
-		return current, nil
+	if p.URL != nil && len(*p.URL) > MaxURLLength {
+		return canonical.Node{}, ErrURLTooLong
 	}
-	if _, err := s.executor.ExecuteChangeSet(ctx, s.store, origin, space, canonical.ChangeSetInput{
-		Kind:    "update",
-		Summary: summary,
-	}, cmds...); err != nil {
-		return canonical.Node{}, err
-	}
-	return s.loadNode(ctx, space, node)
-}
 
-// Move reparents and/or reorders a node as one ChangeSet.
-func (s *Service) Move(ctx context.Context, space canonical.SpaceID, user canonical.UserID, node canonical.NodeID, parent canonical.ParentRef, beforeID *canonical.NodeID) (canonical.Node, error) {
-	current, err := s.loadNode(ctx, space, node)
+	origin := canonical.Origin{Type: canonical.OriginUser, UserID: user}
+
+	tx, err := s.writer.BeginTx(ctx)
 	if err != nil {
 		return canonical.Node{}, err
 	}
-	origin := canonical.Origin{Type: canonical.OriginUser, UserID: user}
-	if _, err := s.executor.ExecuteChangeSet(ctx, s.store, origin, space, canonical.ChangeSetInput{
-		Kind:    "move",
-		Summary: fmt.Sprintf("移动了「%s」", current.Title),
-	}, canonical.MoveNode{
-		SpaceID:  space,
-		NodeID:   node,
-		Parent:   parent,
-		BeforeID: beforeID,
-	}); err != nil {
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	var cmds []canonical.Command
+	if p.Title != nil {
+		cmds = append(cmds, canonical.UpdateNodeTitle{SpaceID: space, NodeID: node, Title: *p.Title})
+	}
+	if p.URL != nil {
+		cmds = append(cmds, canonical.UpdateNodeURL{SpaceID: space, NodeID: node, URL: *p.URL})
+	}
+	if len(cmds) > 0 {
+		if _, err := s.changesets.RecordNodeOp(ctx, tx, space, origin, cmds...); err != nil {
+			return canonical.Node{}, err
+		}
+	}
+	updated, err := tx.LoadNode(ctx, space, node)
+	if err != nil {
 		return canonical.Node{}, err
 	}
-	return s.loadNode(ctx, space, node)
+	if err := tx.Commit(ctx); err != nil {
+		return canonical.Node{}, err
+	}
+	committed = true
+	return updated, nil
 }
 
-// Delete removes a node and its subtree as one undoable ChangeSet: the
-// full subtree before-image is captured atomically with the delete
-// (doc 15 §7, §13).
-func (s *Service) Delete(ctx context.Context, space canonical.SpaceID, user canonical.UserID, node canonical.NodeID) error {
-	current, err := s.loadNode(ctx, space, node)
+// MoveParams carries a reparent/reorder request.
+type MoveParams struct {
+	Parent   canonical.ParentRef
+	BeforeID *canonical.NodeID
+}
+
+// MoveNode applies a user's move command.
+func (s *Service) MoveNode(ctx context.Context, space canonical.SpaceID, user canonical.UserID, node canonical.NodeID, p MoveParams) (canonical.Node, error) {
+	origin := canonical.Origin{Type: canonical.OriginUser, UserID: user}
+
+	tx, err := s.writer.BeginTx(ctx)
+	if err != nil {
+		return canonical.Node{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	cmd := canonical.MoveNode{SpaceID: space, NodeID: node, Parent: p.Parent, BeforeID: p.BeforeID}
+	if _, err := s.changesets.RecordNodeOp(ctx, tx, space, origin, cmd); err != nil {
+		return canonical.Node{}, err
+	}
+	moved, err := tx.LoadNode(ctx, space, node)
+	if err != nil {
+		return canonical.Node{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return canonical.Node{}, err
+	}
+	committed = true
+	return moved, nil
+}
+
+// DeleteNode removes a node and its subtree.
+func (s *Service) DeleteNode(ctx context.Context, space canonical.SpaceID, user canonical.UserID, node canonical.NodeID) error {
+	origin := canonical.Origin{Type: canonical.OriginUser, UserID: user}
+	tx, err := s.writer.BeginTx(ctx)
 	if err != nil {
 		return err
 	}
-	origin := canonical.Origin{Type: canonical.OriginUser, UserID: user}
-	kind := "书签"
-	if current.Type == canonical.NodeTypeFolder {
-		kind = "文件夹"
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	if _, err := s.changesets.RecordNodeOp(ctx, tx, space, origin, canonical.DeleteNode{SpaceID: space, NodeID: node}); err != nil {
+		return err
 	}
-	_, err = s.executor.ExecuteChangeSet(ctx, s.store, origin, space, canonical.ChangeSetInput{
-		Kind:    "delete",
-		Summary: fmt.Sprintf("删除了%s「%s」", kind, current.Title),
-	}, canonical.DeleteNode{
-		SpaceID: space,
-		NodeID:  node,
-	})
-	return err
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
-// UndoChangeSet plans and, when clean, applies the inverse of a
-// ChangeSet as a new ChangeSet (doc 15 §8). Review-required plans never
-// partially apply.
-func (s *Service) UndoChangeSet(ctx context.Context, space canonical.SpaceID, user canonical.UserID, changeSetID string) (canonical.UndoPlan, error) {
-	origin := canonical.Origin{Type: canonical.OriginUser, UserID: user}
-	return s.executor.ExecuteUndo(ctx, s.store, origin, space, changeSetID)
+// ActivityEntry is one human-readable item of the space's recent history.
+type ActivityEntry struct {
+	ID        string
+	Timestamp string
+	Actor     string
+	Action    string // create | update | move | delete | import | publish | transfer | undo
+	Summary   string
+	Undoable  bool
+	Undone    bool
+	Expired   bool
 }
 
-// Activity renders the newest ChangeSets as human-facing rows. Entries
-// carrying usable, unexpired before-images are undoable (doc 15 §12).
+// Activity derives the user-level history feed from ChangeSets (doc 15
+// §1: Activity is business history, not machine journal). Entries whose
+// undo window passed stay visible but are marked expired.
 func (s *Service) Activity(ctx context.Context, space canonical.SpaceID, limit int) ([]ActivityEntry, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 100
-	}
-	// Collect ChangeSets and undo-data flags inside one read transaction,
-	// then resolve actor names outside of it: the single-connection pool
-	// must never be asked for a second connection while a transaction
-	// holds one.
-	type row struct {
-		cs       canonical.ChangeSet
-		undoable bool
-	}
-	tx, err := s.store.BeginTx(ctx)
+	sp, err := s.store.GetSpace(ctx, space)
 	if err != nil {
 		return nil, err
 	}
-	changeSets, _, err := tx.ListChangeSets(ctx, space, limit)
+	if limit <= 0 || limit > DefaultActivityLimit {
+		limit = DefaultActivityLimit
+	}
+	sets, err := s.store.ListChangeSets(ctx, space, limit)
 	if err != nil {
-		_ = tx.Rollback(ctx)
 		return nil, err
 	}
-	now := time.Now().UTC()
-	rows := make([]row, 0, len(changeSets))
-	for _, cs := range changeSets {
-		undoable := false
-		if data, found, err := tx.LoadUndoData(ctx, cs.ID); err == nil && found {
-			undoable = data.ExpiresAt.IsZero() || now.Before(data.ExpiresAt)
-		}
-		rows = append(rows, row{cs: cs, undoable: undoable})
-	}
-	_ = tx.Rollback(ctx)
 
-	out := make([]ActivityEntry, 0, len(rows))
-	for _, r := range rows {
-		actor, err := s.actorName(ctx, r.cs)
-		if err != nil {
-			return nil, err
+	now := time.Now().UTC()
+	out := make([]ActivityEntry, 0, len(sets))
+	for _, cs := range sets {
+		undone := cs.UndoneByChangeSet != ""
+		entry := ActivityEntry{
+			ID:        cs.ID,
+			Timestamp: cs.CreatedAt.Format(time.RFC3339Nano),
+			Actor:     s.changesetActor(ctx, cs),
+			Action:    mapKindAction(cs.Kind),
+			Summary:   cs.Summary,
+			Undone:    undone,
 		}
-		out = append(out, ActivityEntry{
-			ID:        r.cs.ID,
-			Timestamp: r.cs.CreatedAt,
-			Actor:     actor,
-			Action:    r.cs.Kind,
-			Summary:   r.cs.Summary,
-			Undoable:  r.undoable,
-		})
+		if cs.UndoDataJSON != "" && !undone && cs.Epoch == sp.Epoch {
+			if now.Sub(cs.CreatedAt) > changeset.UndoWindow {
+				entry.Expired = true
+			} else {
+				entry.Undoable = true
+			}
+		}
+		out = append(out, entry)
 	}
 	return out, nil
 }
 
-func (s *Service) loadNode(ctx context.Context, space canonical.SpaceID, id canonical.NodeID) (canonical.Node, error) {
-	tx, err := s.store.BeginTx(ctx)
-	if err != nil {
-		return canonical.Node{}, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	node, err := tx.LoadNode(ctx, space, id)
-	if err != nil {
-		if errors.Is(err, canonical.ErrNodeNotFound) {
-			return canonical.Node{}, ErrNodeNotFound
+func (s *Service) changesetActor(ctx context.Context, cs changeset.ChangeSet) string {
+	switch cs.OriginType {
+	case canonical.OriginDevice:
+		name, _ := s.store.DeviceName(ctx, string(cs.ActorDeviceID))
+		if name == "" {
+			return "浏览器设备"
 		}
-		return canonical.Node{}, err
+		return name
+	case canonical.OriginUser:
+		name, _ := s.store.UserName(ctx, string(cs.ActorUserID))
+		if name == "" {
+			return "网页"
+		}
+		return name + " (网页)"
+	case canonical.OriginImport:
+		return "导入"
+	case canonical.OriginTransfer:
+		return "跨空间转移"
+	case canonical.OriginSystem, canonical.OriginRecovery:
+		return "系统"
+	default:
+		return "未知"
 	}
-	return node, nil
 }
 
-func (s *Service) actorName(ctx context.Context, cs canonical.ChangeSet) (string, error) {
-	switch cs.ActorType {
-	case canonical.OriginDevice:
-		if cs.ActorDeviceID != "" {
-			if name, err := s.store.DeviceName(ctx, string(cs.ActorDeviceID)); err == nil && name != "" {
-				return name, nil
-			}
-		}
-		return "已同步设备", nil
-	case canonical.OriginUser:
-		if cs.ActorUserID != "" {
-			if name, err := s.store.Username(ctx, string(cs.ActorUserID)); err == nil && name != "" {
-				return name, nil
-			}
-		}
-		return "Web", nil
+func mapKindAction(kind changeset.Kind) string {
+	switch kind {
+	case changeset.KindNodeCreate:
+		return "create"
+	case changeset.KindNodeUpdate:
+		return "update"
+	case changeset.KindNodeMove:
+		return "move"
+	case changeset.KindNodeDelete:
+		return "delete"
+	case changeset.KindImport:
+		return "import"
+	case changeset.KindPublication:
+		return "publish"
+	case changeset.KindTransferIn, changeset.KindTransferOut:
+		return "transfer"
+	case changeset.KindUndo:
+		return "undo"
 	default:
-		return "系统", nil
+		return "update"
 	}
+}
+
+// Service-level errors carrying HTTP semantics.
+var (
+	ErrTitleTooLong = errors.New("library: title too long")
+	ErrURLTooLong   = errors.New("library: url too long")
+)
+
+// ListNodes exposes the raw node list for detector-style consumers
+// (organizer, backup capture).
+func (s *Service) ListNodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error) {
+	return s.store.ListNodes(ctx, space)
 }

@@ -1,8 +1,8 @@
-# 00. 产品概览与范围
+# 00. Pontis 产品概览与范围
 
 ## 1. 产品定位
 
-项目是一个**自托管、跨浏览器、原生书签同步平台**。它直接同步 Edge、Chrome、Firefox 的浏览器原生 Bookmark/Favorites Tree，而不是重新发明一个 Read-it-later 或独立收藏网页。
+Pontis 是一个**自托管、跨浏览器、原生书签同步平台**。它直接同步 Edge、Chrome、Firefox 的浏览器原生 Bookmark/Favorites Tree，而不是重新发明一个 Read-it-later 或独立收藏网页。
 
 用户可以继续使用浏览器厂商同步密码、历史、扩展等类别，只关闭浏览器自带的 Favorites / Bookmarks Sync，由本系统接管书签同步。
 
@@ -17,6 +17,7 @@
 - Backup / Restore；
 - Organizer；
 - Search；
+- 用户级计划任务与执行状态中心；
 - Plaza / Publication；
 - 浏览器插件、Web UI、外部 REST API 共用同一 Canonical Domain。
 

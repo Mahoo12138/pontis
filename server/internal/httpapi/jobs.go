@@ -1,0 +1,153 @@
+package httpapi
+
+import (
+	"errors"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+
+	"pontis/internal/canonical"
+	"pontis/internal/jobs"
+)
+
+// --- handlers: background jobs (admin session) ---
+
+type jobDTO struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	Status      string `json:"status"`
+	Owner       string `json:"owner"`
+	SpaceName   string `json:"space_name,omitempty"`
+	Phase       string `json:"phase,omitempty"`
+	Progress    *struct {
+		Current int64 `json:"current"`
+		Total   int64 `json:"total"`
+	} `json:"progress,omitempty"`
+	Attempt     int     `json:"attempt"`
+	MaxAttempts int     `json:"max_attempts"`
+	ScheduledAt string  `json:"scheduled_at"`
+	StartedAt   *string `json:"started_at,omitempty"`
+	FinishedAt  *string `json:"finished_at,omitempty"`
+	Error       string  `json:"error,omitempty"`
+}
+
+func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireAdmin(s, w, r); !ok {
+		return
+	}
+	list, err := s.Jobs.List(r.Context(), 50)
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	out := make([]jobDTO, 0, len(list))
+	for _, j := range list {
+		dto := jobDTO{
+			ID:          j.ID,
+			Type:        string(j.Type),
+			Status:      string(j.Status),
+			Owner:       s.ownerName(r, j.OwnerUserID),
+			SpaceName:   s.spaceName(r, j.SpaceID),
+			Phase:       j.Phase,
+			Attempt:     j.Attempt,
+			MaxAttempts: j.MaxAttempts,
+			ScheduledAt: j.ScheduledAt.Format("2006-01-02T15:04:05Z"),
+			Error:       j.Error,
+		}
+		if j.ProgressCur != nil || j.ProgressTot != nil || j.Phase != "" {
+			dto.Progress = &struct {
+				Current int64 `json:"current"`
+				Total   int64 `json:"total"`
+			}{}
+			if j.ProgressCur != nil {
+				dto.Progress.Current = *j.ProgressCur
+			}
+			if j.ProgressTot != nil {
+				dto.Progress.Total = *j.ProgressTot
+			}
+		}
+		if j.StartedAt != nil {
+			v := j.StartedAt.Format("2006-01-02T15:04:05Z")
+			dto.StartedAt = &v
+		}
+		if j.FinishedAt != nil {
+			v := j.FinishedAt.Format("2006-01-02T15:04:05Z")
+			dto.FinishedAt = &v
+		}
+		out = append(out, dto)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": out})
+}
+
+type enqueueJobRequest struct {
+	Type    string `json:"type"`
+	SpaceID string `json:"space_id"`
+}
+
+// handleEnqueueJob creates a job manually — the doc 13 "run it now" path.
+func (s *Server) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
+	admin, ok := requireAdmin(s, w, r)
+	if !ok {
+		return
+	}
+	var req enqueueJobRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	job, err := s.Jobs.Enqueue(r.Context(), jobs.Type(req.Type), canonical.UserID(admin.ID), req.SpaceID, "")
+	if err != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_JOB_TYPE", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"id": job.ID, "type": string(job.Type), "status": string(job.Status)})
+}
+
+func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireAdmin(s, w, r); !ok {
+		return
+	}
+	if err := s.Jobs.Cancel(r.Context(), chi.URLParam(r, "jobID")); err != nil {
+		s.writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "unknown job")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleRetryJob re-enqueues a failed or cancelled job (doc 13 §4.2 ops
+// path). The original row is kept; a fresh job runs the same type/payload.
+func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireAdmin(s, w, r); !ok {
+		return
+	}
+	retried, err := s.Jobs.Retry(r.Context(), chi.URLParam(r, "jobID"))
+	if err != nil {
+		if errors.Is(err, jobs.ErrNotFound) {
+			s.writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "unknown job")
+		} else {
+			s.writeError(w, r, http.StatusConflict, "JOB_NOT_RETRYABLE", err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"id": retried.ID, "type": string(retried.Type), "status": string(retried.Status),
+	})
+}
+
+func (s *Server) ownerName(r *http.Request, userID string) string {
+	name, err := s.Accounts.UserName(r.Context(), userID)
+	if err != nil || name == "" {
+		return userID
+	}
+	return name
+}
+
+func (s *Server) spaceName(r *http.Request, spaceID string) string {
+	if spaceID == "" {
+		return ""
+	}
+	sp, err := s.Library.Space(r.Context(), canonical.SpaceID(spaceID))
+	if err != nil {
+		return ""
+	}
+	return sp.Name
+}

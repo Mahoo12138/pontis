@@ -22,9 +22,7 @@ const (
 	OriginDevice   OriginType = "device"
 	OriginImport   OriginType = "import"
 	OriginRecovery OriginType = "recovery"
-	// OriginReconciliation marks changes committed by a reconciliation
-	// plan (initial merge, resync baseline, recovery).
-	OriginReconciliation OriginType = "reconciliation"
+	OriginTransfer OriginType = "transfer"
 )
 
 // Origin records the causal source of a Canonical Change. Empty values map

@@ -4,138 +4,200 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"pontis/internal/canonical"
+	"pontis/internal/changeset"
 )
 
-// ChangeSet persistence (doc 18 §7).
+// ChangeSetStore implements changeset.Store. The in-transaction methods
+// downcast the caller's canonical.Tx (always *canonTx in this package) so
+// ChangeSet rows commit atomically with the canonical mutation.
+type ChangeSetStore struct {
+	db *sql.DB
+}
 
-// InsertChangeSet stores one ChangeSet row.
-func (t *canonTx) InsertChangeSet(ctx context.Context, cs canonical.ChangeSet) error {
-	var userID, deviceID, inverseOf any
+// NewChangeSetStore wraps an opened database as a changeset store.
+func NewChangeSetStore(db *sql.DB) *ChangeSetStore { return &ChangeSetStore{db: db} }
+
+// BeginTx starts a canonical transaction (undo execution scope).
+func (s *ChangeSetStore) BeginTx(ctx context.Context) (canonical.Tx, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin changeset tx: %w", err)
+	}
+	return &canonTx{tx: tx}, nil
+}
+
+// raw exposes the underlying *sql.Tx; implemented on canonTx so wrapped
+// transactions (e.g. *syncTxImpl embedding *canonTx) satisfy it too.
+func (t *canonTx) raw() *sql.Tx { return t.tx }
+
+// changesetTx unwraps the caller's transaction down to the raw *sql.Tx.
+// Every canonical transaction in this package is (or wraps) a *canonTx.
+func changesetTx(tx canonical.Tx) (*sql.Tx, error) {
+	r, ok := tx.(interface{ raw() *sql.Tx })
+	if !ok {
+		return nil, fmt.Errorf("changeset: unexpected tx type %T", tx)
+	}
+	return r.raw(), nil
+}
+
+// InsertChangeSetTx persists one ChangeSet row inside the caller's
+// transaction.
+func (s *ChangeSetStore) InsertChangeSetTx(ctx context.Context, tx canonical.Tx, cs changeset.ChangeSet) error {
+	rt, err := changesetTx(tx)
+	if err != nil {
+		return err
+	}
+	var actorUser, actorDevice, inverseOf any
 	if cs.ActorUserID != "" {
-		userID = string(cs.ActorUserID)
+		actorUser = string(cs.ActorUserID)
 	}
 	if cs.ActorDeviceID != "" {
-		deviceID = string(cs.ActorDeviceID)
+		actorDevice = string(cs.ActorDeviceID)
 	}
 	if cs.InverseOf != "" {
 		inverseOf = cs.InverseOf
 	}
-	_, err := t.tx.ExecContext(ctx, `
-		INSERT INTO change_sets
-			(id, space_id, actor_type, actor_user_id, actor_device_id, kind, summary,
-			 first_revision, last_revision, inverse_of_change_set_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		cs.ID, string(cs.SpaceID), string(cs.ActorType), userID, deviceID,
-		cs.Kind, cs.Summary, cs.FirstRevision, cs.LastRevision, inverseOf, formatTime(cs.CreatedAt))
+	var undoData any
+	if cs.UndoDataJSON != "" {
+		undoData = cs.UndoDataJSON
+	}
+	_, err = rt.ExecContext(ctx, `
+		INSERT INTO changesets (
+			id, space_id, epoch, kind, summary, origin_type,
+			actor_user_id, actor_device_id, first_revision, last_revision,
+			inverse_of, undo_data, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		cs.ID, string(cs.SpaceID), cs.Epoch, string(cs.Kind), cs.Summary, string(cs.OriginType),
+		actorUser, actorDevice, cs.FirstRevision, cs.LastRevision,
+		inverseOf, undoData, formatTime(cs.CreatedAt))
 	return err
 }
 
-// InsertUndoData stores the atomic before-image of a ChangeSet.
-func (t *canonTx) InsertUndoData(ctx context.Context, data canonical.UndoData) error {
-	var expiresAt any
-	if !data.ExpiresAt.IsZero() {
-		expiresAt = formatTime(data.ExpiresAt)
-	}
-	_, err := t.tx.ExecContext(ctx, `
-		INSERT INTO change_set_undo_data (change_set_id, format_version, codec, payload, expires_at, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		data.ChangeSetID, data.FormatVersion, data.Codec, data.Payload, expiresAt, formatTime(data.CreatedAt))
-	return err
-}
-
-// UpdateUndoData rewrites a stored before-image (retention management).
-func (t *canonTx) UpdateUndoData(ctx context.Context, data canonical.UndoData) error {
-	var expiresAt any
-	if !data.ExpiresAt.IsZero() {
-		expiresAt = formatTime(data.ExpiresAt)
-	}
-	_, err := t.tx.ExecContext(ctx, `
-		UPDATE change_set_undo_data SET format_version = ?, codec = ?, payload = ?, expires_at = ?
-		WHERE change_set_id = ?`,
-		data.FormatVersion, data.Codec, data.Payload, expiresAt, data.ChangeSetID)
-	return err
-}
-
-// LoadChangeSet loads one ChangeSet of a space.
-func (t *canonTx) LoadChangeSet(ctx context.Context, space canonical.SpaceID, id string) (canonical.ChangeSet, error) {
-	return scanChangeSet(t.tx.QueryRowContext(ctx, changeSetColumns+` WHERE space_id = ? AND id = ?`, string(space), id))
-}
-
-// LoadUndoData loads the before-image of a ChangeSet.
-func (t *canonTx) LoadUndoData(ctx context.Context, changeSetID string) (canonical.UndoData, bool, error) {
-	var data canonical.UndoData
-	var formatVersion int
-	var codec string
-	var payload []byte
-	var expiresAt, createdAt sql.NullString
-	err := t.tx.QueryRowContext(ctx, `
-		SELECT change_set_id, format_version, codec, payload, expires_at, created_at
-		FROM change_set_undo_data WHERE change_set_id = ?`, changeSetID).
-		Scan(&data.ChangeSetID, &formatVersion, &codec, &payload, &expiresAt, &createdAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return canonical.UndoData{}, false, nil
-	}
+// ChangeSetJournalRangeTx returns the revision range and row count of the
+// journal entries linked to one ChangeSet.
+func (s *ChangeSetStore) ChangeSetJournalRangeTx(ctx context.Context, tx canonical.Tx, space canonical.SpaceID, epoch int64, changeSetID string) (int64, int64, int64, error) {
+	rt, err := changesetTx(tx)
 	if err != nil {
-		return canonical.UndoData{}, false, err
+		return 0, 0, 0, err
 	}
-	data.FormatVersion = formatVersion
-	data.Codec = codec
-	data.Payload = payload
-	if expiresAt.Valid {
-		data.ExpiresAt, _ = time.Parse(time.RFC3339Nano, expiresAt.String)
-	}
-	if createdAt.Valid {
-		data.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt.String)
-	}
-	return data, true, nil
+	var first, last, count int64
+	err = rt.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(MIN(revision), 0), COALESCE(MAX(revision), 0)
+		FROM journal
+		WHERE space_id = ? AND epoch = ? AND change_set_id = ?`,
+		string(space), epoch, changeSetID).Scan(&count, &first, &last)
+	return first, last, count, err
 }
 
-// ListChangeSets returns the newest ChangeSets of a space, newest
-// first, and whether more remain.
-func (t *canonTx) ListChangeSets(ctx context.Context, space canonical.SpaceID, limit int) ([]canonical.ChangeSet, bool, error) {
-	rows, err := t.tx.QueryContext(ctx, changeSetColumns+`
-		WHERE space_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`, string(space), limit+1)
+// MarkChangeSetUndoneTx flags a ChangeSet as undone inside the caller's
+// transaction. undoneBy may be empty when the inverse produced no journal
+// entries (nothing left to invert).
+func (s *ChangeSetStore) MarkChangeSetUndoneTx(ctx context.Context, tx canonical.Tx, id, undoneBy string, at time.Time) error {
+	rt, err := changesetTx(tx)
 	if err != nil {
-		return nil, false, err
+		return err
 	}
-	defer rows.Close()
-	var out []canonical.ChangeSet
-	for rows.Next() {
-		cs, err := scanChangeSet(rows)
-		if err != nil {
-			return nil, false, err
+	var by any
+	if undoneBy != "" {
+		by = undoneBy
+	}
+	_, err = rt.ExecContext(ctx, `
+		UPDATE changesets
+		SET undone_by_changeset = ?, undone_at = ?
+		WHERE id = ?`, by, formatTime(at), id)
+	return err
+}
+
+// DeleteTombstonesTx clears the deletion records of restored nodes.
+func (s *ChangeSetStore) DeleteTombstonesTx(ctx context.Context, tx canonical.Tx, space canonical.SpaceID, ids []canonical.NodeID) error {
+	rt, err := changesetTx(tx)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := rt.ExecContext(ctx, `
+			DELETE FROM tombstones WHERE space_id = ? AND node_id = ?`,
+			string(space), string(id)); err != nil {
+			return err
 		}
-		out = append(out, cs)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, false, err
+	return nil
+}
+
+// EnsureRootSlotTx creates a root slot if missing (undo recovery fallback).
+func (s *ChangeSetStore) EnsureRootSlotTx(ctx context.Context, tx canonical.Tx, space canonical.SpaceID, key, displayName string) error {
+	rt, err := changesetTx(tx)
+	if err != nil {
+		return err
 	}
-	hasMore := len(out) > limit
-	if hasMore {
-		out = out[:limit]
-	}
-	return out, hasMore, nil
+	_, err = rt.ExecContext(ctx, `
+		INSERT OR IGNORE INTO root_slots (space_id, key, display_name, position, created_at)
+		SELECT ?, ?, ?, COALESCE(MAX(position) + 1, 0), ?
+		FROM root_slots WHERE space_id = ?`,
+		string(space), key, displayName, formatTime(time.Now().UTC()), string(space))
+	return err
 }
 
 const changeSetColumns = `
-	SELECT id, space_id, actor_type, COALESCE(actor_user_id, ''), COALESCE(actor_device_id, ''),
-	       kind, summary, first_revision, last_revision, COALESCE(inverse_of_change_set_id, ''), created_at
-	FROM change_sets`
+	SELECT id, space_id, epoch, kind, summary, origin_type,
+	       COALESCE(actor_user_id, ''), COALESCE(actor_device_id, ''),
+	       first_revision, last_revision,
+	       COALESCE(inverse_of, ''), COALESCE(undo_data, ''),
+	       COALESCE(undone_by_changeset, ''), COALESCE(undone_at, ''),
+	       created_at
+	FROM changesets`
 
-func scanChangeSet(row interface{ Scan(dest ...any) error }) (canonical.ChangeSet, error) {
-	var cs canonical.ChangeSet
+func scanChangeSet(row interface{ Scan(dest ...any) error }) (changeset.ChangeSet, error) {
+	var cs changeset.ChangeSet
 	var createdAt string
-	err := row.Scan(&cs.ID, &cs.SpaceID, &cs.ActorType, &cs.ActorUserID, &cs.ActorDeviceID,
-		&cs.Kind, &cs.Summary, &cs.FirstRevision, &cs.LastRevision, &cs.InverseOf, &createdAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return canonical.ChangeSet{}, canonical.ErrChangeSetNotFound
-	}
+	err := row.Scan(&cs.ID, &cs.SpaceID, &cs.Epoch, &cs.Kind, &cs.Summary, &cs.OriginType,
+		&cs.ActorUserID, &cs.ActorDeviceID,
+		&cs.FirstRevision, &cs.LastRevision,
+		&cs.InverseOf, &cs.UndoDataJSON,
+		&cs.UndoneByChangeSet, &cs.UndoneAt,
+		&createdAt)
 	if err != nil {
-		return canonical.ChangeSet{}, err
+		return changeset.ChangeSet{}, err
 	}
 	cs.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 	return cs, nil
+}
+
+// GetChangeSet loads one ChangeSet by id.
+func (s *ChangeSetStore) GetChangeSet(ctx context.Context, id string) (changeset.ChangeSet, bool, error) {
+	cs, err := scanChangeSet(s.db.QueryRowContext(ctx, changeSetColumns+` WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return changeset.ChangeSet{}, false, nil
+	}
+	if err != nil {
+		return changeset.ChangeSet{}, false, err
+	}
+	return cs, true, nil
+}
+
+// ListChangeSets returns the space's newest ChangeSets (current epoch
+// first, then older epochs) ordered by descending last revision.
+func (s *ChangeSetStore) ListChangeSets(ctx context.Context, space canonical.SpaceID, limit int) ([]changeset.ChangeSet, error) {
+	rows, err := s.db.QueryContext(ctx, changeSetColumns+`
+		WHERE space_id = ?
+		ORDER BY last_revision DESC, created_at DESC
+		LIMIT ?`, string(space), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []changeset.ChangeSet
+	for rows.Next() {
+		cs, err := scanChangeSet(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cs)
+	}
+	return out, rows.Err()
 }

@@ -14,12 +14,20 @@ import (
 	"time"
 
 	"pontis/internal/auth"
+	"pontis/internal/backup"
+	"pontis/internal/changeset"
 	"pontis/internal/device"
+	"pontis/internal/jobs"
 	"pontis/internal/library"
-	"pontis/internal/reconcile"
+	"pontis/internal/organizer"
+	"pontis/internal/plaza"
+	"pontis/internal/schedule"
 	"pontis/internal/space"
+	"pontis/internal/spacetransfer"
 	"pontis/internal/store/sqlite"
 	"pontis/internal/sync"
+	"pontis/internal/token"
+	"pontis/internal/transfer"
 )
 
 func newTestServer(t *testing.T) (*Server, *httptest.Server) {
@@ -36,16 +44,35 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	backupSvc, err := backup.NewService(sqlite.NewBackupStore(db), sqlite.NewLibraryStore(db),
+		filepath.Join(t.TempDir(), "backups"))
+	if err != nil {
+		t.Fatalf("backup service: %v", err)
+	}
+
+	// The schedule service shares the job service so run-now and the tick
+	// loop can enqueue real jobs (same wiring as the app composition root).
+	jobSvc := jobs.NewService(sqlite.NewJobStore(db), 1)
+	changesetSvc := changeset.NewService(sqlite.NewChangeSetStore(db))
 
 	srv := &Server{
-		Auth:       auth.NewService(sqlite.NewAuthStore(db), 24*time.Hour),
-		Devices:    device.NewService(sqlite.NewDeviceStore(db)),
-		Spaces:     space.NewService(sqlite.NewSpaceStore(db)),
-		Sync:       sync.NewService(sqlite.NewSyncStore(db)),
-		Library:    library.NewService(sqlite.NewLibraryStore(db)),
-		Reconcile:  reconcile.NewService(sqlite.NewReconcileStore(db)),
-		InstanceID: instanceID,
-		Logger:     slog.New(slog.DiscardHandler),
+		Auth:          auth.NewService(sqlite.NewAuthStore(db), 24*time.Hour),
+		Devices:       device.NewService(sqlite.NewDeviceStore(db)),
+		Spaces:        space.NewService(sqlite.NewSpaceStore(db)),
+		Sync:          sync.NewService(sqlite.NewSyncStore(db), changesetSvc),
+		SpaceTransfer: spacetransfer.NewService(sqlite.NewStore(db), changesetSvc),
+		Library:       library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db), changesetSvc),
+		Changesets:    changesetSvc,
+		Tokens:        token.NewService(sqlite.NewTokenStore(db)),
+		Organizer:     organizer.NewService(sqlite.NewLibraryStore(db)),
+		Transfer:      transfer.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db), changesetSvc),
+		Plaza:         plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db), changesetSvc), changesetSvc, sqlite.NewStore(db)),
+		Backups:       backupSvc,
+		Accounts:      sqlite.NewAccountStore(db),
+		Jobs:          jobSvc,
+		Schedules:     schedule.NewService(sqlite.NewScheduleStore(db), jobSvc),
+		InstanceID:    instanceID,
+		Logger:        slog.New(slog.DiscardHandler),
 	}
 	ts := httptest.NewServer(srv.Router())
 	t.Cleanup(ts.Close)

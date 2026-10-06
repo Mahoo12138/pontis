@@ -501,7 +501,7 @@ enabled
 ```text
 id
 type
-owner_user_id NULL
+owner_user_id NULL   # non-NULL = User Job; NULL = System Job
 space_id NULL
 status
 payload JSON
@@ -530,7 +530,7 @@ UNIQUE(schedule_id,scheduled_for)
 
 ```text
 id
-owner_user_id NULL
+owner_user_id NULL   # non-NULL = User Schedule; NULL = System Schedule
 type
 enabled
 schedule_type
@@ -542,6 +542,17 @@ last_run_at NULL
 created_at
 updated_at
 ```
+
+Ownership invariant：
+
+```text
+owner_user_id IS NOT NULL → 用户领域任务 / 计划，只能由 Owner 管理
+owner_user_id IS NULL     → 系统维护任务 / 计划，不出现在普通用户任务中心
+```
+
+无需额外 `visibility` 字段。是否允许普通用户创建某种 Schedule 由应用层 `TaskDefinition` 注册表控制；Generic `type/payload/schedule_expr` 不直接暴露给 User API。
+
+管理员后台任务页可以读取所有 Job 的运行元数据，但不得因此返回 Private Bookmark payload/result。
 
 ## 12. Derived / Operational
 

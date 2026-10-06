@@ -3,7 +3,8 @@ import { gapHandlers, allHandlers } from './handlers';
 
 /**
  * Start MSW in the browser.
- * @param mode 'partial' = mock gap endpoints only (proxy real to Go),
+ * @param mode 'partial' = mock remaining gap endpoints only (proxy real
+ *             requests to the Go server),
  *             'all' = mock everything (offline/storybook)
  */
 export async function startMsw(mode: 'partial' | 'all' = 'partial') {

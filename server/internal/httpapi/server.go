@@ -13,11 +13,20 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"pontis/internal/auth"
+	"pontis/internal/backup"
+	"pontis/internal/changeset"
 	"pontis/internal/device"
+	"pontis/internal/jobs"
 	"pontis/internal/library"
-	"pontis/internal/reconcile"
+	"pontis/internal/organizer"
+	"pontis/internal/plaza"
+	"pontis/internal/schedule"
 	"pontis/internal/space"
+	"pontis/internal/spacetransfer"
+	"pontis/internal/store/sqlite"
 	"pontis/internal/sync"
+	"pontis/internal/token"
+	"pontis/internal/transfer"
 )
 
 // ProductVersion is the server product version reported by /meta.
@@ -31,12 +40,21 @@ const SessionCookie = "pontis_session"
 
 // Server wires the HTTP API onto the domain services.
 type Server struct {
-	Auth      *auth.Service
-	Devices   *device.Service
-	Spaces    *space.Service
-	Sync      *sync.Service
-	Library   *library.Service
-	Reconcile *reconcile.Service
+	Auth          *auth.Service
+	Devices       *device.Service
+	Spaces        *space.Service
+	Sync          *sync.Service
+	Library       *library.Service
+	Changesets    *changeset.Service
+	Tokens        *token.Service
+	Backups       *backup.Service
+	Organizer     *organizer.Service
+	Plaza         *plaza.Service
+	Jobs          *jobs.Service
+	Schedules     *schedule.Service
+	Transfer      *transfer.Service
+	SpaceTransfer *spacetransfer.Service
+	Accounts      *sqlite.AccountStore
 
 	// InstanceID identifies this server installation across URL changes.
 	InstanceID string
@@ -50,6 +68,7 @@ type ctxKey int
 const (
 	ctxUser ctxKey = iota
 	ctxSessionToken
+	ctxSessionID
 	ctxDevice
 )
 
@@ -74,10 +93,49 @@ func (s *Server) Router() http.Handler {
 	// Auth (web session).
 	r.Post("/api/v1/auth/setup", s.handleSetup)
 	r.Post("/api/v1/auth/login", s.handleLogin)
+	r.Post("/api/v1/auth/reset", s.handleResetPassword)
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireSession)
 		r.Post("/api/v1/auth/logout", s.handleLogout)
 		r.Get("/api/v1/auth/me", s.handleMe)
+		r.Patch("/api/v1/auth/me", s.handleUpdateProfile)
+		r.Post("/api/v1/auth/password", s.handleChangePassword)
+	})
+
+	// User task view + plan schedules (web session, owner-scoped).
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireSession)
+		r.Get("/api/v1/tasks", s.handleListMyTasks)
+		r.Post("/api/v1/jobs/{jobID}/cancel", s.handleCancelMyJob)
+		r.Get("/api/v1/schedules", s.handleListSchedules)
+		r.Post("/api/v1/schedules", s.handleCreateSchedule)
+		r.Patch("/api/v1/schedules/{scheduleID}", s.handleUpdateSchedule)
+		r.Delete("/api/v1/schedules/{scheduleID}", s.handleDeleteSchedule)
+		r.Post("/api/v1/schedules/{scheduleID}/run-now", s.handleRunScheduleNow)
+	})
+
+	// Admin: user management (admin session).
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireSession)
+		r.Get("/api/v1/admin/users", s.handleListAdminUsers)
+		r.Patch("/api/v1/admin/users/{userID}", s.handleUpdateAdminUser)
+		r.Post("/api/v1/admin/users/{userID}/reset-link", s.handleCreateResetLink)
+	})
+
+	// Account management (web session).
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireSession)
+		r.Get("/api/v1/devices/overview", s.handleDeviceOverview)
+		r.Delete("/api/v1/devices/{deviceID}", s.handleRevokeDevice)
+		r.Get("/api/v1/settings", s.handleGetSettings)
+		r.Patch("/api/v1/settings", s.handleUpdateSettings)
+		r.Get("/api/v1/admin/jobs", s.handleListJobs)
+		r.Post("/api/v1/admin/jobs", s.handleEnqueueJob)
+		r.Post("/api/v1/admin/jobs/{jobID}/cancel", s.handleCancelJob)
+		r.Post("/api/v1/admin/jobs/{jobID}/retry", s.handleRetryJob)
+		r.Get("/api/v1/tokens", s.handleListTokens)
+		r.Post("/api/v1/tokens", s.handleCreateToken)
+		r.Delete("/api/v1/tokens/{tokenID}", s.handleRevokeToken)
 	})
 
 	// Spaces (web session).
@@ -87,19 +145,40 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/v1/spaces", s.handleCreateSpace)
 	})
 
-	// Web-facing bookmark library (session auth, doc 08 §4).
+	// Canonical tree access (web session, owner-scoped).
 	r.Group(func(r chi.Router) {
-		r.Use(s.requireSession)
+		r.Use(s.requireSession, s.requireSpaceAccess)
 		r.Get("/api/v1/spaces/{spaceID}/nodes", s.handleListNodes)
-		r.Post("/api/v1/spaces/{spaceID}/nodes", s.handleCreateNode)
 		r.Get("/api/v1/spaces/{spaceID}/root-slots", s.handleListRootSlots)
+		r.Post("/api/v1/spaces/{spaceID}/nodes", s.handleCreateNode)
 		r.Patch("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleUpdateNode)
 		r.Patch("/api/v1/spaces/{spaceID}/nodes/{nodeID}/move", s.handleMoveNode)
 		r.Delete("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleDeleteNode)
-		r.Get("/api/v1/spaces/{spaceID}/activity", s.handleListActivity)
-		r.Post("/api/v1/spaces/{spaceID}/activity/{changeSetID}/undo", s.handleUndoActivity)
-		r.Get("/api/v1/devices", s.handleListDevices)
-		r.Get("/api/v1/settings", s.handleSettings)
+		r.Get("/api/v1/spaces/{spaceID}/activity", s.handleSpaceActivity)
+		r.Post("/api/v1/spaces/{spaceID}/changesets/{changeSetID}/undo", s.handleUndoChangeSet)
+		r.Post("/api/v1/spaces/{spaceID}/organizer/link-check", s.handleRunLinkCheck)
+		r.Get("/api/v1/spaces/{spaceID}/organizer/link-check/results", s.handleLinkCheckResults)
+		r.Get("/api/v1/spaces/{spaceID}/organizer/duplicates", s.handleDuplicates)
+		r.Post("/api/v1/spaces/{spaceID}/transfers", s.handleSpaceTransfer)
+		r.Post("/api/v1/spaces/{spaceID}/export", s.handleExport)
+		r.Post("/api/v1/spaces/{spaceID}/import/preview", s.handleImportPreview)
+		r.Post("/api/v1/spaces/{spaceID}/import/apply", s.handleImportApply)
+		r.Get("/api/v1/spaces/{spaceID}/backups", s.handleListBackups)
+		r.Post("/api/v1/spaces/{spaceID}/backups", s.handleCreateBackup)
+		r.Post("/api/v1/spaces/{spaceID}/backups/{backupID}/restore", s.handleRestoreBackup)
+		r.Patch("/api/v1/spaces/{spaceID}/backups/{backupID}", s.handleUpdateBackup)
+		r.Delete("/api/v1/spaces/{spaceID}/backups/{backupID}", s.handleDeleteBackup)
+	})
+
+	// Plaza / publications (web session).
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireSession)
+		r.Get("/api/v1/plaza/publications", s.handleListPlaza)
+		r.Post("/api/v1/publications", s.handlePublish)
+		r.Get("/api/v1/publications/{publicationID}", s.handleGetPublication)
+		r.Patch("/api/v1/publications/{publicationID}", s.handleUpdatePublication)
+		r.Delete("/api/v1/publications/{publicationID}", s.handleUnpublish)
+		r.Post("/api/v1/publications/{publicationID}/apply", s.handleApplyPublication)
 	})
 
 	// Device registration (web session): returns the one-time device secret.
@@ -115,19 +194,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/v1/device/bindings", s.handleListBindings)
 		r.Post("/api/v1/device/bindings", s.handleCreateBinding)
 		r.Post("/api/v1/sync/bindings/{bindingID}", s.handleSync)
-
-		// Snapshots and reconciliation (doc 08 §9-11).
-		r.Post("/api/v1/sync/bindings/{bindingID}/client-snapshots", s.handleSubmitClientSnapshot)
-		r.Post("/api/v1/sync/bindings/{bindingID}/server-snapshots", s.handleCreateServerSnapshot)
-		r.Get("/api/v1/sync/server-snapshots/{snapshotID}", s.handleGetServerSnapshot)
-		r.Get("/api/v1/sync/server-snapshots/{snapshotID}/nodes", s.handleListServerSnapshotNodes)
-		r.Post("/api/v1/sync/bindings/{bindingID}/reconciliations", s.handleCreateReconciliation)
-		r.Get("/api/v1/sync/reconciliations/{reconciliationID}", s.handleGetReconciliation)
-		r.Post("/api/v1/sync/reconciliations/{reconciliationID}/plan", s.handlePlanReconciliation)
-		r.Put("/api/v1/sync/reconciliations/{reconciliationID}/decisions", s.handleDecideReconciliation)
-		r.Post("/api/v1/sync/reconciliations/{reconciliationID}/commit", s.handleCommitReconciliation)
-		r.Get("/api/v1/sync/reconciliations/{reconciliationID}/steps", s.handleReconciliationSteps)
-		r.Post("/api/v1/sync/reconciliations/{reconciliationID}/complete", s.handleCompleteReconciliation)
+		r.Get("/api/v1/sync/bindings/{bindingID}/snapshot", s.handleSnapshot)
+		r.Post("/api/v1/sync/transfers", s.handleDeviceTransfer)
 	})
 
 	return r
@@ -147,12 +215,19 @@ type errorBody struct {
 }
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+	s.writeErrorWithDetails(w, r, status, code, message, nil)
+}
+
+// writeErrorWithDetails emits the unified error envelope with optional
+// structured details (e.g. undo review reasons).
+func (s *Server) writeErrorWithDetails(w http.ResponseWriter, r *http.Request, status int, code, message string, details map[string]any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(errorEnvelope{Error: errorBody{
 		Code:      code,
 		Message:   message,
 		RequestID: requestID(r),
+		Details:   details,
 	}})
 }
 
@@ -251,6 +326,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, auth.ErrInvalidCredentials) {
 			s.writeError(w, r, http.StatusUnauthorized, "INVALID_CREDENTIALS", "unknown user or wrong password")
+			return
+		}
+		if errors.Is(err, auth.ErrUserDisabled) {
+			s.writeError(w, r, http.StatusUnauthorized, "ACCOUNT_DISABLED", "this account is disabled")
 			return
 		}
 		s.mapAuthError(w, r, err)
@@ -352,13 +431,14 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			s.writeError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "session required")
 			return
 		}
-		_, user, err := s.Auth.VerifySession(r.Context(), token)
+		sess, user, err := s.Auth.VerifySession(r.Context(), token)
 		if err != nil {
 			s.writeError(w, r, http.StatusUnauthorized, "SESSION_INVALID", "invalid or expired session")
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxUser, user)
 		ctx = context.WithValue(ctx, ctxSessionToken, token)
+		ctx = context.WithValue(ctx, ctxSessionID, sess.ID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
