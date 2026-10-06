@@ -19,14 +19,14 @@ import (
 // SQLite database plus any number of fake browser replicas, with fault
 // injection between them (doc 21 §6-7).
 type World struct {
-	t        *testing.T
-	ctx      context.Context
-	dbPath   string
-	db       *sql.DB
-	SpaceID  canonical.SpaceID
-	Space    *space.Service
-	Devices  *device.Service
-	Sync     *sync.Service
+	t         *testing.T
+	ctx       context.Context
+	dbPath    string
+	db        *sql.DB
+	SpaceID   canonical.SpaceID
+	Space     *space.Service
+	Devices   *device.Service
+	Sync      *sync.Service
 	Reconcile *reconcile.Service
 
 	Browsers []*FakeBrowser
@@ -192,10 +192,10 @@ func (w *World) DrainAll() {
 // --- canonical tree reading ---
 
 type treeNodeInfo struct {
-	Parent  string // container ref: root:<key> or parent canonical id
-	Type    canonical.NodeType
-	Title   string
-	URL     string
+	Parent string // container ref: root:<key> or parent canonical id
+	Type   canonical.NodeType
+	Title  string
+	URL    string
 }
 
 // canonicalTree is the server-side truth: containers with ordered

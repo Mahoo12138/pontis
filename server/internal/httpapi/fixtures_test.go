@@ -26,15 +26,15 @@ func goldenFixtures() []fixtureFile {
 	rootParent := &parentDTO{Type: "root", Key: "main"}
 
 	create := operationDTO{
-		OpID:      "0198c0de-7000-7000-8000-000000000001",
-		ClientSeq: 42,
-		Type:      "create",
+		OpID:         "0198c0de-7000-7000-8000-000000000001",
+		ClientSeq:    42,
+		Type:         "create",
 		BaseRevision: 100,
-		NodeID:    "0198c0de-7000-7000-8000-0000000000aa",
-		NodeType:  "bookmark",
-		Title:     "GitHub",
-		URL:       "https://github.com",
-		Parent:    nodeParent,
+		NodeID:       "0198c0de-7000-7000-8000-0000000000aa",
+		NodeType:     "bookmark",
+		Title:        "GitHub",
+		URL:          "https://github.com",
+		Parent:       nodeParent,
 	}
 	before := "0198c0de-7000-7000-8000-0000000000cc"
 	move := operationDTO{

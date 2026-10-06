@@ -43,7 +43,7 @@ type Tree struct {
 // treeIndex is the derived lookup structure over a Tree.
 type treeIndex struct {
 	byRef    map[string]TreeNode
-	byCID    map[string]string // canonical id → ref (non-root nodes)
+	byCID    map[string]string   // canonical id → ref (non-root nodes)
 	children map[string][]string // parent ref → child refs in order
 }
 

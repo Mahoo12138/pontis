@@ -258,11 +258,11 @@ func (b *FakeBrowser) applyChange(ch sync.JournalChange) error {
 		}
 		id := b.newBrowserID()
 		node := &browserNode{
-			ID:      id,
-			Type:    canonical.NodeType(p.Type),
-			Title:   p.Title,
-			URL:     p.URL,
-			Parent:  parentBrowserID,
+			ID:     id,
+			Type:   canonical.NodeType(p.Type),
+			Title:  p.Title,
+			URL:    p.URL,
+			Parent: parentBrowserID,
 		}
 		b.nodes[id] = node
 		b.mirror[ch.NodeID] = &mirrorNode{
@@ -560,11 +560,11 @@ func (b *FakeBrowser) applySteps(steps []reconcile.StepJSON) error {
 			}
 			id := b.newBrowserID()
 			node := &browserNode{
-				ID:      id,
-				Type:    canonical.NodeType(step.Type),
-				Title:   step.Title,
-				URL:     step.URL,
-				Parent:  parent,
+				ID:     id,
+				Type:   canonical.NodeType(step.Type),
+				Title:  step.Title,
+				URL:    step.URL,
+				Parent: parent,
 			}
 			b.nodes[id] = node
 			b.insertBefore(parent, id, b.browserRefOf(step.BeforeID))

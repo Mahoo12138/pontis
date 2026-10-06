@@ -18,9 +18,9 @@ import (
 type SessionType string
 
 const (
-	TypeInitial   SessionType = "initial"
+	TypeInitial    SessionType = "initial"
 	TypeFullResync SessionType = "full_resync"
-	TypeRecovery  SessionType = "recovery"
+	TypeRecovery   SessionType = "recovery"
 )
 
 // Session states (doc 06 §3). Fine-grained progress lives in phase.
@@ -35,11 +35,11 @@ const (
 
 // Session phases.
 const (
-	PhaseCollecting   = "collecting"   // waiting for the client snapshot
+	PhaseCollecting    = "collecting"     // waiting for the client snapshot
 	PhaseSnapshotReady = "snapshot_ready" // client snapshot stored
-	PhaseServerReady  = "server_ready" // both snapshots exist
-	PhasePlanned      = "planned"      // plan computed, awaiting commit
-	PhaseCommitted    = "committed"    // server committed, applying steps
+	PhaseServerReady   = "server_ready"   // both snapshots exist
+	PhasePlanned       = "planned"        // plan computed, awaiting commit
+	PhaseCommitted     = "committed"      // server committed, applying steps
 )
 
 // Issue types.
@@ -75,27 +75,27 @@ var (
 
 // Session is a persistent reconciliation (doc 06 §3, doc 18 §6).
 type Session struct {
-	ID                      string
-	BindingID               string
-	SpaceID                 canonical.SpaceID
-	Type                    SessionType
-	Reason                  string
-	State                   SessionState
-	Phase                   string
-	SourceEpoch             int64 // client-reported watermarks
-	SourceRevision          int64
-	TargetEpoch             int64 // server snapshot point
-	TargetRevision          int64
-	ClientSnapshotArtifact  string
-	ServerSnapshotArtifact  string
-	PlanArtifact            string
-	StepsArtifact           string
-	PlanHash                string
-	ServerCommitted         bool
-	CommitRevision          int64
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
-	CompletedAt             time.Time
+	ID                     string
+	BindingID              string
+	SpaceID                canonical.SpaceID
+	Type                   SessionType
+	Reason                 string
+	State                  SessionState
+	Phase                  string
+	SourceEpoch            int64 // client-reported watermarks
+	SourceRevision         int64
+	TargetEpoch            int64 // server snapshot point
+	TargetRevision         int64
+	ClientSnapshotArtifact string
+	ServerSnapshotArtifact string
+	PlanArtifact           string
+	StepsArtifact          string
+	PlanHash               string
+	ServerCommitted        bool
+	CommitRevision         int64
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	CompletedAt            time.Time
 }
 
 // Artifact is a stored payload: client snapshot, plan or steps.
@@ -151,13 +151,13 @@ type SnapshotNode struct {
 // decisions). V1 issues are identity ambiguities; the safe default is
 // always the non-destructive one.
 type Issue struct {
-	ID                string
-	ReconciliationID  string
-	Type              string
-	Payload           IssuePayloadJSON
-	DefaultChoice     string
-	SelectedChoice    *string
-	CreatedAt         time.Time
+	ID               string
+	ReconciliationID string
+	Type             string
+	Payload          IssuePayloadJSON
+	DefaultChoice    string
+	SelectedChoice   *string
+	CreatedAt        time.Time
 }
 
 // Service implements the reconciliation session lifecycle.
@@ -728,10 +728,10 @@ func (s *Service) loadSnapshotTree(ctx context.Context, artifactID string) (*Tre
 	treeNodes := make([]TreeNode, 0, len(nodes))
 	for _, n := range nodes {
 		treeNode := TreeNode{
-			Ref:     n.NodeRef,
+			Ref:       n.NodeRef,
 			ParentRef: n.ParentRef,
-			Title:   n.Title,
-			URL:     n.URL,
+			Title:     n.Title,
+			URL:       n.URL,
 		}
 		switch n.Type {
 		case "root":

@@ -186,11 +186,11 @@ func (s *Server) handleListServerSnapshotNodes(w http.ResponseWriter, r *http.Re
 // --- reconciliation sessions (doc 08 §11) ---
 
 type issueResponse struct {
-	ID             string                  `json:"id"`
-	Type           string                  `json:"type"`
+	ID             string                     `json:"id"`
+	Type           string                     `json:"type"`
 	Payload        reconcile.IssuePayloadJSON `json:"payload"`
-	DefaultChoice  string                  `json:"default_choice"`
-	SelectedChoice *string                 `json:"selected_choice"`
+	DefaultChoice  string                     `json:"default_choice"`
+	SelectedChoice *string                    `json:"selected_choice"`
 }
 
 type sessionResponse struct {

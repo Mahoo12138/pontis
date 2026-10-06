@@ -29,11 +29,11 @@ const (
 
 // pendingOp is one entry of the outbox.
 type pendingOp struct {
-	Op         sync.Operation
-	State      pendingState
-	SettleAt   int64 // settle_after_revision; 0 = settled on receipt
-	Result     sync.OperationResult
-	Settled    bool
+	Op       sync.Operation
+	State    pendingState
+	SettleAt int64 // settle_after_revision; 0 = settled on receipt
+	Result   sync.OperationResult
+	Settled  bool
 }
 
 // browserNode is a node of the fake browser's own bookmark tree.
@@ -75,16 +75,16 @@ type FakeBrowser struct {
 	// Persisted replica state (the IndexedDB analog): mirror, outbox,
 	// inbox, watermarks. All of it survives a crash; only in-flight
 	// processing is lost.
-	mirror          map[string]*mirrorNode // canonical id → mirror row
-	byBrowserID     map[string]string      // browser id → canonical id
-	outbox          []*pendingOp           // QUEUED, client_seq order
-	resolved        []*pendingOp           // RESOLVED / SETTLED
-	inbox           []sync.JournalChange   // persisted, not yet applied
-	inboxRevisions  map[int64]bool
-	epoch           int64
-	appliedRevision int64
+	mirror           map[string]*mirrorNode // canonical id → mirror row
+	byBrowserID      map[string]string      // browser id → canonical id
+	outbox           []*pendingOp           // QUEUED, client_seq order
+	resolved         []*pendingOp           // RESOLVED / SETTLED
+	inbox            []sync.JournalChange   // persisted, not yet applied
+	inboxRevisions   map[int64]bool
+	epoch            int64
+	appliedRevision  int64
 	receivedRevision int64
-	clientSeq       int64
+	clientSeq        int64
 
 	nextBrowserID int
 
