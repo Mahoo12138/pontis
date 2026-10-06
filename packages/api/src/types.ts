@@ -217,7 +217,7 @@ export interface MoveNodeRequest {
 
 // ─── Activity (gap endpoint — mock only) ──────────────────
 
-export type ActivityAction = 'create' | 'update' | 'move' | 'delete';
+export type ActivityAction = 'create' | 'update' | 'move' | 'delete' | 'undo' | 'reconciliation';
 
 export interface ActivityEntry {
   id: string;
@@ -230,4 +230,10 @@ export interface ActivityEntry {
 
 export interface ActivityListResponse {
   activity: ActivityEntry[];
+}
+
+export interface UndoResponse {
+  status: 'undone' | 'nothing_to_undo';
+  change_set_id?: string;
+  last_revision?: number;
 }

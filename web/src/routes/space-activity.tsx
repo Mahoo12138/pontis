@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Skeleton, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import {
@@ -8,7 +9,11 @@ import {
   IconTrash,
   IconArrowForwardUp,
   IconHistory,
+  IconArrowsLeft,
+  IconSparkles,
 } from '@tabler/icons-react';
+import { ApiError } from '@pontis/api';
+import { undoActivity } from '@pontis/api/endpoints/activity';
 import type { ActivityAction, ActivityEntry } from '@pontis/api';
 import Header from '../components/app-shell/Header';
 import ErrorState from '../components/common/ErrorState';
@@ -23,6 +28,8 @@ const ACTION_META: Record<ActivityAction, { icon: typeof IconPlus; color: string
   update: { icon: IconPencil, color: 'var(--mantine-color-accentBlue-6)', label: '修改' },
   move: { icon: IconArrowForwardUp, color: 'var(--mantine-color-accentBlue-6)', label: '移动' },
   delete: { icon: IconTrash, color: 'var(--mantine-color-errorRed-6)', label: '删除' },
+  undo: { icon: IconArrowsLeft, color: 'var(--mantine-color-coolGray-6)', label: '撤销' },
+  reconciliation: { icon: IconSparkles, color: 'var(--mantine-color-grape-6)', label: '对账' },
 };
 
 export default function SpaceActivityPage() {
@@ -31,8 +38,32 @@ export default function SpaceActivityPage() {
   const { data: spacesData } = useSpaces();
   const spaceName = spacesData?.spaces?.find((s) => s.id === spaceId)?.name ?? '空间';
 
-  // Local undo state: the backend will own real undo later.
+  // Entries undone through the backend; activity invalidation keeps the
+  // feed authoritative, the set only covers the in-flight render.
   const [undone, setUndone] = useState<Set<string>>(new Set());
+  const queryClient = useQueryClient();
+  const undoMutation = useMutation({
+    mutationFn: (entry: ActivityEntry) => undoActivity(spaceId!, entry.id),
+    onSuccess: (result, entry) => {
+      if (result.status === 'undone') {
+        setUndone((prev) => new Set(prev).add(entry.id));
+        notifications.show({ title: '已撤销', message: entry.summary, color: 'healthyGreen' });
+      } else {
+        notifications.show({ title: '没有需要撤销的内容', message: entry.summary, color: 'coolGray' });
+      }
+      void queryClient.invalidateQueries({ queryKey: ['spaces', spaceId, 'activity'] });
+      void queryClient.invalidateQueries({ queryKey: ['spaces', spaceId, 'nodes'] });
+    },
+    onError: (error) => {
+      const message =
+        error instanceof ApiError && error.code === 'REVIEW_REQUIRED'
+          ? '该操作之后有新的修改，撤销需要人工确认'
+          : error instanceof ApiError && error.code === 'UNDO_EXPIRED'
+            ? '撤销窗口已过期'
+            : '撤销失败，请稍后重试';
+      notifications.show({ title: '无法撤销', message, color: 'errorRed' });
+    },
+  });
 
   const groups = useMemo(() => {
     const entries = data?.activity ?? [];
@@ -47,12 +78,7 @@ export default function SpaceActivityPage() {
   }, [data]);
 
   const handleUndo = (entry: ActivityEntry) => {
-    setUndone((prev) => new Set(prev).add(entry.id));
-    notifications.show({
-      title: '已撤销',
-      message: entry.summary,
-      color: 'healthyGreen',
-    });
+    undoMutation.mutate(entry);
   };
 
   return (
