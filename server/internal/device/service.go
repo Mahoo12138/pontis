@@ -45,6 +45,9 @@ type Store interface {
 	// ListBindingsByDevice returns all bindings of a device.
 	ListBindingsByDevice(ctx context.Context, deviceID string) ([]Binding, error)
 
+	// ListByOwner returns all devices of a user.
+	ListByOwner(ctx context.Context, ownerUserID canonical.UserID) ([]Device, error)
+
 	// ActivateBinding moves a pending binding to active and stamps
 	// initialized_at.
 	ActivateBinding(ctx context.Context, bindingID string, at time.Time) error
@@ -62,6 +65,11 @@ func (s *Service) GetBindingByID(ctx context.Context, bindingID string) (Binding
 // ListBindings returns all bindings of a device.
 func (s *Service) ListBindings(ctx context.Context, deviceID string) ([]Binding, error) {
 	return s.store.ListBindingsByDevice(ctx, deviceID)
+}
+
+// ListOwnerDevices returns every registered device of a user.
+func (s *Service) ListOwnerDevices(ctx context.Context, owner canonical.UserID) ([]Device, error) {
+	return s.store.ListByOwner(ctx, owner)
 }
 
 // ActivateBinding moves a pending binding to active. In production this

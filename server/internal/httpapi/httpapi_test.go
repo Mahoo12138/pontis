@@ -15,6 +15,7 @@ import (
 
 	"pontis/internal/auth"
 	"pontis/internal/device"
+	"pontis/internal/library"
 	"pontis/internal/reconcile"
 	"pontis/internal/space"
 	"pontis/internal/store/sqlite"
@@ -41,6 +42,7 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 		Devices:    device.NewService(sqlite.NewDeviceStore(db)),
 		Spaces:     space.NewService(sqlite.NewSpaceStore(db)),
 		Sync:       sync.NewService(sqlite.NewSyncStore(db)),
+		Library:    library.NewService(sqlite.NewLibraryStore(db)),
 		Reconcile:  reconcile.NewService(sqlite.NewReconcileStore(db)),
 		InstanceID: instanceID,
 		Logger:     slog.New(slog.DiscardHandler),
@@ -72,6 +74,9 @@ func doJSON(t *testing.T, method, url string, headers map[string]string, body an
 	}
 	defer resp.Body.Close()
 	out := map[string]any{}
+	if resp.StatusCode == http.StatusNoContent || resp.Header.Get("Content-Length") == "0" {
+		return resp.StatusCode, out
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}

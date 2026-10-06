@@ -265,6 +265,24 @@ func (s *DeviceStore) GetBindingByID(ctx context.Context, bindingID string) (dev
 }
 
 // ListBindingsByDevice returns all bindings of a device.
+// ListByOwner returns all devices of a user, oldest first.
+func (s *DeviceStore) ListByOwner(ctx context.Context, ownerUserID canonical.UserID) ([]device.Device, error) {
+	rows, err := s.db.QueryContext(ctx, deviceColumns+`  FROM devices AS d WHERE d.owner_user_id = ? ORDER BY d.created_at, d.id`, string(ownerUserID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var devices []device.Device
+	for rows.Next() {
+		d, err := scanDevice(rows)
+		if err != nil {
+			return nil, err
+		}
+		devices = append(devices, d)
+	}
+	return devices, rows.Err()
+}
+
 func (s *DeviceStore) ListBindingsByDevice(ctx context.Context, deviceID string) ([]device.Binding, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, device_id, space_id, state, epoch, applied_revision, received_revision,

@@ -14,6 +14,7 @@ import (
 
 	"pontis/internal/auth"
 	"pontis/internal/device"
+	"pontis/internal/library"
 	"pontis/internal/reconcile"
 	"pontis/internal/space"
 	"pontis/internal/sync"
@@ -34,6 +35,7 @@ type Server struct {
 	Devices   *device.Service
 	Spaces    *space.Service
 	Sync      *sync.Service
+	Library   *library.Service
 	Reconcile *reconcile.Service
 
 	// InstanceID identifies this server installation across URL changes.
@@ -83,6 +85,20 @@ func (s *Server) Router() http.Handler {
 		r.Use(s.requireSession)
 		r.Get("/api/v1/spaces", s.handleListSpaces)
 		r.Post("/api/v1/spaces", s.handleCreateSpace)
+	})
+
+	// Web-facing bookmark library (session auth, doc 08 §4).
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireSession)
+		r.Get("/api/v1/spaces/{spaceID}/nodes", s.handleListNodes)
+		r.Post("/api/v1/spaces/{spaceID}/nodes", s.handleCreateNode)
+		r.Get("/api/v1/spaces/{spaceID}/root-slots", s.handleListRootSlots)
+		r.Patch("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleUpdateNode)
+		r.Patch("/api/v1/spaces/{spaceID}/nodes/{nodeID}/move", s.handleMoveNode)
+		r.Delete("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleDeleteNode)
+		r.Get("/api/v1/spaces/{spaceID}/activity", s.handleListActivity)
+		r.Get("/api/v1/devices", s.handleListDevices)
+		r.Get("/api/v1/settings", s.handleSettings)
 	})
 
 	// Device registration (web session): returns the one-time device secret.

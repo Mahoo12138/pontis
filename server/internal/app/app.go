@@ -16,6 +16,7 @@ import (
 	"pontis/internal/config"
 	"pontis/internal/device"
 	"pontis/internal/httpapi"
+	"pontis/internal/library"
 	"pontis/internal/logging"
 	"pontis/internal/reconcile"
 	"pontis/internal/space"
@@ -59,6 +60,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Devices:    device.NewService(sqlite.NewDeviceStore(db)),
 		Spaces:     space.NewService(sqlite.NewSpaceStore(db)),
 		Sync:       sync.NewService(sqlite.NewSyncStore(db)),
+		Library:    library.NewService(sqlite.NewLibraryStore(db)),
 		Reconcile:  reconcile.NewService(sqlite.NewReconcileStore(db)),
 		InstanceID: instanceID,
 		Logger:     logger,
