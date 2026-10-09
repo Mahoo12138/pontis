@@ -16,7 +16,7 @@
 // protected from double-upload by the outbox skip check, and VERIFY's
 // targeted repair pass picks up the rest.
 
-import type { BrowserAdapter, BrowserNode } from '../browser/types';
+import { removeByType, type BrowserAdapter, type BrowserNode } from '../browser/types';
 import {
   activeReconSession,
   emptyReconProgress,
@@ -312,7 +312,7 @@ export class InitialSyncEngine {
       // server-only side flows in through the normal inbox apply.
       if (match) {
         for (const b of match.browserOnly) {
-          await this.adapter.remove(b.node.id);
+          await removeByType(this.adapter, b.node);
         }
       }
       return 0;

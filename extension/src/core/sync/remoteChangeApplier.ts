@@ -7,7 +7,7 @@
 // A crash anywhere leaves either a resolvable expectation or a satisfied
 // ensure-state check, never a duplicated mutation.
 
-import type { BrowserAdapter, BrowserNode } from '../browser/types';
+import { removeByType, type BrowserAdapter, type BrowserNode } from '../browser/types';
 import {
   collectSubtree,
   findMirrorByCanonical,
@@ -385,6 +385,20 @@ export class RemoteChangeApplier {
       await this.advanceTo(binding.id, change.revision);
       return;
     }
+    const live = await this.adapter.getNode(mirror.browserId);
+    if (!live) {
+      // Already absent locally (the user removed it, or a previous round
+      // deleted it before the mirror commit). Drop the stale subtree and
+      // advance; there is nothing for the browser API to delete.
+      await this.db.transaction('rw', [this.db.bindings, this.db.localNodes], async () => {
+        const b = await this.db.bindings.get(binding.id);
+        if (!b) return;
+        const subtree = await collectSubtree(this.db, binding.id, mirror.browserId);
+        await this.db.localNodes.bulkDelete(subtree.map((r) => [binding.id, r.browserId] as [string, string]));
+        await this.advanceApplied(b, change.revision);
+      });
+      return;
+    }
     const exp: ExpectedMutationRecord = {
       bindingId: binding.id,
       revision: change.revision,
@@ -394,7 +408,9 @@ export class RemoteChangeApplier {
       createdAt: Date.now(),
     };
     await this.db.expectedMutations.add(exp);
-    await this.adapter.remove(mirror.browserId);
+    // The live node decides the deletion verb: browsers refuse to drop a
+    // non-empty container with the single-item call.
+    await removeByType(this.adapter, { id: live.id, type: live.type });
     await this.db.transaction('rw', [this.db.bindings, this.db.localNodes, this.db.expectedMutations], async () => {
       const b = await this.db.bindings.get(binding.id);
       if (!b) return;

@@ -104,26 +104,55 @@ export class FakeBrowserAdapter implements BrowserAdapter {
     const node = this.nodes.get(id);
     if (!node) throw new Error(`fakeAdapter: move of unknown node ${id}`);
     const oldParent = node.parentId;
-    const siblings = this.childrenOf(parentId).filter((n) => n.id !== id);
-    const targetIndex = index == null ? siblings.length : Math.min(index, siblings.length);
+    // Insertion order is not sibling order: re-splice against the current
+    // index sequence, otherwise a move lands in creation order.
+    const siblings = (await this.getChildren(parentId)).filter((n) => n.id !== id);
+    const targetIndex = index == null ? siblings.length : Math.max(0, Math.min(index, siblings.length));
     siblings.splice(targetIndex, 0, node);
     siblings.forEach((n, i) => {
       n.parentId = parentId;
       n.index = i;
     });
-    void oldParent;
+    // Leaving a parent compacts the siblings it dropped, exactly as the
+    // browser renumbers them; skipping this leaves gaps in the fake.
+    if (oldParent !== parentId) await this.renumber(oldParent);
   }
 
-  async remove(id: string): Promise<void> {
-    await this.options.onMutation?.(`remove:${id}`);
-    this.calls.push(`remove:${id}`);
+  /**
+   * Mirror the browser's restriction rather than being more permissive: a
+   * test double that silently recursed would hide exactly the bug the real
+   * API raises.
+   */
+  async removeBookmark(id: string): Promise<void> {
+    await this.options.onMutation?.(`removeBookmark:${id}`);
+    this.calls.push(`removeBookmark:${id}`);
     const node = this.nodes.get(id);
-    if (!node) return;
+    if (!node) throw new Error(`fakeAdapter: removeBookmark of unknown node ${id}`);
+    if (node.type === 'folder') {
+      throw new Error(`fakeAdapter: removeBookmark of folder ${id} requires removeSubtree`);
+    }
+    this.nodes.delete(id);
+    await this.renumber(node.parentId);
+  }
+
+  async removeSubtree(id: string): Promise<void> {
+    await this.options.onMutation?.(`removeSubtree:${id}`);
+    this.calls.push(`removeSubtree:${id}`);
+    const root = this.nodes.get(id);
+    if (!root) throw new Error(`fakeAdapter: removeSubtree of unknown node ${id}`);
     const removeRec = (nid: string) => {
       for (const child of this.childrenOf(nid)) removeRec(child.id);
       this.nodes.delete(nid);
     };
     removeRec(id);
+    await this.renumber(root.parentId);
+  }
+
+  private async renumber(parentId: string | null): Promise<void> {
+    if (parentId == null) return;
+    (await this.getChildren(parentId)).forEach((n, i) => {
+      n.index = i;
+    });
   }
 
   onCreated(handler: (node: BrowserNode) => void): () => void {

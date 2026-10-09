@@ -120,6 +120,66 @@ describe('RemoteChangeApplier', () => {
     await expect(applier.applyChange(bindingId, createChange(102, 'n-1'))).rejects.toThrow(/non-contiguous/);
   });
 
+  // A delete for a folder must use the subtree verb: the browser refuses to
+  // drop a non-empty container with the single-item call, so a test double
+  // that recursed anyway would hide a permanent failure on real Chromium.
+  it('deletes a mapped non-empty folder through the subtree verb', async () => {
+    adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
+    const binding = await seedBinding();
+    adapter.seed({ id: 'd1', parentId: 'f1', title: 'Nested' });
+    adapter.seed({ id: 'd2', parentId: 'd1', title: 'Leaf', url: 'https://leaf.test' });
+    await db.localNodes.bulkPut([
+      { bindingId, browserId: 'd1', canonicalId: 'n-folder', type: 'folder', title: 'Nested', url: null, parentBrowserId: 'f1', position: 0 },
+      { bindingId, browserId: 'd2', canonicalId: 'n-leaf', type: 'bookmark', title: 'Leaf', url: 'https://leaf.test', parentBrowserId: 'd1', position: 0 },
+    ]);
+
+    await applier.applyChange(bindingId, {
+      revision: 101,
+      type: 'delete',
+      node_id: 'n-folder',
+      payload: { count: 2 },
+    });
+
+    expect(adapter.calls).toEqual(['removeSubtree:d1']);
+    expect(await adapter.getNode('d1')).toBeNull();
+    expect(await db.localNodes.get([bindingId, 'd1'])).toBeUndefined();
+    // The whole subtree mapping goes, not just the requested row.
+    expect(await db.localNodes.get([bindingId, 'd2'])).toBeUndefined();
+    expect((await db.bindings.get(bindingId))?.appliedRevision).toBe(101);
+  });
+
+  it('deletes a mapped bookmark through the bookmark verb', async () => {
+    adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
+    const binding = await seedBinding();
+    adapter.seed({ id: 'b1', parentId: 'f1', title: 'GitHub', url: 'https://github.com' });
+    await db.localNodes.put({
+      bindingId, browserId: 'b1', canonicalId: 'n-1', type: 'bookmark',
+      title: 'GitHub', url: 'https://github.com', parentBrowserId: 'f1', position: 0,
+    });
+
+    await applier.applyChange(bindingId, { revision: 101, type: 'delete', node_id: 'n-1', payload: { count: 1 } });
+
+    expect(adapter.calls).toEqual(['removeBookmark:b1']);
+  });
+
+  // The user may have deleted it locally already; that satisfies the change
+  // rather than rejecting the round forever.
+  it('treats a delete of an already-absent browser node as satisfied', async () => {
+    adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
+    const binding = await seedBinding();
+    await db.localNodes.put({
+      bindingId, browserId: 'gone', canonicalId: 'n-1', type: 'bookmark',
+      title: 'GitHub', url: 'https://github.com', parentBrowserId: 'f1', position: 0,
+    });
+
+    await applier.applyChange(bindingId, { revision: 101, type: 'delete', node_id: 'n-1', payload: { count: 1 } });
+
+    expect(adapter.calls).toEqual([]);
+    expect(await db.localNodes.get([bindingId, 'gone'])).toBeUndefined();
+    expect(await db.expectedMutations.count()).toBe(0);
+    expect((await db.bindings.get(bindingId))?.appliedRevision).toBe(101);
+  });
+
   it('recovers an unresolved provisional create after a simulated crash', async () => {
     adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
     const binding = await seedBinding();

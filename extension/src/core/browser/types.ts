@@ -24,14 +24,27 @@ export type BrowserEvent =
   | { kind: 'removed'; node: BrowserNode };
 
 export interface BrowserAdapter {
+  /** Resolve a browser id. Returns null for an id the browser does not know. */
   getNode(id: string): Promise<BrowserNode | null>;
   getChildren(parentId: string): Promise<BrowserNode[]>;
   create(parentId: string, details: { title: string; url?: string }): Promise<BrowserNode>;
   update(id: string, changes: { title?: string; url?: string }): Promise<void>;
   move(id: string, parentId: string, index: number | null): Promise<void>;
-  remove(id: string): Promise<void>;
+  /**
+   * Delete exactly one bookmark. Rejects when the id is a folder: browsers
+   * refuse to drop a non-empty container this way, so the caller must state
+   * which deletion it means rather than assume recursion works.
+   */
+  removeBookmark(id: string): Promise<void>;
+  /** Delete a folder and its whole subtree. */
+  removeSubtree(id: string): Promise<void>;
   onCreated(handler: (node: BrowserNode) => void): () => void;
   onChanged(handler: (node: BrowserNode) => void): () => void;
   onMoved(handler: (node: BrowserNode, oldParentId: string | null) => void): () => void;
   onRemoved(handler: (node: BrowserNode) => void): () => void;
+}
+
+/** Delete the node whose type the caller already knows. */
+export function removeByType(adapter: BrowserAdapter, node: { id: string; type: NodeType }): Promise<void> {
+  return node.type === 'folder' ? adapter.removeSubtree(node.id) : adapter.removeBookmark(node.id);
 }
