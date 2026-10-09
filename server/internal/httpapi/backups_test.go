@@ -119,3 +119,116 @@ func TestBackupLifecycleAndRestore(t *testing.T) {
 		t.Fatalf("bob list backups = %d", code)
 	}
 }
+
+// Two accounts both keeping a space called "Personal" is the ordinary case.
+// Their backups must not share storage, and restoring one must never apply
+// the other's tree.
+func TestBackupsOfEquallyNamedSpacesStayIndependent(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	alice := map[string]string{"Authorization": "Bearer " + f.sessionToken}
+	bob := map[string]string{"Authorization": "Bearer " + f.bobToken}
+	aliceRoot := f.ts.URL + "/api/v1/spaces/" + f.spaceID
+
+	code, body := doJSON(t, "POST", f.ts.URL+"/api/v1/spaces", bob, map[string]string{"name": "Personal"})
+	if code != http.StatusCreated {
+		t.Fatalf("bob create space = %d %v", code, body)
+	}
+	bobRoot := f.ts.URL + "/api/v1/spaces/" + body["id"].(string)
+
+	addBookmark := func(t *testing.T, base string, h map[string]string, title string) {
+		t.Helper()
+		code, body := doJSON(t, "POST", base+"/nodes", h, map[string]any{
+			"type": "bookmark", "title": title, "url": "https://" + title + ".example",
+			"parent": map[string]string{"type": "root", "key": "main"},
+		})
+		if code != http.StatusCreated {
+			t.Fatalf("create %s = %d %v", title, code, body)
+		}
+	}
+	backupID := func(t *testing.T, base string, h map[string]string) string {
+		t.Helper()
+		code, body := doJSON(t, "POST", base+"/backups", h, nil)
+		if code != http.StatusCreated {
+			t.Fatalf("create backup = %d %v", code, body)
+		}
+		return body["id"].(string)
+	}
+	titles := func(t *testing.T, base string, h map[string]string) map[string]bool {
+		t.Helper()
+		code, body := doJSON(t, "GET", base+"/nodes", h, nil)
+		if code != http.StatusOK {
+			t.Fatalf("list nodes = %d %v", code, body)
+		}
+		got := map[string]bool{}
+		for _, n := range body["nodes"].([]any) {
+			got[n.(map[string]any)["title"].(string)] = true
+		}
+		return got
+	}
+
+	addBookmark(t, aliceRoot, alice, "alice")
+	addBookmark(t, bobRoot, bob, "bob")
+	aBackup := backupID(t, aliceRoot, alice)
+	bBackup := backupID(t, bobRoot, bob)
+
+	addBookmark(t, aliceRoot, alice, "alice-later")
+	addBookmark(t, bobRoot, bob, "bob-later")
+
+	for _, tc := range []struct {
+		base, id, want string
+		h              map[string]string
+	}{
+		{aliceRoot, aBackup, "alice", alice},
+		{bobRoot, bBackup, "bob", bob},
+	} {
+		code, body = doJSON(t, "POST", tc.base+"/backups/"+tc.id+"/restore", tc.h, nil)
+		if code != http.StatusOK {
+			t.Fatalf("restore %s = %d %v", tc.want, code, body)
+		}
+		got := titles(t, tc.base, tc.h)
+		if !got[tc.want] || got[tc.want+"-later"] {
+			t.Fatalf("restore of %s produced %v, want only %q", tc.id, got, tc.want)
+		}
+	}
+}
+
+// Creating a second backup right after the first must not consume the first
+// payload, and a delete only ever removes its own file.
+func TestRepeatedBackupsRestoreTheirOwnSnapshots(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	h := map[string]string{"Authorization": "Bearer " + f.sessionToken}
+	root := f.ts.URL + "/api/v1/spaces/" + f.spaceID
+
+	add := func(title string) {
+		t.Helper()
+		code, body := doJSON(t, "POST", root+"/nodes", h, map[string]any{
+			"type": "bookmark", "title": title, "url": "https://" + title + ".example",
+			"parent": map[string]string{"type": "root", "key": "main"},
+		})
+		if code != http.StatusCreated {
+			t.Fatalf("create %s = %d %v", title, code, body)
+		}
+	}
+	add("first")
+	_, body := doJSON(t, "POST", root+"/backups", h, nil)
+	first := body["id"].(string)
+	add("second")
+	_, body = doJSON(t, "POST", root+"/backups", h, nil)
+	second := body["id"].(string)
+
+	// Drop the newest row: the older snapshot has to stay restorable.
+	if code := doEmpty(t, "DELETE", root+"/backups/"+second, h); code != http.StatusNoContent {
+		t.Fatalf("delete second = %d", code)
+	}
+	if code, body := doJSON(t, "POST", root+"/backups/"+first+"/restore", h, nil); code != http.StatusOK {
+		t.Fatalf("restore first = %d %v", code, body)
+	}
+	_, body = doJSON(t, "GET", root+"/nodes", h, nil)
+	got := map[string]bool{}
+	for _, n := range body["nodes"].([]any) {
+		got[n.(map[string]any)["title"].(string)] = true
+	}
+	if !got["first"] || got["second"] {
+		t.Fatalf("restored tree = %v, want only the first snapshot", got)
+	}
+}

@@ -44,6 +44,8 @@ func (s *Server) handleCreateSpace(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, space.ErrEmptyName):
 			s.writeError(w, r, http.StatusBadRequest, "INVALID_NAME", "name must not be empty")
+		case errors.Is(err, space.ErrBadName):
+			s.writeError(w, r, http.StatusBadRequest, "INVALID_NAME", "name must be a plain title without path characters")
 		case errors.Is(err, space.ErrTooManySpaces):
 			s.writeError(w, r, http.StatusConflict, "TOO_MANY_SPACES", "space limit reached")
 		default:

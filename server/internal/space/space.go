@@ -5,6 +5,7 @@ package space
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"pontis/internal/canonical"
@@ -14,6 +15,11 @@ import (
 var (
 	// ErrEmptyName is returned when the space name is blank.
 	ErrEmptyName = errors.New("space: name must not be empty")
+	// ErrBadName is returned when the name is not a plain display string.
+	// Space titles reach backup file names and the browser's download
+	// naming, so path segments and control characters are rejected here
+	// rather than sanitized everywhere downstream.
+	ErrBadName = errors.New("space: name must not contain path separators or control characters")
 	// ErrTooManySpaces guards the V1 soft limit per owner.
 	ErrTooManySpaces = errors.New("space: too many spaces")
 )
@@ -46,8 +52,8 @@ func NewService(store Store) *Service { return &Service{store: store} }
 
 // Create creates a space with the default root slot.
 func (s *Service) Create(ctx context.Context, owner canonical.UserID, name string) (canonical.SyncSpace, error) {
-	if name == "" {
-		return canonical.SyncSpace{}, ErrEmptyName
+	if err := ValidateName(name); err != nil {
+		return canonical.SyncSpace{}, err
 	}
 	if n, err := s.store.CountByOwner(ctx, owner); err != nil {
 		return canonical.SyncSpace{}, err
@@ -77,4 +83,24 @@ func (s *Service) Create(ctx context.Context, owner canonical.UserID, name strin
 // List returns the owner's spaces.
 func (s *Service) List(ctx context.Context, owner canonical.UserID) ([]canonical.SyncSpace, error) {
 	return s.store.ListByOwner(ctx, owner)
+}
+
+// ValidateName accepts a space title once it can safely appear in a file
+// name: non-blank, no path separators, no control characters.
+func ValidateName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return ErrEmptyName
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return ErrBadName
+	}
+	if name == "." || name == ".." {
+		return ErrBadName
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return ErrBadName
+		}
+	}
+	return nil
 }

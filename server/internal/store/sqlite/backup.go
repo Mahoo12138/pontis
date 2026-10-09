@@ -21,7 +21,7 @@ func scanBackup(row interface{ Scan(dest ...any) error }) (backup.Backup, error)
 	var b backup.Backup
 	var kind, createdAt string
 	var protected int
-	if err := row.Scan(&b.ID, &b.SpaceID, &kind, &b.Filename, &b.SizeBytes,
+	if err := row.Scan(&b.ID, &b.SpaceID, &kind, &b.Filename, &b.StorageKey, &b.SizeBytes,
 		&b.NodeCount, &b.BookmarkCount, &protected, &createdAt); err != nil {
 		return b, err
 	}
@@ -31,12 +31,15 @@ func scanBackup(row interface{ Scan(dest ...any) error }) (backup.Backup, error)
 	return b, nil
 }
 
+const backupColumns = `id, space_id, kind, filename, storage_key, size_bytes,
+	node_count, bookmark_count, protected, created_at`
+
 // Insert writes a catalog row.
 func (s *BackupStore) Insert(ctx context.Context, b backup.Backup) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO space_backups (id, space_id, kind, filename, size_bytes, node_count, bookmark_count, protected, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		b.ID, b.SpaceID, string(b.Kind), b.Filename, b.SizeBytes,
+		INSERT INTO space_backups (id, space_id, kind, filename, storage_key, size_bytes, node_count, bookmark_count, protected, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		b.ID, b.SpaceID, string(b.Kind), b.Filename, b.StorageKey, b.SizeBytes,
 		b.NodeCount, b.BookmarkCount, boolInt(b.Protected), formatTime(b.CreatedAt))
 	return err
 }
@@ -44,7 +47,7 @@ func (s *BackupStore) Insert(ctx context.Context, b backup.Backup) error {
 // List returns the space's catalog rows.
 func (s *BackupStore) List(ctx context.Context, spaceID string) ([]backup.Backup, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, space_id, kind, filename, size_bytes, node_count, bookmark_count, protected, created_at
+		SELECT `+backupColumns+`
 		FROM space_backups WHERE space_id = ? ORDER BY created_at DESC, id`, spaceID)
 	if err != nil {
 		return nil, err
@@ -64,7 +67,7 @@ func (s *BackupStore) List(ctx context.Context, spaceID string) ([]backup.Backup
 // Get loads one catalog row.
 func (s *BackupStore) Get(ctx context.Context, id string) (backup.Backup, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, space_id, kind, filename, size_bytes, node_count, bookmark_count, protected, created_at
+		SELECT `+backupColumns+`
 		FROM space_backups WHERE id = ?`, id)
 	b, err := scanBackup(row)
 	if err == sql.ErrNoRows {

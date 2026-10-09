@@ -135,6 +135,9 @@ func (s *Server) writeBackupError(w http.ResponseWriter, r *http.Request, err er
 		s.writeError(w, r, http.StatusForbidden, "BACKUP_SPACE_MISMATCH", "backup belongs to another space")
 	case errors.Is(err, backup.ErrInvalidPayload):
 		s.writeError(w, r, http.StatusBadRequest, "BACKUP_INVALID", "backup payload is invalid")
+	case errors.Is(err, backup.ErrUnlocated):
+		s.writeError(w, r, http.StatusConflict, "BACKUP_UNLOCATED",
+			"this backup's file cannot be identified; it predates storage keys")
 	case errors.Is(err, canonical.ErrSpaceNotFound):
 		s.writeError(w, r, http.StatusNotFound, "SPACE_NOT_FOUND", "unknown space")
 	case errors.Is(err, os.ErrNotExist):

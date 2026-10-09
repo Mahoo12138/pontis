@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,10 +31,16 @@ const (
 
 // Backup is one catalog entry.
 type Backup struct {
-	ID            string
-	SpaceID       string
-	Kind          Kind
-	Filename      string
+	ID      string
+	SpaceID string
+	Kind    Kind
+	// Filename is the human-readable download name built from the space
+	// name. It is display data only: it never locates the payload.
+	Filename string
+	// StorageKey is the opaque file name the payload lives under inside the
+	// backup directory (the backup's own UUID). Space names may repeat
+	// across owners, so the physical name must not depend on them.
+	StorageKey    string
 	SizeBytes     int64
 	NodeCount     int64
 	BookmarkCount int64
@@ -47,7 +54,92 @@ var (
 	ErrProtected      = errors.New("backup: protected backup must be unprotected first")
 	ErrSpaceMismatch  = errors.New("backup: backup belongs to another space")
 	ErrInvalidPayload = errors.New("backup: invalid backup payload")
+	// ErrUnlocated is returned for a row whose payload cannot be resolved:
+	// a legacy catalog entry that shared its display filename with another
+	// backup, or a storage key that is not a single plain file name. The
+	// service refuses to guess which file such a row owns.
+	ErrUnlocated = errors.New("backup: payload location is ambiguous")
 )
+
+// files isolates the physical backup directory from the catalog: a row can
+// only ever reach a file its own storage key names.
+type files interface {
+	Publish(key string, data []byte) error
+	Read(key string) ([]byte, error)
+	Remove(key string) error
+}
+
+// dirFiles stores payloads as single files under dir.
+type dirFiles struct{ dir string }
+
+// resolve maps a storage key to a path inside dir, rejecting anything that
+// is not exactly one file name so no key can escape the directory.
+func (f dirFiles) resolve(key string) (string, error) {
+	if key == "" || !isPlainFileName(key) {
+		return "", fmt.Errorf("%w: key %q", ErrUnlocated, key)
+	}
+	return filepath.Join(f.dir, key), nil
+}
+
+func isPlainFileName(key string) bool {
+	if strings.ContainsRune(key, filepath.Separator) || strings.ContainsRune(key, '/') ||
+		strings.ContainsRune(key, 0) {
+		return false
+	}
+	return key == filepath.Base(key) && key != "." && key != ".."
+}
+
+// Publish writes through a temporary file in the same directory and renames
+// it into place: an interrupted write leaves no truncated payload, and no
+// existing backup file is ever replaced by a partial one.
+func (f dirFiles) Publish(key string, data []byte) error {
+	path, err := f.resolve(key)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(f.dir, key+".tmp-")
+	if err != nil {
+		return fmt.Errorf("backup: create temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("backup: write temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("backup: close temp: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("backup: publish: %w", err)
+	}
+	return nil
+}
+
+func (f dirFiles) Read(key string) ([]byte, error) {
+	path, err := f.resolve(key)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("backup: read file: %w", err)
+	}
+	return raw, nil
+}
+
+// Remove deletes the payload. A missing file is success: the caller is
+// finishing an earlier attempt that already got that far.
+func (f dirFiles) Remove(key string) error {
+	path, err := f.resolve(key)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("backup: remove file: %w", err)
+	}
+	return nil
+}
 
 // Payload is the on-disk logical backup format.
 type Payload struct {
@@ -104,7 +196,7 @@ type Store interface {
 type Service struct {
 	store Store
 	trees TreeSource
-	dir   string
+	files files
 }
 
 // NewService returns a backup service storing payloads under dir.
@@ -112,7 +204,7 @@ func NewService(store Store, trees TreeSource, dir string) (*Service, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("backup: create dir: %w", err)
 	}
-	return &Service{store: store, trees: trees, dir: dir}, nil
+	return &Service{store: store, trees: trees, files: dirFiles{dir: dir}}, nil
 }
 
 // Create captures the space's current tree.
@@ -174,7 +266,8 @@ func (s *Service) Create(ctx context.Context, spaceID canonical.SpaceID, kind Ki
 		ID:            id.String(),
 		SpaceID:       string(spaceID),
 		Kind:          kind,
-		Filename:      fmt.Sprintf("%s-%s-%s.json", sp.Name, stamp, kind),
+		Filename:      humanFilename(sp.Name, stamp, kind),
+		StorageKey:    id.String() + ".json",
 		NodeCount:     int64(len(nodes)),
 		BookmarkCount: bookmarks,
 		CreatedAt:     now,
@@ -185,14 +278,38 @@ func (s *Service) Create(ctx context.Context, spaceID canonical.SpaceID, kind Ki
 		return Backup{}, err
 	}
 	b.SizeBytes = int64(len(raw))
-	if err := os.WriteFile(filepath.Join(s.dir, b.Filename), raw, 0o644); err != nil {
-		return Backup{}, fmt.Errorf("backup: write file: %w", err)
+	// The payload is published under this backup's own UUID, so a second
+	// space with the same name (or a second click in the same second)
+	// creates a new file instead of overwriting the first one.
+	if err := s.files.Publish(b.StorageKey, raw); err != nil {
+		return Backup{}, err
 	}
 	if err := s.store.Insert(ctx, b); err != nil {
-		_ = os.Remove(filepath.Join(s.dir, b.Filename))
+		_ = s.files.Remove(b.StorageKey)
 		return Backup{}, err
 	}
 	return b, nil
+}
+
+// filenamePunct characters never appear in a backup's display name.
+var filenamePunct = strings.NewReplacer(
+	"/", "_", `\`, "_", ":", "_", "*", "_", "?", "_", `"`, "_",
+	"<", "_", ">", "_", "|", "_", "\n", "_", "\r", "_", "\t", "_",
+)
+
+// humanFilename builds the download name for a backup. The space name is
+// user-controlled, so path-bearing characters are flattened and the result is
+// bounded; the payload itself is addressed by StorageKey, not by this name.
+func humanFilename(spaceName, stamp string, kind Kind) string {
+	name := strings.TrimSpace(filenamePunct.Replace(spaceName))
+	name = strings.Trim(name, ".")
+	if r := []rune(name); len(r) > 60 {
+		name = string(r[:60])
+	}
+	if name == "" {
+		name = "space"
+	}
+	return fmt.Sprintf("%s-%s-%s.json", name, stamp, kind)
 }
 
 // List returns the space's backups, newest first.
@@ -211,11 +328,15 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.store.Delete(ctx, id); err != nil {
-		return err
+	// File first, catalog second: when the filesystem refuses (permission,
+	// EBUSY), the row survives and the delete stays retryable instead of
+	// leaving an orphaned payload behind an unreferenced catalog entry.
+	if b.StorageKey != "" {
+		if err := s.files.Remove(b.StorageKey); err != nil {
+			return err
+		}
 	}
-	_ = os.Remove(filepath.Join(s.dir, b.Filename))
-	return nil
+	return s.store.Delete(ctx, id)
 }
 
 // SetProtected toggles the retention exemption.
@@ -234,10 +355,16 @@ func (s *Service) Restore(ctx context.Context, spaceID canonical.SpaceID, id str
 	if b.SpaceID != string(spaceID) {
 		return 0, "", ErrSpaceMismatch
 	}
+	if b.StorageKey == "" {
+		// Legacy row whose display name was shared: which physical file is
+		// its payload cannot be decided, so restoring would apply another
+		// backup's tree.
+		return 0, "", fmt.Errorf("%w: backup %s", ErrUnlocated, b.ID)
+	}
 
-	raw, err := os.ReadFile(filepath.Join(s.dir, b.Filename))
+	raw, err := s.files.Read(b.StorageKey)
 	if err != nil {
-		return 0, "", fmt.Errorf("backup: read file: %w", err)
+		return 0, "", err
 	}
 	var payload Payload
 	if err := json.Unmarshal(raw, &payload); err != nil {
