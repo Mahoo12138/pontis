@@ -35,6 +35,14 @@ func (s *Server) requireSpaceAccess(next http.Handler) http.Handler {
 			s.writeError(w, r, http.StatusForbidden, "NOT_SPACE_OWNER", "space belongs to another user")
 			return
 		}
+		// An API token is a *subset* of its user's authority (doc 09 §9):
+		// owning the account is not enough, the space must be one the token
+		// was minted for.
+		if p, ok := currentAPIToken(r); ok && !p.AllowsSpace(spaceID) {
+			s.writeError(w, r, http.StatusForbidden, "SPACE_OUT_OF_SCOPE",
+				"this token is not authorized for that space")
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }

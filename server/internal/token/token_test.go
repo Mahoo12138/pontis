@@ -17,12 +17,48 @@ type fakeStore struct {
 	revokedID   string
 	revokedAt   time.Time
 	tokens      []Token // returned by ListByUser / Get
+	// byHash indexes InsertToken's secret so Verify has something to look up.
+	byHash map[string]Token
+	// hashLookups counts GetByHash calls: a credential refused before the
+	// store must leave it at zero.
+	hashLookups int
+	usedAt      map[string]time.Time
 }
 
-func (f *fakeStore) InsertToken(_ context.Context, t Token, _ /*prefix*/, _ /*hash*/ string) error {
+func (f *fakeStore) InsertToken(_ context.Context, t Token, _, hash string) error {
 	f.inserted = append(f.inserted, t)
 	f.insertedAny = true
+	if f.byHash == nil {
+		f.byHash = map[string]Token{}
+	}
+	f.byHash[hash] = t
 	return nil
+}
+
+func (f *fakeStore) GetByHash(_ context.Context, hash string) (Token, error) {
+	f.hashLookups++
+	t, ok := f.byHash[hash]
+	if !ok {
+		return Token{}, ErrTokenInvalid
+	}
+	return t, nil
+}
+
+func (f *fakeStore) TouchLastUsed(_ context.Context, id string, at time.Time) error {
+	if f.usedAt == nil {
+		f.usedAt = map[string]time.Time{}
+	}
+	f.usedAt[id] = at
+	return nil
+}
+
+// patchSecret rewrites the stored token for one secret, for tests that need
+// a row the service itself would never create (revoked after the fact,
+// corrupted space_scope).
+func (f *fakeStore) patchSecret(secret string, fn func(*Token)) {
+	tok := f.byHash[SecretHash(secret)]
+	fn(&tok)
+	f.byHash[SecretHash(secret)] = tok
 }
 
 func (f *fakeStore) ListByUser(_ context.Context, _ canonical.UserID) ([]Token, error) {
@@ -161,6 +197,116 @@ func TestRevoke(t *testing.T) {
 		}
 		if store.revokedID != "" {
 			t.Error("store.Revoke was called for a foreign token")
+		}
+	})
+}
+
+// mint creates one token and returns its raw secret.
+func mint(t *testing.T, s *Service, p CreateParams) (Token, string) {
+	t.Helper()
+	tok, secret, err := s.Create(context.Background(), canonical.UserID("u1"), p)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	return tok, secret
+}
+
+func TestVerifyBuildsPrincipal(t *testing.T) {
+	t.Run("space-scoped read token", func(t *testing.T) {
+		store := &fakeStore{}
+		s := NewService(store)
+		tok, secret := mint(t, s, CreateParams{
+			Name:       "ci",
+			Scopes:     []string{string(ScopeBookmarksRead)},
+			SpaceScope: `["space-a"]`,
+		})
+		p, err := s.Verify(context.Background(), secret)
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if p.TokenID != tok.ID || p.UserID != "u1" {
+			t.Errorf("principal = %+v, want token %s of u1", p, tok.ID)
+		}
+		if !p.Allows(ScopeBookmarksRead) {
+			t.Error("granted scope missing")
+		}
+		if p.Allows(ScopeBookmarksWrite) || p.Allows(ScopeBackupsWrite) || p.Allows(Scope("admin:all")) {
+			t.Error("principal carries a scope the token was never minted with")
+		}
+		if !p.AllowsSpace("space-a") {
+			t.Error("listed space refused")
+		}
+		if p.AllowsSpace("space-b") {
+			t.Error("a space outside space_scope was accepted")
+		}
+		if store.usedAt[tok.ID].IsZero() {
+			t.Error("a successful verification did not stamp last_used_at")
+		}
+	})
+
+	t.Run("space scope all covers spaces created later", func(t *testing.T) {
+		store := &fakeStore{}
+		s := NewService(store)
+		_, secret := mint(t, s, CreateParams{
+			Name: "ci", Scopes: []string{string(ScopeBookmarksRead)},
+		})
+		p, err := s.Verify(context.Background(), secret)
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if !p.AllowsSpace("space-never-seen") {
+			t.Error(`SpaceScope "all" refused a space`)
+		}
+	})
+
+	t.Run("foreign credential scheme", func(t *testing.T) {
+		store := &fakeStore{}
+		s := NewService(store)
+		// A device secret is not an API token, and must not even reach the
+		// store: the schemes are typed by their prefix.
+		if _, err := s.Verify(context.Background(), "pdv_somelongopaquevalue"); !errors.Is(err, ErrTokenInvalid) {
+			t.Errorf("Verify err = %v, want ErrTokenInvalid", err)
+		}
+		if store.hashLookups != 0 {
+			t.Errorf("store consulted %d times for a non-token credential", store.hashLookups)
+		}
+	})
+
+	t.Run("revoked token", func(t *testing.T) {
+		store := &fakeStore{}
+		s := NewService(store)
+		_, secret := mint(t, s, CreateParams{
+			Name: "ci", Scopes: []string{string(ScopeBookmarksRead)},
+		})
+		now := time.Now().UTC()
+		store.patchSecret(secret, func(tok *Token) { tok.RevokedAt = &now })
+		if _, err := s.Verify(context.Background(), secret); !errors.Is(err, ErrTokenInvalid) {
+			t.Errorf("Verify err = %v, want ErrTokenInvalid after revoke", err)
+		}
+	})
+
+	t.Run("unparsable space scope grants nothing", func(t *testing.T) {
+		store := &fakeStore{}
+		s := NewService(store)
+		_, secret := mint(t, s, CreateParams{
+			Name: "ci", Scopes: []string{string(ScopeBookmarksRead)},
+		})
+		// Simulate a row that no longer holds the shape creation checked.
+		store.patchSecret(secret, func(tok *Token) { tok.SpaceScope = "space-a" })
+		p, err := s.Verify(context.Background(), secret)
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if p.AllowsSpace("space-a") || p.AllowsSpace("anything") {
+			t.Error("a malformed space_scope fell open into full access")
+		}
+	})
+
+	t.Run("unknown secret", func(t *testing.T) {
+		store := &fakeStore{}
+		s := NewService(store)
+		if _, err := s.Verify(context.Background(), SecretPrefix+"not-a-real-token-value"); !errors.Is(err, ErrTokenInvalid) {
+			t.Errorf("Verify err = %v, want ErrTokenInvalid", err)
 		}
 	})
 }

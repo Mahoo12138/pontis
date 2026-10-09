@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -70,12 +71,20 @@ const (
 	ctxSessionToken
 	ctxSessionID
 	ctxDevice
+	ctxAPIToken
 )
 
 // currentUser returns the authenticated user, if any.
 func currentUser(r *http.Request) (auth.User, bool) {
 	u, ok := r.Context().Value(ctxUser).(auth.User)
 	return u, ok
+}
+
+// currentAPIToken returns the API token principal, if the request was
+// authenticated by one. A session request has none.
+func currentAPIToken(r *http.Request) (token.Principal, bool) {
+	p, ok := r.Context().Value(ctxAPIToken).(token.Principal)
+	return p, ok
 }
 
 // currentDevice returns the authenticated device, if any.
@@ -145,15 +154,38 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/v1/spaces", s.handleCreateSpace)
 	})
 
-	// Canonical tree access (web session, owner-scoped).
+	// Canonical tree access (owner-scoped). The four groups below are the
+	// API token surface: a web session carries its user's authority, a token
+	// only the capability named here (doc 09 §9-10).
 	r.Group(func(r chi.Router) {
-		r.Use(s.requireSession, s.requireSpaceAccess)
+		r.Use(s.requireScope(token.ScopeBookmarksRead), s.requireSpaceAccess)
 		r.Get("/api/v1/spaces/{spaceID}/nodes", s.handleListNodes)
 		r.Get("/api/v1/spaces/{spaceID}/root-slots", s.handleListRootSlots)
+	})
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireScope(token.ScopeBookmarksWrite), s.requireSpaceAccess)
 		r.Post("/api/v1/spaces/{spaceID}/nodes", s.handleCreateNode)
 		r.Patch("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleUpdateNode)
 		r.Patch("/api/v1/spaces/{spaceID}/nodes/{nodeID}/move", s.handleMoveNode)
 		r.Delete("/api/v1/spaces/{spaceID}/nodes/{nodeID}", s.handleDeleteNode)
+	})
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireScope(token.ScopeBackupsRead), s.requireSpaceAccess)
+		r.Get("/api/v1/spaces/{spaceID}/backups", s.handleListBackups)
+	})
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireScope(token.ScopeBackupsWrite), s.requireSpaceAccess)
+		r.Post("/api/v1/spaces/{spaceID}/backups", s.handleCreateBackup)
+		r.Post("/api/v1/spaces/{spaceID}/backups/{backupID}/restore", s.handleRestoreBackup)
+		r.Patch("/api/v1/spaces/{spaceID}/backups/{backupID}", s.handleUpdateBackup)
+		r.Delete("/api/v1/spaces/{spaceID}/backups/{backupID}", s.handleDeleteBackup)
+	})
+
+	// Session-only tree work: no API token capability covers activity,
+	// undo, organizer, transfer or import/export yet, so a token bearing
+	// bookmarks:write still cannot reach them.
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireSession, s.requireSpaceAccess)
 		r.Get("/api/v1/spaces/{spaceID}/activity", s.handleSpaceActivity)
 		r.Post("/api/v1/spaces/{spaceID}/changesets/{changeSetID}/undo", s.handleUndoChangeSet)
 		r.Post("/api/v1/spaces/{spaceID}/organizer/link-check", s.handleRunLinkCheck)
@@ -163,11 +195,6 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/v1/spaces/{spaceID}/export", s.handleExport)
 		r.Post("/api/v1/spaces/{spaceID}/import/preview", s.handleImportPreview)
 		r.Post("/api/v1/spaces/{spaceID}/import/apply", s.handleImportApply)
-		r.Get("/api/v1/spaces/{spaceID}/backups", s.handleListBackups)
-		r.Post("/api/v1/spaces/{spaceID}/backups", s.handleCreateBackup)
-		r.Post("/api/v1/spaces/{spaceID}/backups/{backupID}/restore", s.handleRestoreBackup)
-		r.Patch("/api/v1/spaces/{spaceID}/backups/{backupID}", s.handleUpdateBackup)
-		r.Delete("/api/v1/spaces/{spaceID}/backups/{backupID}", s.handleDeleteBackup)
 	})
 
 	// Plaza / publications (web session).
@@ -441,6 +468,40 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, ctxSessionID, sess.ID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// requireScope guards one domain capability. A web session carries its
+// user's own authority; an API token carries only the capability it was
+// minted with, and the space boundary is enforced separately by
+// requireSpaceAccess. Credentials are typed by scheme: a token secret is
+// never a session and a session is never a token.
+func (s *Server) requireScope(scope token.Scope) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			secret := bearerToken(r)
+			if !strings.HasPrefix(secret, token.SecretPrefix) {
+				s.requireSession(next).ServeHTTP(w, r)
+				return
+			}
+			principal, err := s.Tokens.Verify(r.Context(), secret)
+			if err != nil {
+				s.writeError(w, r, http.StatusUnauthorized, "TOKEN_INVALID", "unknown, revoked, or account-disabled token")
+				return
+			}
+			user, err := s.Auth.UserByID(r.Context(), string(principal.UserID))
+			if err != nil {
+				s.writeError(w, r, http.StatusUnauthorized, "TOKEN_INVALID", "unknown, revoked, or account-disabled token")
+				return
+			}
+			if !principal.Allows(scope) {
+				s.writeError(w, r, http.StatusForbidden, "SCOPE_DENIED", "this token does not carry "+string(scope))
+				return
+			}
+			ctx := context.WithValue(r.Context(), ctxUser, user)
+			ctx = context.WithValue(ctx, ctxAPIToken, principal)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
 }
 
 // requireDevice resolves a device credential from the Bearer token.

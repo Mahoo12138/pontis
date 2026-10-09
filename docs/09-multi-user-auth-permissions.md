@@ -133,6 +133,10 @@ API Token 权限永远是 User 权限子集。
 
 普通 Token 不授予系统 Admin API。
 
+认证链：Bearer 凭据按前缀分型，`pnt_` 走 API Token Principal，其余走 Session，两者互不冒充。Principal 由 `token.Service.Verify` 解析，依次检查密文形状、Token 是否已撤销、Owner 账号状态，再得出 Capability 与 Resource Boundary。V1 的 Token 没有有效期字段，撤销是唯一的一次性失效手段；撤销后立即生效，无需重启。
+
+Capability 目前被消费的路由是 Canonical Tree 与 Backup 四组：`bookmarks:read` 读 nodes/root-slots，`bookmarks:write` 建改移删节点，`backups:read` 列出备份，`backups:write` 创建/恢复/改名/删除备份。Activity、Undo、Organizer、Space Transfer、Import/Export 仍只接受 Session；`publications:read` 与 `publications:write` 可以在创建时授予，但 Plaza 路由从请求体取 Space、且整组只接受 Session，因此暂时无法被 Token 消费。系统 Admin API 与 Device/Replica 协议对 Token 一律拒绝。
+
 ## 10. Space Restriction
 
 Token 权限由两维组成：
