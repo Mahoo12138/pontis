@@ -239,7 +239,40 @@ Playwright E2E
 
 Extension Core：Vitest + Fake Browser Adapter/Dexie test DB。
 
-真实 Chromium extension integration 可后续用 Playwright loading unpacked extension。
+### 真实浏览器 smoke（unpacked extension + 真服务端）
+
+Fake adapter + httptest 两侧都用自己的替身，跨界的形状差异只有真机能看见。跑法：
+
+```text
+1. 服务端：PONTIS_DATA_DIR 指一个干净目录、PONTIS_LISTEN=127.0.0.1:8080 起进程，
+   POST /auth/setup 建号 → POST /spaces 建空间 → POST /spaces/{id}/nodes 预置节点。
+2. 扩展：pnpm --filter @pontis/extension build → extension/.output/chrome-mv3。
+3. 浏览器：Playwright MCP 以 launchPersistentContext 启动，launchOptions.args 带
+   --load-extension=<绝对路径> 与 --disable-extensions-except=<同一绝对路径>，
+   userDataDir 用独立 profile（可反复重启而保住 storage.local / IndexedDB）。
+4. 扩展 id 由加载路径决定：sha256(绝对路径) 前 16 字节，每个半字节映射成 a-p，
+   于是可以直接 navigate 到 chrome-extension://<id>/options.html。
+```
+
+三个必然踩到的坑：
+
+- 改完代码必须清 profile 的 `Default/Service Worker`、`Default/Extension Scripts`、
+  `Default/Code Cache`，否则 Chrome 继续跑缓存里的旧 SW 脚本，症状是"代码明明改了、
+  行为没变"。`chrome.runtime.reload()` 之后扩展页面会短暂 `ERR_BLOCKED_BY_CLIENT`，
+  只能重启浏览器。
+- 服务端有意不发 CORS，扩展靠 `optional_host_permissions` + 配对时
+  `chrome.permissions.request` 拿权限。那个授权气泡是浏览器原生 UI，Playwright 点不了，
+  需要人点一次「允许」（同一 profile 之后一直有效）。
+- `chrome.storage.local.get(key)` 解析成 `{key: value}` 包装对象，不是 value。核心里
+  的 KV 抽象与它不同，这层形状差异只能留在 `runtime/kvArea()`。
+- 扩展只在 headed + persistent context 下能加载；没有装 Chrome stable 的机器上，用
+  Playwright 自带 Chromium 或 `Google Chrome for Testing.app` 的绝对路径
+  （`launchOptions.executablePath`）即可，别为此装一遍浏览器。
+
+事件回环要有测试覆盖：任何"同步自己写进浏览器"的路径，测试必须把 adapter 的监听器接到
+EventProcessor 上（见 `expectedMutationEcho.test.ts`）。否则 provisional expectation
+被谁消费、echo 晚到会不会把同步自己的改动当成用户编辑，mock 全都测不出来——真实浏览器
+里它的症状是服务端长出重复节点。
 
 ## 11. Release Testing
 
