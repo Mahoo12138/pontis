@@ -25,6 +25,22 @@ describe('golden protocol fixtures', () => {
     expect(move.type).toBe('move');
   });
 
+  // A remote-only pull sends no operations, so the Go handler returns both
+  // protocol arrays empty. Consumers iterate them, so `null` is not accepted.
+  it('decodes sync-response-empty-v1.json into iterable arrays', () => {
+    const body = golden('sync-response-empty-v1.json') as Record<string, unknown>;
+    expect(Array.isArray(body.operation_results)).toBe(true);
+    expect(Array.isArray(body.changes)).toBe(true);
+
+    const resp = decodeSyncResponse(body);
+    expect(resp.operation_results).toEqual([]);
+    expect(resp.changes).toEqual([]);
+
+    // The consumption pattern the coordinator uses must not throw.
+    for (const r of resp.operation_results) expect(r.op_id).toBeTypeOf('string');
+    for (const c of resp.changes) expect(c.revision).toBeTypeOf('number');
+  });
+
   it('decodes error-epoch-mismatch.json into a ProtocolError', () => {
     const err = expectError(golden('error-epoch-mismatch.json'));
     expect(err).toBeInstanceOf(ProtocolError);

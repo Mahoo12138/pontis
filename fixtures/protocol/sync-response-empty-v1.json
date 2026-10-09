@@ -1,0 +1,11 @@
+{
+  "protocol_version": 1,
+  "epoch": 1,
+  "journal_floor_revision": 0,
+  "from_revision": 120,
+  "through_revision": 120,
+  "server_revision": 120,
+  "has_more": false,
+  "operation_results": [],
+  "changes": []
+}

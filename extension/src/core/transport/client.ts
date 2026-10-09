@@ -14,6 +14,7 @@ import {
   type TransferRequestWire,
   type TransferResponseWire,
 } from '../protocol/types';
+import { parseSnapshotResponse, parseSyncResponse } from '../protocol/validate';
 
 export class ApiError extends Error {
   constructor(
@@ -61,7 +62,7 @@ export class ApiClient implements SyncTransport, SnapshotTransport, TransferTran
 
   private async request<T>(
     path: string,
-    init: { method?: string; body?: unknown; token?: string } = {},
+    init: { method?: string; body?: unknown; token?: string; validate?: (json: unknown) => T } = {},
   ): Promise<T> {
     const { serverUrl, token } = await this.resolveConfig();
     const auth = init.token ?? token;
@@ -84,6 +85,9 @@ export class ApiClient implements SyncTransport, SnapshotTransport, TransferTran
       const err = (json as { error?: { code?: string; message?: string } }).error;
       throw new ApiError(res.status, err?.code ?? `HTTP_${res.status}`, err?.message ?? res.statusText);
     }
+    // A `as T` cast would let a malformed body (null where an array is
+    // required) reach the consumer; validate at the boundary instead.
+    if (init.validate) return init.validate(json);
     return json as T;
   }
 
@@ -111,11 +115,14 @@ export class ApiClient implements SyncTransport, SnapshotTransport, TransferTran
     return this.request<SyncResponseWire>(`/api/v1/sync/bindings/${bindingId}`, {
       method: 'POST',
       body: req,
+      validate: parseSyncResponse,
     });
   }
 
   fetchSnapshot(bindingId: string): Promise<SnapshotWire> {
-    return this.request<SnapshotWire>(`/api/v1/sync/bindings/${bindingId}/snapshot`);
+    return this.request<SnapshotWire>(`/api/v1/sync/bindings/${bindingId}/snapshot`, {
+      validate: parseSnapshotResponse,
+    });
   }
 
   createTransfer(req: TransferRequestWire): Promise<TransferResponseWire> {

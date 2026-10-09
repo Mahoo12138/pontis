@@ -27,7 +27,7 @@ export function decodeSyncResponse(data: unknown): SyncResponse {
     through_revision: num(raw.through_revision),
     server_revision: num(raw.server_revision),
     has_more: raw.has_more === true,
-    operation_results: ((raw.operation_results ?? []) as Record<string, unknown>[]).map((r) => {
+    operation_results: arr(raw.operation_results, 'operation_results').map((r) => {
       const o = r as Record<string, unknown>;
       return {
         op_id: str(o.op_id),
@@ -38,7 +38,7 @@ export function decodeSyncResponse(data: unknown): SyncResponse {
         settle_after_revision: num(o.settle_after_revision),
       };
     }),
-    changes: ((raw.changes ?? []) as unknown[]).map(decodeChange),
+    changes: arr(raw.changes, 'changes').map(decodeChange),
   };
 }
 
@@ -140,6 +140,18 @@ function num(v: unknown): number {
 function str(v: unknown): string {
   if (typeof v !== 'string') {
     throw new Error(`protocol: expected string, got ${JSON.stringify(v)}`);
+  }
+  return v;
+}
+
+/**
+ * Protocol arrays are always arrays; `null` means the producer broke the
+ * contract and every consumer would iterate an invalid value.
+ */
+function arr(v: unknown, field: string): unknown[] {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) {
+    throw new Error(`protocol: expected array for "${field}", got ${JSON.stringify(v)}`);
   }
   return v;
 }

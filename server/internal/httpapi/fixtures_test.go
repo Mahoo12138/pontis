@@ -94,6 +94,20 @@ func goldenFixtures() []fixtureFile {
 			Message:   "canonical epoch changed",
 			RequestID: "req_fixture",
 		}}},
+		// A remote-only pull sends no operations. Both protocol arrays must
+		// still encode as [] — a null would break every consumer that
+		// iterates them.
+		{"sync-response-empty-v1.json", syncResponseDTO{
+			ProtocolVersion:      1,
+			Epoch:                1,
+			JournalFloorRevision: 0,
+			FromRevision:         120,
+			ThroughRevision:      120,
+			ServerRevision:       120,
+			HasMore:              false,
+			OperationResults:     []operationResultDTO{},
+			Changes:              []changeDTO{},
+		}},
 	}
 }
 
@@ -152,7 +166,7 @@ func freshDTO(name string) any {
 		return &operationDTO{}
 	case "sync-request-v1.json":
 		return &syncRequestDTO{}
-	case "sync-response-v1.json":
+	case "sync-response-v1.json", "sync-response-empty-v1.json":
 		return &syncResponseDTO{}
 	case "error-epoch-mismatch.json":
 		return &errorEnvelope{}

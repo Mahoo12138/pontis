@@ -354,7 +354,11 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		ThroughRevision:      resp.ThroughRevision,
 		ServerRevision:       resp.ServerRevision,
 		HasMore:              resp.HasMore,
-		Changes:              make([]changeDTO, 0, len(resp.Changes)),
+		// Protocol arrays are always `[]`, never `null`: a request with no
+		// operations is the normal remote-only pull, and clients iterate
+		// these fields.
+		OperationResults: make([]operationResultDTO, 0, len(resp.OperationResults)),
+		Changes:          make([]changeDTO, 0, len(resp.Changes)),
 	}
 	for _, res := range resp.OperationResults {
 		out.OperationResults = append(out.OperationResults, operationResultDTO{
