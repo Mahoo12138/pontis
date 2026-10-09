@@ -268,6 +268,12 @@ Fake adapter + httptest 两侧都用自己的替身，跨界的形状差异只�
 - 扩展只在 headed + persistent context 下能加载；没有装 Chrome stable 的机器上，用
   Playwright 自带 Chromium 或 `Google Chrome for Testing.app` 的绝对路径
   （`launchOptions.executablePath`）即可，别为此装一遍浏览器。
+- MCP 入口不要写 `npx -y @playwright/mcp@<ver>`：registry 慢的时候进程起不来，`/mcp reload`
+  之后整个 server 直接消失。用已缓存的 `.../node_modules/.bin/playwright-mcp` 绝对路径，
+  冷启动不碰网络。
+- 测试浏览器要按 profile 目录精确杀（`pgrep -f "<profile 路径>"`），别按二进制名 kill：
+  服务端和浏览器都在同一个临时目录下时，一条 `pkill -f pontis-alpha` 会顺手把 Playwright
+  的浏览器干掉，MCP 连接就此卡死，只能重启。
 
 事件回环要有测试覆盖：任何"同步自己写进浏览器"的路径，测试必须把 adapter 的监听器接到
 EventProcessor 上（见 `expectedMutationEcho.test.ts`）。否则 provisional expectation
