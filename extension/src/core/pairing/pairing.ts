@@ -100,9 +100,37 @@ export class PairingService {
     return record;
   }
 
-  /** Remove the local binding row (server-side revoke comes later). */
+  /**
+   * Unbind: revoke the server's row, then drop this binding's replica state.
+   * Both halves matter. Leaving the server binding active is what made the
+   * space impossible to bind again (409 BINDING_EXISTS), and leaving the local
+   * mirrors behind would let the next initial reconciliation find mappings for
+   * a tree it is about to rebuild.
+   */
   async unbind(bindingId: string): Promise<void> {
-    await this.db.bindings.delete(bindingId);
+    const { deviceToken } = await this.bootstrap.get();
+    if (deviceToken) await this.client.revokeBinding(deviceToken, bindingId);
+    await this.db.transaction(
+      'rw',
+      [
+        this.db.bindings,
+        this.db.localNodes,
+        this.db.pendingOps,
+        this.db.expectedMutations,
+        this.db.remoteChanges,
+        this.db.reconSessions,
+        this.db.emergencySnapshots,
+      ],
+      async () => {
+        await this.db.bindings.delete(bindingId);
+        await this.db.localNodes.where('bindingId').equals(bindingId).delete();
+        await this.db.pendingOps.where('bindingId').equals(bindingId).delete();
+        await this.db.expectedMutations.where('bindingId').equals(bindingId).delete();
+        await this.db.remoteChanges.where('bindingId').equals(bindingId).delete();
+        await this.db.reconSessions.where('bindingId').equals(bindingId).delete();
+        await this.db.emergencySnapshots.where('bindingId').equals(bindingId).delete();
+      },
+    );
   }
 
   async isPaired(): Promise<boolean> {

@@ -20,6 +20,7 @@ import {
   Title,
 } from '@mantine/core';
 import { createChromiumAdapter } from '../../core/browser/chromium';
+import type { ReconciliationIssueWire } from '../../core/protocol/types';
 import { ApiClient } from '../../core/transport/client';
 import { BootstrapStore } from '../../core/store/bootstrap';
 import {
@@ -69,6 +70,8 @@ export function App() {
   const [diagnostics, setDiagnostics] = useState<DiagnosticEvent[]>([]);
   const [intents, setIntents] = useState<PendingOpRecord[]>([]);
   const [intentChoices, setIntentChoices] = useState<Record<string, IntentDecision['decision']>>({});
+  /** Issue id → the candidate the user picked; unset keeps the server default. */
+  const [issueChoices, setIssueChoices] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
     setBindings(await db.bindings.toArray());
@@ -183,10 +186,37 @@ export function App() {
     }
   };
 
+  /**
+   * Answer the server plan's open questions (doc 08 §11). An issue left out of
+   * the map keeps the server's safe default, so the user may answer only the
+   * ones they care about.
+   */
+  const answerIssues = async (bindingId: string, issues: ReconciliationIssueWire[]) => {
+    const decisions: Record<string, string> = {};
+    for (const issue of issues) {
+      const chosen = issueChoices[issue.id];
+      if (chosen) decisions[issue.id] = chosen;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const resp = (await chrome.runtime.sendMessage({
+        type: 'pontis/initial-reconcile-answer',
+        bindingId,
+        decisions,
+      })) as { ok: boolean; error?: string } | undefined;
+      if (resp && !resp.ok) setError(resp.error ?? '提交选择失败');
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(false);
+      await refresh();
+    }
+  };
+
   /** Doc 06 §11 default policy: destructive delete defaults to discard. */
   const defaultIntentDecision = (op: PendingOpRecord): IntentDecision['decision'] =>
     op.type === 'delete' ? 'discard' : 'apply';
-
   const setIntentChoice = (opId: string, decision: IntentDecision['decision']) =>
     setIntentChoices((prev) => ({ ...prev, [opId]: decision }));
 
@@ -403,7 +433,8 @@ export function App() {
 
                     {session && (
                       <Text size="xs" c="dimmed">
-                        阶段: <Code>{session.phase}</Code>
+                        阶段: <Code>{session.serverPhase ?? session.phase}</Code>
+                        {session.serverSessionId ? ` · 服务端会话 ${session.serverSessionId.slice(0, 8)}` : ''}
                         {session.error ? ` · ${session.error}` : ''}
                       </Text>
                     )}
@@ -504,7 +535,43 @@ export function App() {
                         );
                       })()}
 
-                    {session?.state === 'WAITING_USER' && session.type !== 'FULL_RESYNC' && (
+                    {session?.state === 'WAITING_USER' && (session.issues?.length ?? 0) > 0 && (
+                      <Stack gap="xs">
+                        <Text size="sm">服务端在提交合并前有几处身份要你确认:</Text>
+                        {session.issues!.map((issue) => (
+                          <Group key={issue.id} gap="xs" wrap="nowrap">
+                            <Text size="sm" truncate maw={280}>
+                              {issue.payload.title || issue.payload.source_ref}
+                              {issue.payload.url ? ` · ${issue.payload.url}` : ''}
+                            </Text>
+                            <Select
+                              size="xs"
+                              w={260}
+                              placeholder="沿用服务端默认"
+                              data={issue.payload.candidates.map((c) => ({ value: c, label: c }))}
+                              value={issueChoices[issue.id] || null}
+                              onChange={(v) => setIssueChoices((prev) => ({ ...prev, [issue.id]: v ?? '' }))}
+                              searchable
+                            />
+                          </Group>
+                        ))}
+                        <Group gap="xs">
+                          <Text size="xs" c="dimmed">未做选择的条目按服务端安全默认处理(doc 08 §11)。</Text>
+                          <Button
+                            size="xs"
+                            color="green"
+                            loading={busy}
+                            onClick={() => void answerIssues(b.id, session.issues!)}
+                          >
+                            提交选择
+                          </Button>
+                        </Group>
+                      </Stack>
+                    )}
+
+                    {session?.state === 'WAITING_USER' &&
+                      session.type !== 'FULL_RESYNC' &&
+                      (session.issues?.length ?? 0) === 0 && (
                       <Stack gap="xs">
                         <Text size="sm">
                           浏览器与服务器均有内容,请选择初始化策略:

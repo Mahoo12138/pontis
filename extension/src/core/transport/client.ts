@@ -152,6 +152,11 @@ export class ApiClient implements SyncTransport, SnapshotTransport, TransferTran
     return this.request('/api/v1/device/bindings', { method: 'POST', token: deviceToken, body: { space_id: spaceId } });
   }
 
+  /** Unbind: the server resets this device's binding, the space keeps its data. */
+  revokeBinding(deviceToken: string, bindingId: string): Promise<BindingWire> {
+    return this.request(`/api/v1/device/bindings/${bindingId}`, { method: 'DELETE', token: deviceToken });
+  }
+
   sync(bindingId: string, req: SyncRequestWire): Promise<SyncResponseWire> {
     return this.request<SyncResponseWire>(`/api/v1/sync/bindings/${bindingId}`, {
       method: 'POST',
