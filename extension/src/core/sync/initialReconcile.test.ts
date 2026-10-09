@@ -332,6 +332,30 @@ describe('initial reconciliation lifecycle', () => {
     expect((await db.bindings.get(bindingId))?.appliedRevision).toBe(121);
   });
 
+  it('resumes a lifecycle round that failed before the server opened a session', async () => {
+    // The exact state a crashed first round leaves: our own session, but no
+    // server session id yet. Refusing to pick it up would strand the binding
+    // in 'initializing' forever, with no engine willing to run it.
+    await seedBinding({ state: 'initializing' });
+    await db.reconSessions.put({
+      id: 'sess-2',
+      bindingId,
+      type: 'INITIAL',
+      state: 'RUNNING',
+      phase: 'prepare',
+      driver: 'server',
+      journalFloor: 0,
+      serverRevision: 0,
+      progress: emptyReconProgress(),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    expect(await reconciler.runBinding(bindingId)).toBe('completed');
+    expect(lifecycle.calls[0]).toBe('create');
+    expect((await db.bindings.get(bindingId))?.state).toBe('active');
+  });
+
   it('leaves a binding the lifecycle already finished alone', async () => {
     await seedBinding({ state: 'active', appliedRevision: 121, receivedRevision: 121 });
 

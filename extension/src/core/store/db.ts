@@ -196,6 +196,13 @@ export interface ReconSessionRecord {
   // --- server-driven lifecycle (doc 08 §11-§13) ---
   /** The server reconciliation session this client session mirrors. */
   serverSessionId?: string;
+  /**
+   * Marks a session opened by the server-driven lifecycle. The binding is
+   * 'initializing' for both engines, so without this a lifecycle round that
+   * failed before the server session id was stored leaves the binding with a
+   * session neither engine will pick up again.
+   */
+  driver?: 'server';
   /** Last phase the server reported; the resume anchor after an MV3 kill. */
   serverPhase?: ReconciliationPhase;
   /** Plan hash the commit must echo back. */

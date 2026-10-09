@@ -171,10 +171,12 @@ export class InitialReconciler {
     // A waiting_user session is driven by `answer`, not by a sync trigger: the
     // server will not move until the user picks a candidate.
     if (binding.state !== 'pending_initial' && binding.state !== 'initializing') return 'idle';
-    const session = (await activeReconSession(this.db, bindingId)) ?? (await this.openSession(binding));
-    // 'initializing' is shared with the client-side engines; only a session
-    // that names a server reconciliation belongs to this lifecycle.
-    if (binding.state === 'initializing' && !session.serverSessionId) return 'idle';
+    const found = await activeReconSession(this.db, bindingId);
+    // 'initializing' is shared with the client-side engines. A session that
+    // this lifecycle did not open stays theirs — but one it opened stays ours
+    // even when the first server call failed before an id came back.
+    if (found && found.driver !== 'server' && !found.serverSessionId) return 'idle';
+    const session = found ?? (await this.openSession(binding));
     await this.db.bindings.update(bindingId, { state: 'initializing' });
     return this.run(binding, session);
   }
@@ -187,6 +189,7 @@ export class InitialReconciler {
       type: 'INITIAL',
       state: 'RUNNING',
       phase: 'prepare',
+      driver: 'server',
       journalFloor: 0,
       serverRevision: 0,
       progress: emptyReconProgress(),
