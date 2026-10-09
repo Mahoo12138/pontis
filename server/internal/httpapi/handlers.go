@@ -327,6 +327,23 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A reconciliation is rebuilding this binding's tree; an intent uploaded
+	// while it runs would be decided against the world the plan is replacing
+	// (doc 08 §8). Pull-only rounds stay open: they move no canonical state,
+	// and a replica that stops reading cannot keep its journal stream warm.
+	if len(dto.Operations) > 0 {
+		if _, active, err := s.Reconcile.ActiveSession(r.Context(), bindingID); err != nil {
+			s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+			return
+		} else if active {
+			s.writeSyncError(w, r, &sync.ProtocolError{
+				Code:    sync.CodeReconciliationInProgress,
+				Message: "a reconciliation is running for this binding",
+			})
+			return
+		}
+	}
+
 	ops := make([]sync.Operation, 0, len(dto.Operations))
 	for _, opDTO := range dto.Operations {
 		ops = append(ops, toDomainOperation(opDTO))

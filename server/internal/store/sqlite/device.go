@@ -314,22 +314,6 @@ func (s *DeviceStore) ListBindingsByDevice(ctx context.Context, deviceID string)
 	return out, rows.Err()
 }
 
-// ActivateBinding moves a pending binding to active.
-func (s *DeviceStore) ActivateBinding(ctx context.Context, bindingID string, at time.Time) error {
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE device_space_bindings
-		SET state = 'active', initialized_at = ?, updated_at = ?
-		WHERE id = ?`, formatTime(at), formatTime(at), bindingID)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return device.ErrBindingNotFound
-	}
-	return nil
-}
-
 // UpdateBindingSync advances the binding watermarks of one epoch.
 //
 // The write is guarded on purpose: a binding that has been deactivated, whose

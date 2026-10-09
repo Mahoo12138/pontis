@@ -66,6 +66,9 @@ var (
 	// ErrSnapshotMissing is returned when planning before both snapshots
 	// exist.
 	ErrSnapshotMissing = errors.New("reconcile: snapshots missing")
+	// ErrSnapshotInvalid is returned for a client snapshot the engine cannot
+	// act on: an unreadable tree, or canonical ids on a first synchronization.
+	ErrSnapshotInvalid = errors.New("reconcile: invalid client snapshot")
 	// ErrPlanStale is returned when the canonical target moved since the
 	// plan was computed (doc 08 §12).
 	ErrPlanStale = errors.New("reconcile: plan stale")
@@ -231,8 +234,24 @@ func (s *Service) SubmitClientSnapshot(ctx context.Context, bindingID string, sn
 	if sess.Phase != PhaseCollecting {
 		return Session{}, ErrInvalidSessionState
 	}
+	// A first synchronization is the one place the client is not believed
+	// about identity: it has no mapping yet, so an id it claims would be the
+	// forgery doc 06 §11 makes the Recovery path ask the user about.
+	if sess.Type == TypeInitial {
+		binding, err := s.store.LoadBinding(ctx, bindingID)
+		if err != nil {
+			return Session{}, err
+		}
+		if binding.State == device.StatePendingInitial {
+			for _, node := range snapshot.Nodes {
+				if node.CanonicalID != "" {
+					return Session{}, fmt.Errorf("%w: a first reconciliation declares no canonical ids", ErrSnapshotInvalid)
+				}
+			}
+		}
+	}
 	if _, err := snapshot.Tree(); err != nil {
-		return Session{}, fmt.Errorf("reconcile: %w", err)
+		return Session{}, fmt.Errorf("%w: %v", ErrSnapshotInvalid, err)
 	}
 	content, err := marshalJSON(snapshot)
 	if err != nil {
@@ -910,6 +929,16 @@ func beforeID(id string) *canonical.NodeID {
 	return &nodeID
 }
 
+// Session loads one session by id, for callers that only need to know whose
+// binding it belongs to before asking a second question.
+func (s *Service) Session(ctx context.Context, sessionID string) (Session, error) {
+	sess, err := s.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return Session{}, ErrSessionNotFound
+	}
+	return sess, nil
+}
+
 // GetSessionWithIssues loads a session together with its issue rows.
 func (s *Service) GetSessionWithIssues(ctx context.Context, sessionID string) (Session, []Issue, error) {
 	sess, err := s.store.GetSession(ctx, sessionID)
@@ -935,6 +964,29 @@ func (s *Service) GetServerSnapshot(ctx context.Context, snapshotID string) (Ser
 // ListSnapshotNodes reads one page of a frozen snapshot.
 func (s *Service) ListSnapshotNodes(ctx context.Context, snapshotID string, offset, limit int) ([]SnapshotNode, error) {
 	return s.store.ListSnapshotNodes(ctx, snapshotID, offset, limit)
+}
+
+// PlanPreview returns the stored plan of a session (doc 08 §11-12). The
+// client reads the stats and warnings before it agrees to commit, so the
+// preview is part of the contract even though the plan itself is server
+// state.
+func (s *Service) PlanPreview(ctx context.Context, sessionID string) (PlanArtifactJSON, error) {
+	sess, err := s.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return PlanArtifactJSON{}, ErrSessionNotFound
+	}
+	if sess.PlanArtifact == "" {
+		return PlanArtifactJSON{}, ErrInvalidSessionState
+	}
+	art, err := s.store.GetArtifact(ctx, sess.PlanArtifact)
+	if err != nil {
+		return PlanArtifactJSON{}, err
+	}
+	var plan PlanArtifactJSON
+	if err := unmarshalJSON(art.Content, &plan); err != nil {
+		return PlanArtifactJSON{}, err
+	}
+	return plan, nil
 }
 
 // Steps returns the stored client apply steps (doc 08 §13).
@@ -1005,6 +1057,13 @@ func (s *Service) Complete(ctx context.Context, sessionID string) (Session, erro
 	}
 	committed = true
 	return s.store.GetSession(ctx, sessionID)
+}
+
+// ActiveSession returns the binding's open reconciliation, if any. Normal
+// sync and an active reconciliation are mutually exclusive on one binding
+// (doc 08 §8), and the transport layer needs to say so.
+func (s *Service) ActiveSession(ctx context.Context, bindingID string) (Session, bool, error) {
+	return s.store.GetActiveSession(ctx, bindingID)
 }
 
 // loadActive fetches the session and verifies it is still open.

@@ -150,9 +150,9 @@ func TestAdminDisableStopsDeviceCredentials(t *testing.T) {
 		t.Fatalf("bob binding = %d %v", code, body)
 	}
 	bindingID, _ := body["id"].(string)
-	if err := f.srv.Devices.ActivateBinding(t.Context(), bindingID); err != nil {
-		t.Fatalf("activate binding: %v", err)
-	}
+	// The binding becomes active the only way it can: a completed initial
+	// reconciliation over the public API (doc 08 §11).
+	_, _ = initializeBinding(t, f.ts, deviceAuth, bindingID, emptyBrowserSnapshot())
 
 	routes := []deviceRoute{
 		{"GET", "/api/v1/device/spaces", nil, http.StatusOK},

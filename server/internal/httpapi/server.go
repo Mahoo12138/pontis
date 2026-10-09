@@ -21,6 +21,7 @@ import (
 	"pontis/internal/library"
 	"pontis/internal/organizer"
 	"pontis/internal/plaza"
+	"pontis/internal/reconcile"
 	"pontis/internal/schedule"
 	"pontis/internal/space"
 	"pontis/internal/spacetransfer"
@@ -45,6 +46,7 @@ type Server struct {
 	Devices       *device.Service
 	Spaces        *space.Service
 	Sync          *sync.Service
+	Reconcile     *reconcile.Service
 	Library       *library.Service
 	Changesets    *changeset.Service
 	Tokens        *token.Service
@@ -223,6 +225,20 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/v1/sync/bindings/{bindingID}", s.handleSync)
 		r.Get("/api/v1/sync/bindings/{bindingID}/snapshot", s.handleSnapshot)
 		r.Post("/api/v1/sync/transfers", s.handleDeviceTransfer)
+
+		// Reconciliation lifecycle (doc 08 §9-§14): the only way a
+		// pending_initial binding becomes active.
+		r.Post("/api/v1/sync/bindings/{bindingID}/reconciliations", s.handleCreateReconciliation)
+		r.Post("/api/v1/sync/bindings/{bindingID}/client-snapshots", s.handleSubmitClientSnapshot)
+		r.Post("/api/v1/sync/bindings/{bindingID}/server-snapshots", s.handleCreateServerSnapshot)
+		r.Get("/api/v1/sync/server-snapshots/{snapshotID}", s.handleGetServerSnapshot)
+		r.Get("/api/v1/sync/server-snapshots/{snapshotID}/nodes", s.handleListServerSnapshotNodes)
+		r.Get("/api/v1/sync/reconciliations/{sessionID}", s.handleGetReconciliation)
+		r.Post("/api/v1/sync/reconciliations/{sessionID}/plan", s.handlePlanReconciliation)
+		r.Put("/api/v1/sync/reconciliations/{sessionID}/decisions", s.handleDecideReconciliation)
+		r.Post("/api/v1/sync/reconciliations/{sessionID}/commit", s.handleCommitReconciliation)
+		r.Get("/api/v1/sync/reconciliations/{sessionID}/steps", s.handleReconciliationSteps)
+		r.Post("/api/v1/sync/reconciliations/{sessionID}/complete", s.handleCompleteReconciliation)
 	})
 
 	return r

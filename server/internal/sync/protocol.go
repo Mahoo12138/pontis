@@ -12,6 +12,10 @@ const (
 	CodeOpIDReused              = "OP_ID_REUSED"
 	CodeClientSeqRegressed      = "CLIENT_SEQ_REGRESSED"
 	CodeInvalidWatermark        = "INVALID_WATERMARK"
+	// CodeReconciliationInProgress is raised by the transport, not by the
+	// sync engine: a binding with an open reconciliation takes no sync
+	// operations (doc 08 §8).
+	CodeReconciliationInProgress = "RECONCILIATION_IN_PROGRESS"
 )
 
 // ProtocolError is a machine-readable sync protocol failure. Clients act

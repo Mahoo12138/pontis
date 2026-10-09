@@ -40,6 +40,11 @@ REVOKED
 
 Binding 只记录大状态，细 phase 放在持久 `reconciliation_sessions`。
 
+当前实现使用 `pending_initial / active / revoked`。`pending_initial → active`
+只由该 Binding 的 `initial` session 走到 `complete` 时在同一事务里完成
+（写回 epoch 与 baseline，见 `08-api-contract.md` §11）。服务端不提供独立的
+"激活 binding" 接口或方法：绕过首次合并与覆盖预览的激活不算完成初始化。
+
 ## 3. Persistent Reconciliation Session
 
 关键字段：

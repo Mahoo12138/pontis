@@ -22,6 +22,7 @@ import (
 	"pontis/internal/library"
 	"pontis/internal/organizer"
 	"pontis/internal/plaza"
+	"pontis/internal/reconcile"
 	"pontis/internal/schedule"
 	"pontis/internal/space"
 	"pontis/internal/spacetransfer"
@@ -69,6 +70,7 @@ func newTestServerWithDB(t *testing.T) (*Server, *httptest.Server, *sql.DB) {
 		Devices:       device.NewService(sqlite.NewDeviceStore(db)),
 		Spaces:        space.NewService(sqlite.NewSpaceStore(db)),
 		Sync:          sync.NewService(sqlite.NewSyncStore(db), changesetSvc),
+		Reconcile:     reconcile.NewService(sqlite.NewReconcileStore(db)),
 		SpaceTransfer: spacetransfer.NewService(sqlite.NewStore(db), changesetSvc),
 		Library:       library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db), changesetSvc),
 		Changesets:    changesetSvc,
@@ -148,6 +150,7 @@ type flowState struct {
 	spaceID      string
 	deviceToken  string
 	bindingID    string
+	baseline     int64 // revision the initial reconciliation left the binding at
 }
 
 func bootstrapFlow(t *testing.T) *flowState {
@@ -204,10 +207,11 @@ func bootstrapFlow(t *testing.T) *flowState {
 	}
 	st.bindingID, _ = body["id"].(string)
 
-	// Initial sync verification is out of scope here; activate directly.
-	if err := srv.Devices.ActivateBinding(context.Background(), st.bindingID); err != nil {
-		t.Fatalf("activate binding: %v", err)
-	}
+	// A pending binding becomes active only by completing an initial
+	// reconciliation, so the shared fixture runs that lifecycle too
+	// (doc 08 §11). There is no other activation path, and nothing here
+	// writes the database.
+	_, st.baseline = initializeBinding(t, ts, deviceAuth, st.bindingID, emptyBrowserSnapshot())
 	return st
 }
 

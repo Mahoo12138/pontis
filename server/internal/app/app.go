@@ -23,6 +23,7 @@ import (
 	"pontis/internal/logging"
 	"pontis/internal/organizer"
 	"pontis/internal/plaza"
+	"pontis/internal/reconcile"
 	"pontis/internal/schedule"
 	"pontis/internal/space"
 	"pontis/internal/spacetransfer"
@@ -95,6 +96,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Devices:       device.NewService(sqlite.NewDeviceStore(db)),
 		Spaces:        space.NewService(sqlite.NewSpaceStore(db)),
 		Sync:          sync.NewService(sqlite.NewSyncStore(db), changesetSvc),
+		Reconcile:     reconcile.NewService(sqlite.NewReconcileStore(db)),
 		Library:       library.NewService(libraryStore, canonicalStore, changesetSvc),
 		Changesets:    changesetSvc,
 		Tokens:        token.NewService(sqlite.NewTokenStore(db)),
