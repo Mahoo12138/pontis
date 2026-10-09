@@ -280,6 +280,26 @@ EventProcessor 上（见 `expectedMutationEcho.test.ts`）。否则 provisional 
 被谁消费、echo 晚到会不会把同步自己的改动当成用户编辑，mock 全都测不出来——真实浏览器
 里它的症状是服务端长出重复节点。
 
+Dexie 事务里不能等浏览器。`chrome.*` 的 Promise 在宏任务里落地，而 Dexie 一看任务队列
+翻空就把事务提交掉，事务体内任何后续请求都会撞上 `TransactionInactiveError` /
+`PrematureCommitError`，整轮 sync 被 catch 吞成一条 warn。所以"读浏览器 → 开事务 → 只写
+Dexie"是唯一合法顺序（`remoteChangeApplier` 的 `readOrder()` / `writeOrder()` 就是为此
+拆开的）。这条在 mock 里默认测不出来：假 adapter 的 Promise 是微任务，事务永远不会提前
+提交。要用 `remoteChangeApplier.test.ts` 里的 `onMacrotasks()` 包一层，把每个 adapter
+方法都推到一个 `setTimeout` 之后——只有这样才能重现真实 Chromium 的时序。
+
+两个真实浏览器 converging 的验证：第二个 profile 从第一个 rsync 出来，会连同第一个设备
+的 binding 行一起复制过去，于是同一 profile 里出现两个同 Space 的 binding，旧的那个每轮
+`NOT_BINDING_OWNER`。这不是 bug 的复现路径而是 profile 复制的产物，但它暴露了同一件事：
+本地永远无法拥有这个 binding，重试没有意义，所以 coordinator 现在把它当成终止态处理
+（`needs_recovery` + 一条 error 诊断），和 `EPOCH_MISMATCH` 走同一出口。清理过一次之后
+两边各自只剩自己的 binding，双向 converging 才是可证的：A 侧 4/4 且镜像里出现 B 本地建的
+`From B`，B 侧 4/4 且镜像里出现 A 的 `From A`。
+
+- 复制出来的 profile 若删过 `Service Worker` / `Default/Code Cache` 可能再也起不来（进程
+  起来就退出，Playwright 报 `Target page, context or browser has been closed`）。这时不要
+  抢救它，重新 rsync 一份 + 重新配对，比修 profile 快。
+
 ## 11. Release Testing
 
 Release 前至少：

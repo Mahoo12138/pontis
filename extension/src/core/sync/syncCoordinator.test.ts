@@ -184,6 +184,26 @@ describe('SyncCoordinator', () => {
     expect(binding?.recovery).toMatchObject({ code: 'EPOCH_MISMATCH' });
   });
 
+  it('stops and surfaces a binding this replica can never own', async () => {
+    adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
+    await seedBinding();
+    // A replica copied into another profile keeps the row but not the
+    // ownership; the server refuses it on every round, forever.
+    const transport: SyncTransport = {
+      sync: async () => {
+        throw new ApiError(403, 'NOT_BINDING_OWNER', 'binding belongs to another device');
+      },
+    };
+    const coordinator = new SyncCoordinator(db, applier, transport);
+    expect(await coordinator.syncBinding(bindingId)).toBe('needs-recovery');
+
+    const binding = await db.bindings.get(bindingId);
+    expect(binding?.state).toBe('needs_recovery');
+    expect(binding?.recovery).toMatchObject({ code: 'NOT_BINDING_OWNER' });
+    // needs_recovery is not runnable, so the next round leaves it alone.
+    expect(await coordinator.syncBinding(bindingId)).toBe('inactive');
+  });
+
   it('skips inactive bindings and reports error for transient failures', async () => {
     const transport: SyncTransport = {
       sync: async () => {

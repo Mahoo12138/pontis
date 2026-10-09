@@ -78,13 +78,17 @@ export class SyncCoordinator {
       try {
         resp = await this.transport.sync(b.id, req);
       } catch (err) {
-        if (err instanceof ApiError && err.isProtocolError) {
-          // Binding continuity broken (doc 04 §12/§14): pause and surface.
+        // Binding continuity broken (doc 04 §12/§14): pause and surface.
+        // NOT_BINDING_OWNER is terminal rather than a sync-protocol break: a
+        // replica copied into another profile can never own the binding, so
+        // retrying it every round would only bury the real error.
+        const terminal = err instanceof ApiError && (err.isProtocolError || err.code === 'NOT_BINDING_OWNER');
+        if (terminal) {
           await this.db.bindings.update(b.id, {
             state: 'needs_recovery',
             recovery: { code: err.code, message: err.message },
           });
-          await logDiagnostic(this.db, 'error', 'coordinator', 'protocol failure, binding needs recovery', {
+          await logDiagnostic(this.db, 'error', 'coordinator', 'binding cannot be synced from this replica, needs recovery', {
             bindingId: b.id,
             code: err.code,
           });
