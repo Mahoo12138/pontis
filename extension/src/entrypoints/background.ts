@@ -15,12 +15,12 @@ import { InitialSyncEngine } from '../core/sync/initialSync';
 import { RemoteChangeApplier } from '../core/sync/remoteChangeApplier';
 import { ResyncService, type IntentDecision } from '../core/sync/resync';
 import { SyncCoordinator } from '../core/sync/syncCoordinator';
-import { chromeApi } from '../runtime/chromeApi';
+import { chromeApi, kvArea } from '../runtime/chromeApi';
 
 export default defineBackground(() => {
   const chrome = chromeApi();
   const db = new PontisDB();
-  const bootstrap = new BootstrapStore(chrome.storage.local);
+  const bootstrap = new BootstrapStore(kvArea(chrome.storage.local));
   const adapter = createChromiumAdapter(chrome.bookmarks);
   const client = new ApiClient(async () => {
     const b = await bootstrap.get();

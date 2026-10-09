@@ -94,9 +94,18 @@ export class ApiClient implements SyncTransport, SnapshotTransport, TransferTran
 
   private async request<T>(
     path: string,
-    init: { method?: string; body?: unknown; token?: string; validate?: (json: unknown) => T } = {},
+    init: {
+      method?: string;
+      body?: unknown;
+      token?: string;
+      /** Base URL for the calls a pairing makes before anything is stored. */
+      serverUrl?: string;
+      validate?: (json: unknown) => T;
+    } = {},
   ): Promise<T> {
-    const { serverUrl, token } = await this.resolveConfig();
+    const { serverUrl: stored, token } = await this.resolveConfig();
+    const serverUrl = init.serverUrl ?? stored;
+    if (!serverUrl) throw new ApiError(0, 'NOT_PAIRED', `no server URL to send ${path} to`);
     const auth = init.token ?? token;
     let res: Response;
     try {
@@ -123,16 +132,16 @@ export class ApiClient implements SyncTransport, SnapshotTransport, TransferTran
     return json as T;
   }
 
-  meta(): Promise<MetaWire> {
-    return this.request<MetaWire>('/api/v1/meta');
+  meta(serverUrl?: string): Promise<MetaWire> {
+    return this.request<MetaWire>('/api/v1/meta', { serverUrl });
   }
 
-  login(username: string, password: string): Promise<LoginResult> {
-    return this.request<LoginResult>('/api/v1/auth/login', { method: 'POST', body: { username, password } });
+  login(username: string, password: string, serverUrl?: string): Promise<LoginResult> {
+    return this.request<LoginResult>('/api/v1/auth/login', { method: 'POST', body: { username, password }, serverUrl });
   }
 
-  registerDevice(sessionToken: string, body: { name: string; client_type: string; browser: string; platform: string }): Promise<{ device: DeviceWire; token: string }> {
-    return this.request('/api/v1/devices', { method: 'POST', token: sessionToken, body });
+  registerDevice(sessionToken: string, body: { name: string; client_type: string; browser: string; platform: string }, serverUrl?: string): Promise<{ device: DeviceWire; token: string }> {
+    return this.request('/api/v1/devices', { method: 'POST', token: sessionToken, body, serverUrl });
   }
 
   deviceSpaces(deviceToken: string): Promise<{ spaces: SpaceWire[] }> {

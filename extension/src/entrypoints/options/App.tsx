@@ -31,8 +31,8 @@ import {
   type ReconSessionRecord,
 } from '../../core/store/db';
 import type { IntentDecision } from '../../core/sync/resync';
-import { PairingService } from '../../core/pairing/pairing';
-import { chromeApi } from '../../runtime/chromeApi';
+import { PairingService, originPatternFor } from '../../core/pairing/pairing';
+import { chromeApi, kvArea } from '../../runtime/chromeApi';
 
 interface FolderOption {
   value: string;
@@ -42,7 +42,7 @@ interface FolderOption {
 export function App() {
   const chrome = chromeApi();
   const db = new PontisDB();
-  const bootstrap = new BootstrapStore(chrome.storage.local);
+  const bootstrap = new BootstrapStore(kvArea(chrome.storage.local));
   const client = new ApiClient(async () => {
     const b = await bootstrap.get();
     return { serverUrl: b.serverUrl ?? '', token: b.deviceToken };
@@ -116,6 +116,14 @@ export function App() {
     setBusy(true);
     setError(null);
     try {
+      // Granted inside the click gesture, before any other await: the server
+      // sends no CORS headers on purpose, so without this origin permission the
+      // first pairing fetch is a blocked cross-origin request.
+      const origin = originPatternFor(serverUrl.trim());
+      const granted = await new Promise<boolean>((resolve) => {
+        chrome.permissions.request({ origins: [origin] }, resolve);
+      });
+      if (!granted) throw new Error(`需要允许扩展访问 ${origin}`);
       await pairing.pair({
         serverUrl: serverUrl.trim(),
         username,

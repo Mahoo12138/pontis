@@ -12,6 +12,19 @@ export interface PairingResult {
   instanceId: string;
 }
 
+/**
+ * The host-permission pattern covering a server URL. Chrome match patterns
+ * drop the default port and need an explicit path, and the whole origin is
+ * requested — not a deeper path the user typed.
+ */
+export function originPatternFor(serverUrl: string): string {
+  const url = new URL(serverUrl);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`pairing: unsupported server scheme ${url.protocol}`);
+  }
+  return `${url.protocol}//${url.hostname}${url.port ? `:${url.port}` : ''}/*`;
+}
+
 export class PairingService {
   constructor(
     private client: ApiClient,
@@ -28,15 +41,19 @@ export class PairingService {
     browser: string;
     platform: string;
   }): Promise<PairingResult> {
-    const meta = await this.client.meta();
+    const meta = await this.client.meta(params.serverUrl);
     // Session token doubles as a Bearer credential for device registration.
-    const login = await this.client.login(params.username, params.password);
-    const { device, token } = await this.client.registerDevice(login.token, {
-      name: params.deviceName,
-      client_type: 'extension',
-      browser: params.browser,
-      platform: params.platform,
-    });
+    const login = await this.client.login(params.username, params.password, params.serverUrl);
+    const { device, token } = await this.client.registerDevice(
+      login.token,
+      {
+        name: params.deviceName,
+        client_type: 'extension',
+        browser: params.browser,
+        platform: params.platform,
+      },
+      params.serverUrl,
+    );
     await this.bootstrap.set({
       serverUrl: params.serverUrl.replace(/\/+$/, ''),
       instanceId: meta.instance_id,
