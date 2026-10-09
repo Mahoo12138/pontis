@@ -148,6 +148,58 @@ describe('PairingService', () => {
     expect(await db.bindings.get('binding-1')).toMatchObject({ state: 'pending_initial', mode: 'partial' });
   });
 
+  it('drops local bindings built under a different device credential', async () => {
+    stubServer(paired);
+    // This profile already paired once and bound a space.
+    await pairing.pair(params);
+    await pairing.bindSpace('space-1', 'Alpha Bookmarks', 'f1');
+    await db.localNodes.put({
+      bindingId: 'binding-1',
+      browserId: 'b1',
+      canonicalId: 'n1',
+      type: 'bookmark',
+      title: 'Example',
+      url: 'https://example.com',
+      parentBrowserId: 'f1',
+      position: 0,
+    });
+
+    // Registering as another device leaves those rows unaddressable: every
+    // round would come back NOT_BINDING_OWNER with nothing to recover them.
+    stubServer({
+      ...paired,
+      'POST /api/v1/devices': [
+        { device: { id: 'dev-2', name: 'Alpha Chrome' }, token: 'device-secret-2' },
+      ],
+    });
+    await pairing.pair(params);
+
+    expect(await db.bindings.count()).toBe(0);
+    expect(await db.localNodes.count()).toBe(0);
+    expect(((kv.data['bootstrap'] ?? {}) as BootstrapData).deviceId).toBe('dev-2');
+  });
+
+  it('keeps the replica when re-pairing as the same device', async () => {
+    stubServer(paired);
+    await pairing.pair(params);
+    await pairing.bindSpace('space-1', 'Alpha Bookmarks', 'f1');
+    await db.localNodes.put({
+      bindingId: 'binding-1',
+      browserId: 'b1',
+      canonicalId: 'n1',
+      type: 'bookmark',
+      title: 'Example',
+      url: 'https://example.com',
+      parentBrowserId: 'f1',
+      position: 0,
+    });
+
+    await pairing.pair(params);
+
+    expect(await db.bindings.count()).toBe(1);
+    expect(await db.localNodes.count()).toBe(1);
+  });
+
   it('revokes the server binding and drops the replica it leave behind', async () => {
     stubServer(paired);
     await pairing.pair(params);

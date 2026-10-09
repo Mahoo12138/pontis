@@ -5,7 +5,7 @@
 
 import type { ApiClient } from '../transport/client';
 import type { BootstrapStore } from '../store/bootstrap';
-import type { BindingMount, BindingRecord, PontisDB } from '../store/db';
+import { logDiagnostic, type BindingMount, type BindingRecord, type PontisDB } from '../store/db';
 
 export interface PairingResult {
   deviceId: string;
@@ -41,6 +41,10 @@ export class PairingService {
     browser: string;
     platform: string;
   }): Promise<PairingResult> {
+    // Pairing under a different device credential invalidates every local
+    // binding: those replicas were built by another device, and the server will
+    // refuse their syncs with NOT_BINDING_OWNER forever.
+    const previous = await this.bootstrap.get();
     const meta = await this.client.meta(params.serverUrl);
     // Session token doubles as a Bearer credential for device registration.
     const login = await this.client.login(params.username, params.password, params.serverUrl);
@@ -62,6 +66,7 @@ export class PairingService {
       deviceName: params.deviceName,
       pairedAt: Date.now(),
     });
+    if (previous.deviceId && previous.deviceId !== device.id) await this.dropForeignReplicas(previous.deviceId);
     return { deviceId: device.id, instanceId: meta.instance_id };
   }
 
@@ -131,6 +136,42 @@ export class PairingService {
         await this.db.emergencySnapshots.where('bindingId').equals(bindingId).delete();
       },
     );
+  }
+
+  /**
+   * Forget the bindings another device registered with the same profile. Only
+   * local state is touched: those server bindings still belong to the old
+   * device, and this one cannot revoke them.
+   */
+  private async dropForeignReplicas(previousDeviceId: string): Promise<void> {
+    const stale = await this.db.bindings.toArray();
+    await this.db.transaction(
+      'rw',
+      [
+        this.db.bindings,
+        this.db.localNodes,
+        this.db.pendingOps,
+        this.db.expectedMutations,
+        this.db.remoteChanges,
+        this.db.reconSessions,
+        this.db.emergencySnapshots,
+      ],
+      async () => {
+        for (const b of stale) {
+          await this.db.bindings.delete(b.id);
+          await this.db.localNodes.where('bindingId').equals(b.id).delete();
+          await this.db.pendingOps.where('bindingId').equals(b.id).delete();
+          await this.db.expectedMutations.where('bindingId').equals(b.id).delete();
+          await this.db.remoteChanges.where('bindingId').equals(b.id).delete();
+          await this.db.reconSessions.where('bindingId').equals(b.id).delete();
+          await this.db.emergencySnapshots.where('bindingId').equals(b.id).delete();
+        }
+      },
+    );
+    await logDiagnostic(this.db, 'warn', 'pairing', 're-paired with a new device, local bindings dropped', {
+      previousDeviceId,
+      bindingCount: stale.length,
+    });
   }
 
   async isPaired(): Promise<boolean> {
