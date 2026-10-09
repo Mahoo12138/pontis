@@ -128,11 +128,22 @@ export interface ClientSnapshot {
 
 export interface ServerSnapshot {
   snapshot_id: string;
+  binding_id: string;
+  space_id: string;
   epoch: number;
   revision: number;
   node_count: number;
   checksum: string;
-  expires_at?: string;
+  /** Empty string once the snapshot carries no expiry. */
+  expires_at: string;
+  created_at: string;
+}
+
+/** One page of a frozen tree; the cursor is this snapshot's own offset. */
+export interface SnapshotNodePage {
+  nodes: SnapshotNode[];
+  total: number;
+  next_cursor: string;
 }
 
 export interface SnapshotNode {
@@ -152,6 +163,7 @@ export interface ReconciliationIssue {
   id: string;
   type: string;
   payload: { source_ref: string; type?: string; title?: string; url?: string; candidates: string[] };
+  /** What the server applies when the client answers nothing (doc 08 §11). */
   default_choice: string;
   selected_choice: string | null;
 }
@@ -174,7 +186,35 @@ export interface ReconciliationSession {
   created_at: string;
   updated_at: string;
   completed_at?: string;
-  issues?: ReconciliationIssue[];
+}
+
+/** The plan preview attached to a session that has been planned. */
+export interface ReconciliationPlan {
+  plan_hash: string;
+  base_epoch: number;
+  base_revision: number;
+  stats: { creates: number; updates: number; moves: number; deletes: number };
+  warnings: string[];
+}
+
+/** The binding complete wrote back, in the same shape /bindings uses. */
+export interface ReconciliationBinding {
+  id: string;
+  state: string;
+  epoch: number;
+  applied_revision: number;
+  received_revision: number;
+}
+
+/**
+ * One lifecycle answer. `plan` appears once the session has a plan and
+ * `binding` only on complete; the issue list is always iterable.
+ */
+export interface SessionEnvelope {
+  session: ReconciliationSession;
+  issues: ReconciliationIssue[];
+  plan?: ReconciliationPlan;
+  binding?: ReconciliationBinding;
 }
 
 export type StepKind = 'assign_identity' | 'create' | 'update' | 'move' | 'delete';
@@ -189,6 +229,12 @@ export interface ApplyStep {
   url?: string;
   parent?: ParentRef;
   before_id?: string;
+}
+
+/** The steps of the plan hash they were derived from. */
+export interface StepsPayload {
+  plan_hash: string;
+  steps: ApplyStep[];
 }
 
 /** Unified error envelope (doc 08 §16). */

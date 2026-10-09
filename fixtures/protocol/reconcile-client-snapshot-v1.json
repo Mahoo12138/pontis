@@ -1,0 +1,27 @@
+{
+  "epoch": 1,
+  "revision": 44,
+  "roots": [
+    {
+      "local_ref": "l_1",
+      "root_key": "main",
+      "title": "Bookmarks Bar"
+    }
+  ],
+  "nodes": [
+    {
+      "local_ref": "l_2",
+      "parent_local_ref": "l_1",
+      "type": "folder",
+      "title": "Reading",
+      "url": ""
+    },
+    {
+      "local_ref": "l_3",
+      "parent_local_ref": "l_2",
+      "type": "bookmark",
+      "title": "Example",
+      "url": "https://example.com"
+    }
+  ]
+}

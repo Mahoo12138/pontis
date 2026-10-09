@@ -1,0 +1,21 @@
+{
+  "nodes": [
+    {
+      "node_ref": "r_main",
+      "parent_ref": "",
+      "type": "root",
+      "title": "Bookmarks Bar",
+      "root_key": "main",
+      "position": 0
+    },
+    {
+      "node_ref": "0198c0de-7000-7000-8000-0000000000aa",
+      "parent_ref": "r_main",
+      "type": "folder",
+      "title": "Reading",
+      "position": 0
+    }
+  ],
+  "total": 4,
+  "next_cursor": "2"
+}

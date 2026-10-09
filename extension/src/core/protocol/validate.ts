@@ -2,7 +2,14 @@
 // type checker, so a server that sends `operation_results: null` would reach
 // a for-of loop undetected. Validate at the HTTP boundary instead.
 
-import type { SnapshotWire, SyncResponseWire } from './types';
+import type {
+  ReconciliationEnvelopeWire,
+  ServerSnapshotPageWire,
+  ServerSnapshotWire,
+  SnapshotWire,
+  StepsWire,
+  SyncResponseWire,
+} from './types';
 
 export class ProtocolShapeError extends Error {
   constructor(message: string) {
@@ -62,4 +69,85 @@ export function parseSnapshotResponse(json: unknown): SnapshotWire {
     throw new ProtocolShapeError(`snapshot response field "nodes" must be an array`);
   }
   return json as SnapshotWire;
+}
+
+function requireString(value: unknown, field: string): void {
+  if (typeof value !== 'string') {
+    throw new ProtocolShapeError(`field "${field}" must be a string, got ${JSON.stringify(value)}`);
+  }
+}
+
+function objectAt(value: unknown, field: string): Record<string, unknown> {
+  if (value == null || typeof value !== 'object') {
+    throw new ProtocolShapeError(`field "${field}" must be an object, got ${JSON.stringify(value)}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+/**
+ * Assert a lifecycle answer carries the session and an iterable issue list.
+ * The engine resumes on `session.phase`, so a body without a session cannot
+ * be trusted to place a crash-resumed reconciliation.
+ */
+export function parseReconciliationEnvelope(json: unknown): ReconciliationEnvelopeWire {
+  const body = objectAt(json, 'reconciliation response');
+  const session = objectAt(body.session, 'session');
+  requireString(session.id, 'session.id');
+  requireString(session.state, 'session.state');
+  requireString(session.phase, 'session.phase');
+  requireNumber(session.commit_revision, 'session.commit_revision');
+  requireArray(body.issues, 'issues');
+  for (const raw of body.issues as unknown[]) {
+    const issue = objectAt(raw, 'issue');
+    requireString(issue.id, 'issue.id');
+    const payload = objectAt(issue.payload, 'issue.payload');
+    requireString(payload.source_ref, 'issue.payload.source_ref');
+    requireArray(payload.candidates, 'issue.payload.candidates');
+  }
+  if (body.plan !== undefined) {
+    const plan = objectAt(body.plan, 'plan');
+    requireString(plan.plan_hash, 'plan.plan_hash');
+    requireNumber(objectAt(plan.stats, 'plan.stats').creates, 'plan.stats.creates');
+    requireArray(plan.warnings, 'plan.warnings');
+  }
+  return json as ReconciliationEnvelopeWire;
+}
+
+/** Assert the apply-step list is iterable and every step is named. */
+export function parseSteps(json: unknown): StepsWire {
+  const body = objectAt(json, 'steps response');
+  requireString(body.plan_hash, 'plan_hash');
+  requireArray(body.steps, 'steps');
+  for (const raw of body.steps as unknown[]) {
+    const step = objectAt(raw, 'step');
+    requireString(step.kind, 'step.kind');
+  }
+  return json as StepsWire;
+}
+
+/** Assert a frozen snapshot's metadata, and page by page its rows. */
+export function parseServerSnapshot(json: unknown): ServerSnapshotWire {
+  const body = objectAt(json, 'server snapshot');
+  requireString(body.snapshot_id, 'snapshot_id');
+  requireNumber(body.node_count, 'node_count');
+  requireString(body.checksum, 'checksum');
+  return json as ServerSnapshotWire;
+}
+
+/**
+ * A page is only finished when the cursor comes back empty, so the paging
+ * loop needs `next_cursor` present: a body that omits it entirely cannot be
+ * told apart from the last page.
+ */
+export function parseServerSnapshotPage(json: unknown): ServerSnapshotPageWire {
+  const body = objectAt(json, 'server snapshot page');
+  requireNumber(body.total, 'total');
+  requireString(body.next_cursor, 'next_cursor');
+  requireArray(body.nodes, 'nodes');
+  for (const raw of body.nodes as unknown[]) {
+    const node = objectAt(raw, 'node');
+    requireString(node.node_ref, 'node_ref');
+    requireString(node.type, 'type');
+  }
+  return json as ServerSnapshotPageWire;
 }

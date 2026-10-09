@@ -524,6 +524,15 @@ func issueIDToSourceRef(issues []Issue, issueID string) string {
 	return ""
 }
 
+// planWarningsOrEmpty keeps the wire array empty rather than null: a client
+// reading a plan must not have to branch on the difference (doc 04 §6).
+func planWarningsOrEmpty(plan *Plan) []string {
+	if plan.Warnings == nil {
+		return []string{}
+	}
+	return plan.Warnings
+}
+
 // computeAndStorePlan runs the engine for the session type, persists the
 // plan and steps artifacts and the issue rows, and updates the session.
 func (s *Service) computeAndStorePlan(ctx context.Context, sess Session, decisions Decisions) (Session, []Issue, Artifact, error) {
@@ -631,7 +640,7 @@ func (s *Service) computeAndStorePlan(ctx context.Context, sess Session, decisio
 			Moves:   plan.Stats.Moves,
 			Deletes: plan.Stats.Deletes,
 		},
-		Warnings: plan.Warnings,
+		Warnings: planWarningsOrEmpty(plan),
 	}
 	for _, op := range plan.Operations {
 		planJSON.Operations = append(planJSON.Operations, PrimitiveJSON{

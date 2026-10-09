@@ -208,12 +208,24 @@ Go 与 TypeScript 共用 JSON fixtures：
 ```text
 sync-request-v1.json
 sync-response-v1.json
+sync-response-empty-v1.json
 operation-create-v1.json
 operation-move-v1.json
 error-epoch-mismatch.json
+reconcile-client-snapshot-v1.json
+reconcile-server-snapshot-v1.json
+reconcile-snapshot-nodes-v1.json
+reconcile-session-planned-v1.json
+reconcile-steps-v1.json
+reconcile-session-completed-v1.json
 ```
 
 双方同时验证 encode/decode，防 wire schema 漂移。
+
+对账生命周期的 golden 文件由 Go 的 wire DTO 生成，TypeScript 一侧有两处读取
+同一批文件：`packages/protocol` 的共享 codec，以及扩展真正收线时用的边界校验
+器（`parseReconciliationEnvelope`/`parseSteps`/`parseServerSnapshotPage`）。
+只有后者通过，才说明扩展实际会收到的那份 JSON 是可用的。
 
 ## 10. Web / Extension Tests
 

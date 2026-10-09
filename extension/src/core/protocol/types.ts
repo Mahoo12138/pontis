@@ -156,6 +156,7 @@ export const SYNC_PROTOCOL_ERROR_CODES = [
   'HISTORY_EXPIRED',
   'OPERATION_HISTORY_EXPIRED',
   'BINDING_NOT_ACTIVE',
+  'RECONCILIATION_IN_PROGRESS',
   'SYNC_PROTOCOL_UNSUPPORTED',
   'OP_ID_REUSED',
   'CLIENT_SEQ_REGRESSED',
@@ -166,6 +167,127 @@ export type SyncErrorCode = (typeof SYNC_PROTOCOL_ERROR_CODES)[number];
 
 export function isProtocolErrorCode(code: string): boolean {
   return (SYNC_PROTOCOL_ERROR_CODES as readonly string[]).includes(code);
+}
+
+// --- reconciliation lifecycle (doc 08 §9-§13) ---
+
+export type ReconciliationType = 'initial' | 'full_resync' | 'recovery';
+export type ReconciliationState = 'running' | 'waiting_user' | 'completed' | 'failed';
+export type ReconciliationPhase = 'collecting' | 'snapshot_ready' | 'server_ready' | 'planned' | 'committed';
+export type StepKindWire = 'assign_identity' | 'create' | 'update' | 'move' | 'delete';
+
+/** Client browser snapshot: session-local refs only, never browser ids. */
+export interface ClientSnapshotWire {
+  epoch: number;
+  revision: number;
+  roots: { local_ref: string; root_key: string; title: string }[];
+  nodes: {
+    local_ref: string;
+    parent_local_ref: string;
+    type: NodeType;
+    title: string;
+    url: string;
+    /** Only a device that already has a mapping may claim one (doc 08 §10). */
+    canonical_id?: string;
+  }[];
+}
+
+export interface ServerSnapshotWire {
+  snapshot_id: string;
+  binding_id: string;
+  space_id: string;
+  epoch: number;
+  revision: number;
+  node_count: number;
+  checksum: string;
+  /** Empty once the snapshot carries no expiry. */
+  expires_at: string;
+  created_at: string;
+}
+
+export interface ServerSnapshotNodeWire {
+  node_ref: string;
+  parent_ref: string;
+  type: 'root' | NodeType;
+  title: string;
+  url?: string;
+  root_key?: string;
+  position: number;
+}
+
+/** One page of a frozen tree; cursor is this snapshot's own offset. */
+export interface ServerSnapshotPageWire {
+  nodes: ServerSnapshotNodeWire[];
+  total: number;
+  next_cursor: string;
+}
+
+export interface ReconciliationIssueWire {
+  id: string;
+  type: string;
+  payload: { source_ref: string; type?: string; title?: string; url?: string; candidates: string[] };
+  /** The choice the server applies when the client answers nothing. */
+  default_choice: string;
+  selected_choice?: string;
+}
+
+export interface ReconciliationPlanWire {
+  type: ReconciliationType;
+  strategy: string;
+  placement: string;
+  base_epoch: number;
+  base_revision: number;
+  plan_hash: string;
+  stats: { creates: number; updates: number; moves: number; deletes: number };
+  warnings: string[];
+}
+
+export interface ReconciliationSessionWire {
+  id: string;
+  binding_id: string;
+  space_id: string;
+  type: ReconciliationType;
+  reason: string;
+  state: ReconciliationState;
+  phase: ReconciliationPhase;
+  source_epoch: number;
+  source_revision: number;
+  target_epoch: number;
+  target_revision: number;
+  plan_hash?: string;
+  server_committed: boolean;
+  commit_revision: number;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+}
+
+/**
+ * Every lifecycle answer: the session, the issues that need an answer, the
+ * plan preview once one exists, and the binding once complete wrote it back.
+ */
+export interface ReconciliationEnvelopeWire {
+  session: ReconciliationSessionWire;
+  issues: ReconciliationIssueWire[];
+  plan?: ReconciliationPlanWire;
+  binding?: BindingWire;
+}
+
+/** One client apply step (doc 08 §13): ensure-state, retry-safe. */
+export interface ApplyStepWire {
+  kind: StepKindWire;
+  local_ref?: string;
+  canonical_id?: string;
+  type?: NodeType;
+  title?: string;
+  url?: string;
+  parent?: ParentRefWire;
+  before_id?: string;
+}
+
+export interface StepsWire {
+  plan_hash: string;
+  steps: ApplyStepWire[];
 }
 
 // --- auxiliary API shapes used by pairing ---

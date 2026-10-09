@@ -210,12 +210,26 @@ func nodeTitles(t *testing.T, ts *httptest.Server, sessionAuth map[string]string
 	return out
 }
 
-// TestFirstUseGoesFromEmptyInstanceToIncrementalSync is the acceptance path of
-// the initialization lifecycle: two devices, one space, nothing but public
-// endpoints, and a normal /sync round afterwards on both.
-func TestFirstUseGoesFromEmptyInstanceToIncrementalSync(t *testing.T) {
-	_, ts, _ := newTestServerWithDB(t)
+// createsInPlan reads the create count out of the plan preview an endpoint
+// attached to its answer.
+func createsInPlan(t *testing.T, body map[string]any) int {
+	t.Helper()
+	plan, ok := body["plan"].(map[string]any)
+	if !ok {
+		t.Fatalf("answer carries no plan preview: %v", body)
+	}
+	stats, ok := plan["stats"].(map[string]any)
+	if !ok {
+		t.Fatalf("plan carries no stats: %v", plan)
+	}
+	return int(fieldInt(t, stats, "creates"))
+}
 
+// bootstrapInstance brings up an empty instance over the public API and opens
+// one space: the state a brand new Pontis server is in.
+func bootstrapInstance(t *testing.T) (ts *httptest.Server, sessionToken, spaceID string, sessionAuth map[string]string) {
+	t.Helper()
+	_, ts, _ = newTestServerWithDB(t)
 	code, body := doJSON(t, "POST", ts.URL+"/api/v1/auth/setup", nil,
 		map[string]string{"username": "alice", "password": "password123"})
 	if code != http.StatusCreated {
@@ -226,17 +240,23 @@ func TestFirstUseGoesFromEmptyInstanceToIncrementalSync(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("login = %d %v", code, body)
 	}
-	sessionToken := fieldString(body, "token")
-	sessionAuth := map[string]string{"Authorization": "Bearer " + sessionToken}
-
+	sessionToken = fieldString(body, "token")
+	sessionAuth = map[string]string{"Authorization": "Bearer " + sessionToken}
 	space := mustCall(t, "POST", ts.URL+"/api/v1/spaces", sessionAuth, map[string]string{"name": "Personal"})
-	spaceID := fieldString(space, "id")
+	return ts, sessionToken, fieldString(space, "id"), sessionAuth
+}
+
+// TestFirstUseGoesFromEmptyInstanceToIncrementalSync is the acceptance path of
+// the initialization lifecycle: two devices, one space, nothing but public
+// endpoints, and a normal /sync round afterwards on both.
+func TestFirstUseGoesFromEmptyInstanceToIncrementalSync(t *testing.T) {
+	ts, sessionToken, spaceID, sessionAuth := bootstrapInstance(t)
 
 	// Device one has a browser full of bookmarks and a brand new space.
 	aAuth, aBinding := pairDevice(t, ts, sessionToken, spaceID, "Edge@Home")
 
 	// While the binding is pending, neither sync nor snapshot is reachable.
-	if code, body = doJSON(t, "POST", ts.URL+"/api/v1/sync/bindings/"+aBinding, aAuth, map[string]any{
+	if code, body := doJSON(t, "POST", ts.URL+"/api/v1/sync/bindings/"+aBinding, aAuth, map[string]any{
 		"protocol_version": sync.ProtocolVersion, "epoch": 1,
 		"applied_revision": 0, "received_revision": 0,
 		"operations": []map[string]any{{
@@ -248,7 +268,7 @@ func TestFirstUseGoesFromEmptyInstanceToIncrementalSync(t *testing.T) {
 	}); code != http.StatusConflict || errCode(t, body) != "BINDING_NOT_ACTIVE" {
 		t.Fatalf("sync on a pending binding = %d %v, want 409 BINDING_NOT_ACTIVE", code, body)
 	}
-	if code, body = doJSON(t, "GET", ts.URL+"/api/v1/sync/bindings/"+aBinding+"/snapshot", aAuth, nil); code != http.StatusConflict ||
+	if code, body := doJSON(t, "GET", ts.URL+"/api/v1/sync/bindings/"+aBinding+"/snapshot", aAuth, nil); code != http.StatusConflict ||
 		errCode(t, body) != "BINDING_NOT_ACTIVE" {
 		t.Fatalf("snapshot on a pending binding = %d %v, want 409 BINDING_NOT_ACTIVE", code, body)
 	}
@@ -411,21 +431,7 @@ func TestSyncYieldsToAnOpenReconciliation(t *testing.T) {
 // is not believed about identity (doc 06 §11). The one reconciliation where
 // the client has nothing to map from must declare refs only.
 func TestFirstReconciliationRejectsClaimedCanonicalIDs(t *testing.T) {
-	_, ts, _ := newTestServerWithDB(t)
-	code, body := doJSON(t, "POST", ts.URL+"/api/v1/auth/setup", nil,
-		map[string]string{"username": "alice", "password": "password123"})
-	if code != http.StatusCreated {
-		t.Fatalf("setup = %d %v", code, body)
-	}
-	code, body = doJSON(t, "POST", ts.URL+"/api/v1/auth/login", nil,
-		map[string]string{"username": "alice", "password": "password123"})
-	if code != http.StatusOK {
-		t.Fatalf("login = %d %v", code, body)
-	}
-	sessionToken := fieldString(body, "token")
-	space := mustCall(t, "POST", ts.URL+"/api/v1/spaces",
-		map[string]string{"Authorization": "Bearer " + sessionToken}, map[string]string{"name": "Personal"})
-	spaceID := fieldString(space, "id")
+	ts, sessionToken, spaceID, _ := bootstrapInstance(t)
 
 	// The space already has a node, so a claimed id could resolve to something
 	// real: the first reconciliation still refuses the claim.
@@ -442,7 +448,7 @@ func TestFirstReconciliationRejectsClaimedCanonicalIDs(t *testing.T) {
 		map[string]string{"type": "initial", "reason": "first synchronization"})
 
 	claimed := uuid.Must(uuid.NewV7()).String()
-	code, body = doJSON(t, "POST", base+"/bindings/"+impostorBinding+"/client-snapshots", impostorAuth,
+	code, body := doJSON(t, "POST", base+"/bindings/"+impostorBinding+"/client-snapshots", impostorAuth,
 		browserSnapshotWith(reconcile.ClientNodeJSON{
 			LocalRef: "l_2", ParentLocalRef: "l_1", Type: "bookmark",
 			Title: "Claimed", URL: "https://claimed.example", CanonicalID: claimed,
@@ -460,24 +466,130 @@ func TestFirstReconciliationRejectsClaimedCanonicalIDs(t *testing.T) {
 		}))
 }
 
+// TestAmbiguousFirstMergeAsksTheUserBeforeItGuesses covers the one case the
+// engine refuses to decide alone (doc 06 §6, doc 08 §11-§12): the browser holds
+// a bookmark the canonical tree has twice. It asks, it only accepts an answer it
+// offered, and the answer it takes by default duplicates rather than merges.
+func TestAmbiguousFirstMergeAsksTheUserBeforeItGuesses(t *testing.T) {
+	ts, sessionToken, spaceID, sessionAuth := bootstrapInstance(t)
+	dupURL := "https://twice.example"
+
+	aAuth, aBinding := pairDevice(t, ts, sessionToken, spaceID, "Edge@Home")
+	initializeBinding(t, ts, aAuth, aBinding, browserSnapshotWith(
+		reconcile.ClientNodeJSON{LocalRef: "l_2", ParentLocalRef: "l_1", Type: "bookmark",
+			Title: "Twice", URL: dupURL},
+		reconcile.ClientNodeJSON{LocalRef: "l_3", ParentLocalRef: "l_1", Type: "bookmark",
+			Title: "Twice", URL: dupURL},
+	))
+
+	bAuth, bBinding := pairDevice(t, ts, sessionToken, spaceID, "Firefox@Laptop")
+	base := ts.URL + "/api/v1/sync"
+	created := mustCall(t, "POST", base+"/bindings/"+bBinding+"/reconciliations", bAuth,
+		map[string]string{"type": "initial", "reason": "first synchronization"})
+	sessionID := fieldString(sessionOf(t, created), "id")
+	mustCall(t, "POST", base+"/bindings/"+bBinding+"/client-snapshots", bAuth, browserSnapshotWith(
+		reconcile.ClientNodeJSON{LocalRef: "l_2", ParentLocalRef: "l_1", Type: "bookmark",
+			Title: "Twice", URL: dupURL},
+	))
+	mustCall(t, "POST", base+"/bindings/"+bBinding+"/server-snapshots", bAuth, nil)
+
+	planned := mustCall(t, "POST", base+"/reconciliations/"+sessionID+"/plan", bAuth, nil)
+	if state := fieldString(sessionOf(t, planned), "state"); state != string(reconcile.StateWaitingUser) {
+		t.Fatalf("session state with an unresolved identity = %s, want %s",
+			state, reconcile.StateWaitingUser)
+	}
+	issues := issuesOf(planned)
+	if len(issues) != 1 {
+		t.Fatalf("issues = %v, want the one ambiguous bookmark", issues)
+	}
+	issue := issues[0].(map[string]any)
+	issueID := fieldString(issue, "id")
+	if got := fieldString(issue, "type"); got != reconcile.IssueAmbiguousIdentity {
+		t.Errorf("issue type = %s, want %s", got, reconcile.IssueAmbiguousIdentity)
+	}
+	payload, _ := issue["payload"].(map[string]any)
+	candidates, _ := payload["candidates"].([]any)
+	if len(candidates) != 2 {
+		t.Fatalf("candidates = %v, want the two identical canonical bookmarks", payload["candidates"])
+	}
+	// An empty default is the safe one: keep both bookmarks.
+	if fieldString(issue, "default_choice") != "" {
+		t.Errorf("default choice = %v, want the empty one (duplicate rather than merge)", issue["default_choice"])
+	}
+	if got := createsInPlan(t, planned); got != 1 {
+		t.Errorf("creates while the ambiguity is open = %d, want the duplicate the default makes", got)
+	}
+	// An empty list is empty on the wire, never null (doc 04 §6).
+	if _, ok := planned["plan"].(map[string]any)["warnings"].([]any); !ok {
+		t.Errorf("plan warnings = %#v, want an array", planned["plan"].(map[string]any)["warnings"])
+	}
+
+	// Only a candidate the server offered is a legal answer.
+	code, body := doJSON(t, "PUT", base+"/reconciliations/"+sessionID+"/decisions", bAuth,
+		map[string]any{"decisions": map[string]string{
+			issueID: uuid.Must(uuid.NewV7()).String(),
+		}})
+	if code != http.StatusBadRequest || errCode(t, body) != "RECONCILIATION_DECISION_INVALID" {
+		t.Fatalf("decision outside the candidate set = %d %v, want 400 RECONCILIATION_DECISION_INVALID",
+			code, body)
+	}
+
+	chosen := candidates[0].(string)
+	// An issue id from somewhere else is not an answer to anything.
+	if code, body := doJSON(t, "PUT", base+"/reconciliations/"+sessionID+"/decisions", bAuth,
+		map[string]any{"decisions": map[string]string{
+			uuid.Must(uuid.NewV7()).String(): chosen,
+		}}); code != http.StatusConflict || errCode(t, body) != "RECONCILIATION_PHASE_INVALID" {
+		t.Fatalf("decision on an unknown issue = %d %v, want 409 RECONCILIATION_PHASE_INVALID", code, body)
+	}
+
+	decided := mustCall(t, "PUT", base+"/reconciliations/"+sessionID+"/decisions", bAuth,
+		map[string]any{"decisions": map[string]string{issueID: chosen}})
+	if left := issuesOf(decided); len(left) != 0 {
+		t.Fatalf("issues after the decision = %v, want none", left)
+	}
+	if state := fieldString(sessionOf(t, decided), "state"); state != string(reconcile.StateRunning) {
+		t.Fatalf("state after the last issue = %s, want %s", state, reconcile.StateRunning)
+	}
+	if got := createsInPlan(t, decided); got != 0 {
+		t.Errorf("creates after the decision = %d, want 0: the bookmark keeps the canonical id it was matched to", got)
+	}
+	// With nothing left to ask, the session no longer takes decisions.
+	if code, body := doJSON(t, "PUT", base+"/reconciliations/"+sessionID+"/decisions", bAuth,
+		map[string]any{"decisions": map[string]string{issueID: chosen}}); code != http.StatusConflict ||
+		errCode(t, body) != "RECONCILIATION_PHASE_INVALID" {
+		t.Fatalf("decision on a running session = %d %v, want 409 RECONCILIATION_PHASE_INVALID", code, body)
+	}
+
+	mustCall(t, "POST", base+"/reconciliations/"+sessionID+"/commit", bAuth, nil)
+	steps := mustCall(t, "GET", base+"/reconciliations/"+sessionID+"/steps", bAuth, nil)
+	mapped := false
+	for _, raw := range steps["steps"].([]any) {
+		step := raw.(map[string]any)
+		if step["kind"] == "delete" {
+			t.Errorf("the decided merge would destroy canonical node %v", step)
+		}
+		if step["local_ref"] == "l_2" && step["canonical_id"] == chosen {
+			mapped = true
+		}
+	}
+	if !mapped {
+		t.Errorf("no step maps the browser bookmark onto the chosen id %s: %v", chosen, steps["steps"])
+	}
+	mustCall(t, "POST", base+"/reconciliations/"+sessionID+"/complete", bAuth, nil)
+
+	// The space holds exactly the bookmarks it already had: deciding an
+	// identity merges, it does not add.
+	if got := nodeTitles(t, ts, sessionAuth, spaceID); len(got) != 2 {
+		t.Fatalf("canonical nodes after the decided merge = %d %v, want the 2 that already existed",
+			len(got), got)
+	}
+}
+
 // TestReconciliationResourcesAreOwnedByTheirDevice checks that a session id
 // and a snapshot id are not capabilities (doc 22 D.6).
 func TestReconciliationResourcesAreOwnedByTheirDevice(t *testing.T) {
-	_, ts, _ := newTestServerWithDB(t)
-	code, body := doJSON(t, "POST", ts.URL+"/api/v1/auth/setup", nil,
-		map[string]string{"username": "alice", "password": "password123"})
-	if code != http.StatusCreated {
-		t.Fatalf("setup = %d %v", code, body)
-	}
-	code, body = doJSON(t, "POST", ts.URL+"/api/v1/auth/login", nil,
-		map[string]string{"username": "alice", "password": "password123"})
-	if code != http.StatusOK {
-		t.Fatalf("login = %d %v", code, body)
-	}
-	sessionToken := fieldString(body, "token")
-	space := mustCall(t, "POST", ts.URL+"/api/v1/spaces",
-		map[string]string{"Authorization": "Bearer " + sessionToken}, map[string]string{"name": "Personal"})
-	spaceID := fieldString(space, "id")
+	ts, sessionToken, spaceID, _ := bootstrapInstance(t)
 
 	ownerAuth, ownerBinding := pairDevice(t, ts, sessionToken, spaceID, "Edge@Home")
 	intruderAuth, _ := pairDevice(t, ts, sessionToken, spaceID, "Chrome@Work")
@@ -496,17 +608,17 @@ func TestReconciliationResourcesAreOwnedByTheirDevice(t *testing.T) {
 		base + "/server-snapshots/" + snapshotID,
 		base + "/server-snapshots/" + snapshotID + "/nodes",
 	} {
-		if code, body = doJSON(t, "GET", url, intruderAuth, nil); code != http.StatusForbidden ||
+		if code, body := doJSON(t, "GET", url, intruderAuth, nil); code != http.StatusForbidden ||
 			errCode(t, body) != "NOT_BINDING_OWNER" {
 			t.Errorf("GET %s with another device = %d %v, want 403 NOT_BINDING_OWNER", url, code, body)
 		}
 	}
 	// Writing to someone else's lifecycle is refused the same way.
-	if code, body = doJSON(t, "POST", base+"/reconciliations/"+sessionID+"/commit", intruderAuth, nil); code != http.StatusForbidden {
+	if code, body := doJSON(t, "POST", base+"/reconciliations/"+sessionID+"/commit", intruderAuth, nil); code != http.StatusForbidden {
 		t.Errorf("commit with another device = %d %v, want 403", code, body)
 	}
 	// An unknown id is a 404, not a 403: it leaks nothing about existence.
-	if code, body = doJSON(t, "GET", base+"/reconciliations/does-not-exist", ownerAuth, nil); code != http.StatusNotFound ||
+	if code, body := doJSON(t, "GET", base+"/reconciliations/does-not-exist", ownerAuth, nil); code != http.StatusNotFound ||
 		errCode(t, body) != "RECONCILIATION_NOT_FOUND" {
 		t.Errorf("unknown session = %d %v, want 404 RECONCILIATION_NOT_FOUND", code, body)
 	}

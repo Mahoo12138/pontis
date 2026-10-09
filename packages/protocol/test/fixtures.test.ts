@@ -3,7 +3,18 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { decodeChange, decodeServerSnapshot, decodeSession, decodeSnapshotNodes, decodeSyncResponse, expectError, ProtocolError } from '../src';
+import {
+  decodeChange,
+  decodePlan,
+  decodeReconciliationSession,
+  decodeServerSnapshot,
+  decodeSessionEnvelope,
+  decodeSnapshotNodePage,
+  decodeSteps,
+  decodeSyncResponse,
+  expectError,
+  ProtocolError,
+} from '../src';
 
 const fixtureDir = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../../../fixtures/protocol');
 
@@ -47,45 +58,40 @@ describe('golden protocol fixtures', () => {
     expect(err!.code).toBe('EPOCH_MISMATCH');
   });
 
-  it('decodes server snapshot metadata and node pages', () => {
-    const snap = decodeServerSnapshot({
-      snapshot_id: 's1',
-      epoch: 1,
-      revision: 7,
-      node_count: 2,
-      checksum: 'abc',
-      expires_at: '2026-01-01T00:00:00Z',
-    });
-    expect(snap.snapshot_id).toBe('s1');
+  it('decodes the reconciliation snapshots and their node pages', () => {
+    const snap = decodeServerSnapshot(golden('reconcile-server-snapshot-v1.json'));
+    expect(snap.snapshot_id).toBe('0198c0de-7000-7000-8000-000000000100');
+    expect(snap.node_count).toBe(4);
 
-    const nodes = decodeSnapshotNodes({
-      nodes: [
-        { node_ref: 'root:main', parent_ref: '', type: 'root', title: 'Main', root_key: 'main', position: 0 },
-        { node_ref: 'n1', parent_ref: 'root:main', type: 'bookmark', title: 'X', url: 'https://x', position: 0 },
-      ],
-    });
-    expect(nodes).toHaveLength(2);
-    expect(nodes[1]!.root_key).toBeUndefined();
+    const page = decodeSnapshotNodePage(golden('reconcile-snapshot-nodes-v1.json'));
+    expect(page.total).toBe(4);
+    expect(page.nodes).toHaveLength(2);
+    expect(page.next_cursor).toBe('2');
   });
 
-  it('decodes a reconciliation session with issues', () => {
-    const sess = decodeSession({
-      id: 'r1',
-      state: 'waiting_user',
-      phase: 'planned',
-      target_epoch: 1,
-      target_revision: 4,
-      commit_revision: 0,
-      issues: [
-        {
-          id: 'i1',
-          type: 'ambiguous_identity',
-          payload: { source_ref: 'l1', candidates: ['t1', 't2'] },
-          default_choice: '',
-        },
-      ],
-    });
-    expect(sess.issues).toHaveLength(1);
-    expect(sess.issues[0]!.payload.candidates).toEqual(['t1', 't2']);
+  it('decodes a planned session, its issues and its plan preview', () => {
+    const body = decodeSessionEnvelope(golden('reconcile-session-planned-v1.json'));
+    expect(body.session.state).toBe('waiting_user');
+    expect(body.session.plan_hash).toBe('6f7e8d9c0b1a2f3e4d5c6b7a8990a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2');
+    expect(body.issues[0]!.payload.candidates).toHaveLength(2);
+    expect(body.plan!.stats.creates).toBe(1);
+    expect(body.plan!.warnings).toEqual([]);
+  });
+
+  it('decodes the steps and the binding a completed session leaves behind', () => {
+    const steps = decodeSteps(golden('reconcile-steps-v1.json'));
+    expect(steps.steps.map((s) => s.kind)).toEqual(['assign_identity', 'create']);
+
+    const done = decodeSessionEnvelope(golden('reconcile-session-completed-v1.json'));
+    expect(done.session.commit_revision).toBe(121);
+    expect(done.issues).toEqual([]);
+    expect(done.binding!.state).toBe('active');
+  });
+
+  it('keeps a session answer that is not the envelope shape an error', () => {
+    // The lifecycle never returns a bare session object; reading one would
+    // silently produce an id-less session, so the decoder refuses it.
+    expect(() => decodeReconciliationSession({ id: 'r1' })).toThrow();
+    expect(() => decodePlan({ plan_hash: 'h' })).toThrow();
   });
 });

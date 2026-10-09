@@ -1,0 +1,21 @@
+{
+  "plan_hash": "6f7e8d9c0b1a2f3e4d5c6b7a8990a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
+  "steps": [
+    {
+      "kind": "assign_identity",
+      "local_ref": "l_2",
+      "canonical_id": "0198c0de-7000-7000-8000-0000000000aa"
+    },
+    {
+      "kind": "create",
+      "canonical_id": "0198c0de-7000-7000-8000-0000000000ac",
+      "type": "bookmark",
+      "title": "Example",
+      "url": "https://example.com",
+      "parent": {
+        "type": "node",
+        "id": "0198c0de-7000-7000-8000-0000000000aa"
+      }
+    }
+  ]
+}

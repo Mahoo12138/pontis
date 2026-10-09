@@ -273,7 +273,40 @@ POST /api/v1/sync/reconciliations/{id}/complete
 session 的 `phase`（collecting → snapshot_ready → server_ready → planned →
 committed）是 Client 在 MV3 重启后恢复进度的依据；`state`
 （running / waiting_user / completed / failed）说明它是否在等人。可选时间戳
-为空时是空字符串，不是零值日期。
+为空时是空字符串，不是零值日期。`issues`/`steps`/`plan.warnings` 这类数组
+没有内容时是 `[]`，不是 `null`。
+
+### Issues 与 decisions
+
+`plan` 之后仍有无法自行判定的身份时，session 进入 `waiting_user`，`issues`
+描述每一个待答问题：
+
+```text
+{ "id", "type": "ambiguous_identity",
+  "payload": { "source_ref", "type", "title", "url", "candidates": [...] },
+  "default_choice", "selected_choice" }
+```
+
+`candidates` 是可供选择的 Canonical Target ref；`source_ref` 是 Client 快照里
+的那个节点。`default_choice` 是 Client 不答时 Server 采用的选择，目前恒为空
+字符串，含义是"复制一份"而不是"猜一个身份"（`06-initial-resync-recovery.md` §6）。
+
+`PUT .../decisions` 的请求体按 issue id 提交答案：
+
+```text
+{ "decisions": { "<issue id>": "<candidate>" } }
+```
+
+约束：
+
+- 值必须是该 issue 的 `candidates` 之一，或是空字符串（保持安全默认）；
+  否则 `400 RECONCILIATION_DECISION_INVALID`，session 的计划不变。
+- 一个 issue id 从未出现在该 session 上时 `409 RECONCILIATION_PHASE_INVALID`。
+- 提交后 Server 用这批决定重算 plan 与 steps 并一并返回，所以 Client 不需要
+  再 `plan` 一次；全部 issue 解决后 `state` 回到 `running`。
+- 只有 `waiting_user` 的 session 接受 decisions；其余状态返回
+  `409 RECONCILIATION_PHASE_INVALID`。
+- `commit` 不要求先答完：未答的 issue 按 `default_choice` 落地。
 
 ## 12. Reconciliation Plan
 

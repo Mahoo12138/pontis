@@ -118,7 +118,7 @@ func fromServerSnapshot(snap reconcile.ServerSnapshot) serverSnapshotDTO {
 }
 
 // serverSnapshotNodeDTO is one frozen row; node_ref is the session-local ref,
-// never a canonical id (doc 08 §9).
+// never a browser id (doc 08 §9).
 type serverSnapshotNodeDTO struct {
 	NodeRef   string `json:"node_ref"`
 	ParentRef string `json:"parent_ref"`
@@ -127,6 +127,28 @@ type serverSnapshotNodeDTO struct {
 	URL       string `json:"url,omitempty"`
 	RootKey   string `json:"root_key,omitempty"`
 	Position  int64  `json:"position"`
+}
+
+// snapshotNodesPageDTO is one page of a frozen snapshot (doc 08 §9).
+type snapshotNodesPageDTO struct {
+	Nodes      []serverSnapshotNodeDTO `json:"nodes"`
+	Total      int                     `json:"total"`
+	NextCursor string                  `json:"next_cursor"`
+}
+
+// sessionEnvelopeDTO is the one response shape of the reconciliation
+// endpoints: the session always, the open issues as an array even when empty
+// (a null would break every consumer that iterates it), and the plan or the
+// binding only when the call actually produces one.
+type sessionEnvelopeDTO struct {
+	Session sessionDTO                  `json:"session"`
+	Issues  []issueDTO                  `json:"issues"`
+	Plan    *reconcile.PlanArtifactJSON `json:"plan,omitempty"`
+	Binding *bindingResponse            `json:"binding,omitempty"`
+}
+
+func sessionEnvelope(sess reconcile.Session, issues []reconcile.Issue) sessionEnvelopeDTO {
+	return sessionEnvelopeDTO{Session: fromSession(sess), Issues: fromIssues(issues)}
 }
 
 // --- ownership ---
@@ -176,6 +198,25 @@ func (s *Server) planOf(ctx context.Context, sess reconcile.Session) (reconcile.
 	return plan, true
 }
 
+// writeSession answers a call that moves the session forward; its issues are
+// not recomputed, so the array is simply empty.
+func (s *Server) writeSession(w http.ResponseWriter, status int, sess reconcile.Session) {
+	writeJSON(w, status, sessionEnvelope(sess, nil))
+}
+
+// writeSessionWithIssues answers a call that recomputed the issue set, and
+// carries the plan preview whenever the session has one.
+func (s *Server) writeSessionWithIssues(w http.ResponseWriter, r *http.Request,
+	sess reconcile.Session, issues []reconcile.Issue) {
+	envelope := sessionEnvelope(sess, issues)
+	if plan, hasPlan := s.planOf(r.Context(), sess); hasPlan {
+		envelope.Plan = &plan
+	}
+	writeJSON(w, http.StatusOK, envelope)
+}
+
+func ptr[T any](v T) *T { return &v }
+
 func (s *Server) writeReconcileError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, reconcile.ErrSessionNotFound):
@@ -192,6 +233,9 @@ func (s *Server) writeReconcileError(w http.ResponseWriter, r *http.Request, err
 		s.writeError(w, r, http.StatusConflict, "PLAN_STALE", "the canonical target moved; preview again")
 	case errors.Is(err, reconcile.ErrNotCommitted):
 		s.writeError(w, r, http.StatusConflict, "RECONCILIATION_NOT_COMMITTED", "commit the reconciliation first")
+	case errors.Is(err, reconcile.ErrDecisionInvalid):
+		s.writeError(w, r, http.StatusBadRequest, "RECONCILIATION_DECISION_INVALID",
+			"a decision is not one of the issue's candidates")
 	case errors.Is(err, reconcile.ErrInvalidSessionState):
 		s.writeError(w, r, http.StatusConflict, "RECONCILIATION_PHASE_INVALID", "this call does not fit the session's phase")
 	default:
@@ -219,7 +263,7 @@ func (s *Server) handleCreateReconciliation(w http.ResponseWriter, r *http.Reque
 		s.writeReconcileError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"session": fromSession(sess)})
+	s.writeSession(w, http.StatusCreated, sess)
 }
 
 // handleSubmitClientSnapshot stores the browser tree for the binding's open
@@ -238,7 +282,7 @@ func (s *Server) handleSubmitClientSnapshot(w http.ResponseWriter, r *http.Reque
 		s.writeReconcileError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"session": fromSession(sess)})
+	s.writeSession(w, http.StatusOK, sess)
 }
 
 // handleCreateServerSnapshot freezes the canonical tree (doc 08 §9).
@@ -295,22 +339,20 @@ func (s *Server) handleListServerSnapshotNodes(w http.ResponseWriter, r *http.Re
 		s.writeReconcileError(w, r, err)
 		return
 	}
-	out := map[string]any{
-		"nodes": make([]serverSnapshotNodeDTO, 0, len(nodes)),
-		"total": snap.NodeCount,
+	page := snapshotNodesPageDTO{
+		Nodes: make([]serverSnapshotNodeDTO, 0, len(nodes)),
+		Total: snap.NodeCount,
 	}
 	for _, n := range nodes {
-		out["nodes"] = append(out["nodes"].([]serverSnapshotNodeDTO), serverSnapshotNodeDTO{
+		page.Nodes = append(page.Nodes, serverSnapshotNodeDTO{
 			NodeRef: n.NodeRef, ParentRef: n.ParentRef, Type: n.Type,
 			Title: n.Title, URL: n.URL, RootKey: n.RootKey, Position: n.Position,
 		})
 	}
-	if page := out["nodes"].([]serverSnapshotNodeDTO); len(page) == limit && offset+len(page) < snap.NodeCount {
-		out["next_cursor"] = strconv.Itoa(offset + len(page))
-	} else {
-		out["next_cursor"] = ""
+	if len(page.Nodes) == limit && offset+len(page.Nodes) < snap.NodeCount {
+		page.NextCursor = strconv.Itoa(offset + len(page.Nodes))
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, page)
 }
 
 // deviceSnapshot loads a frozen snapshot and checks its binding belongs to
@@ -342,11 +384,7 @@ func (s *Server) handleGetReconciliation(w http.ResponseWriter, r *http.Request)
 		s.writeReconcileError(w, r, err)
 		return
 	}
-	body := map[string]any{"session": fromSession(sess), "issues": fromIssues(issues)}
-	if plan, hasPlan := s.planOf(r.Context(), sess); hasPlan {
-		body["plan"] = plan
-	}
-	writeJSON(w, http.StatusOK, body)
+	s.writeSessionWithIssues(w, r, sess, issues)
 }
 
 // handlePlanReconciliation computes the plan and the apply steps, and
@@ -361,11 +399,7 @@ func (s *Server) handlePlanReconciliation(w http.ResponseWriter, r *http.Request
 		s.writeReconcileError(w, r, err)
 		return
 	}
-	body := map[string]any{"session": fromSession(planned), "issues": fromIssues(issues)}
-	if plan, hasPlan := s.planOf(r.Context(), planned); hasPlan {
-		body["plan"] = plan
-	}
-	writeJSON(w, http.StatusOK, body)
+	s.writeSessionWithIssues(w, r, planned, issues)
 }
 
 // handleDecideReconciliation records the user's answers on the open issues
@@ -386,11 +420,7 @@ func (s *Server) handleDecideReconciliation(w http.ResponseWriter, r *http.Reque
 		s.writeReconcileError(w, r, err)
 		return
 	}
-	body := map[string]any{"session": fromSession(decided), "issues": fromIssues(issues)}
-	if plan, hasPlan := s.planOf(r.Context(), decided); hasPlan {
-		body["plan"] = plan
-	}
-	writeJSON(w, http.StatusOK, body)
+	s.writeSessionWithIssues(w, r, decided, issues)
 }
 
 // handleCommitReconciliation runs the plan server-side (doc 08 §12). A stale
@@ -405,7 +435,7 @@ func (s *Server) handleCommitReconciliation(w http.ResponseWriter, r *http.Reque
 		s.writeReconcileError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"session": fromSession(committed)})
+	s.writeSession(w, http.StatusOK, committed)
 }
 
 // handleReconciliationSteps returns the ensure-state steps the client applies
@@ -441,14 +471,7 @@ func (s *Server) handleCompleteReconciliation(w http.ResponseWriter, r *http.Req
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"session": fromSession(done),
-		"binding": map[string]any{
-			"id":                binding.ID,
-			"state":             string(binding.State),
-			"epoch":             binding.Epoch,
-			"applied_revision":  binding.AppliedRevision,
-			"received_revision": binding.ReceivedRevision,
-		},
-	})
+	envelope := sessionEnvelope(done, nil)
+	envelope.Binding = ptr(fromBinding(binding))
+	writeJSON(w, http.StatusOK, envelope)
 }

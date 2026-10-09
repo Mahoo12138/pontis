@@ -1,0 +1,66 @@
+{
+  "session": {
+    "id": "0198c0de-7000-7000-8000-000000000200",
+    "binding_id": "0198c0de-7000-7000-8000-000000000010",
+    "space_id": "0198c0de-7000-7000-8000-000000000020",
+    "type": "initial",
+    "reason": "first synchronization",
+    "state": "waiting_user",
+    "phase": "planned",
+    "source_epoch": 1,
+    "source_revision": 44,
+    "target_epoch": 1,
+    "target_revision": 120,
+    "plan_hash": "6f7e8d9c0b1a2f3e4d5c6b7a8990a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
+    "server_committed": false,
+    "commit_revision": 0,
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:02:00Z"
+  },
+  "issues": [
+    {
+      "id": "0198c0de-7000-7000-8000-000000000201",
+      "type": "ambiguous_identity",
+      "payload": {
+        "source_ref": "l_3",
+        "type": "bookmark",
+        "title": "Example",
+        "url": "https://example.com",
+        "candidates": [
+          "0198c0de-7000-7000-8000-0000000000aa",
+          "0198c0de-7000-7000-8000-0000000000ab"
+        ]
+      },
+      "default_choice": ""
+    }
+  ],
+  "plan": {
+    "type": "initial",
+    "strategy": "merge",
+    "placement": "contents",
+    "base_epoch": 1,
+    "base_revision": 120,
+    "plan_hash": "6f7e8d9c0b1a2f3e4d5c6b7a8990a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
+    "operations": [
+      {
+        "kind": "create",
+        "node_id": "0198c0de-7000-7000-8000-0000000000ac",
+        "type": "bookmark",
+        "title": "Example",
+        "url": "https://example.com",
+        "parent": {
+          "type": "node",
+          "id": "0198c0de-7000-7000-8000-0000000000aa"
+        },
+        "source_ref": "l_3"
+      }
+    ],
+    "stats": {
+      "creates": 1,
+      "updates": 0,
+      "moves": 0,
+      "deletes": 0
+    },
+    "warnings": []
+  }
+}
