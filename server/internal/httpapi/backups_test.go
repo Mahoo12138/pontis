@@ -232,3 +232,91 @@ func TestRepeatedBackupsRestoreTheirOwnSnapshots(t *testing.T) {
 		t.Fatalf("restored tree = %v, want only the first snapshot", got)
 	}
 }
+
+// The snapshot exports nodes ordered by position across the whole space, so a
+// folder can be listed after its own children. Restoring must still put the
+// folder in first: nodes.parent_id is an enforced foreign key, and without that
+// ordering every nested backup failed to restore.
+func TestRestoreOfNestedTreeKeepsIdsAndParents(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	h := map[string]string{"Authorization": "Bearer " + f.sessionToken}
+	root := f.ts.URL + "/api/v1/spaces/" + f.spaceID
+
+	post := func(body map[string]any) map[string]any {
+		t.Helper()
+		code, out := doJSON(t, "POST", root+"/nodes", h, body)
+		if code != http.StatusCreated {
+			t.Fatalf("post %v = %d %v", body, code, out)
+		}
+		return out
+	}
+	// A root bookmark that sorts first, then the folder holding the child the
+	// backup exports between them.
+	post(map[string]any{"type": "bookmark", "title": "alpha", "url": "https://a",
+		"parent": map[string]string{"type": "root", "key": "main"}})
+	folder := post(map[string]any{"type": "folder", "title": "dev",
+		"parent": map[string]string{"type": "root", "key": "main"}})
+	child := post(map[string]any{"type": "bookmark", "title": "inside", "url": "https://i",
+		"parent": map[string]string{"type": "node", "id": folder["id"].(string)}})
+
+	_, body := doJSON(t, "POST", root+"/backups", h, nil)
+	backupID := body["id"].(string)
+
+	// Mutate after the snapshot so the restore has work to undo.
+	post(map[string]any{"type": "bookmark", "title": "added-later", "url": "https://late",
+		"parent": map[string]string{"type": "root", "key": "main"}})
+
+	code, body := doJSON(t, "POST", root+"/backups/"+backupID+"/restore", h, nil)
+	if code != http.StatusOK {
+		t.Fatalf("restore of a nested tree = %d %v", code, body)
+	}
+
+	code, body = doJSON(t, "GET", root+"/nodes", h, nil)
+	if code != http.StatusOK {
+		t.Fatalf("nodes after restore = %d %v", code, body)
+	}
+	byID := map[string]map[string]any{}
+	for _, n := range body["nodes"].([]any) {
+		m := n.(map[string]any)
+		byID[m["id"].(string)] = m
+	}
+	if len(byID) != 3 {
+		t.Fatalf("restored %d nodes, want the 3 snapshotted ones: %v", len(byID), body["nodes"])
+	}
+	restoredFolder, restoredChild := byID[folder["id"].(string)], byID[child["id"].(string)]
+	if restoredFolder == nil || restoredChild == nil {
+		t.Fatalf("restore dropped canonical ids: %v", byID)
+	}
+	if restoredChild["parent_id"] != folder["id"] {
+		t.Fatalf("restored child parent = %v, want the folder %v",
+			restoredChild["parent_id"], folder["id"])
+	}
+	if restoredFolder["root_key"] != "main" || restoredFolder["position"].(float64) != 1 {
+		t.Fatalf("restored folder = %v, want under main at position 1", restoredFolder)
+	}
+	if restoredChild["position"].(float64) != 0 {
+		t.Fatalf("restored child position = %v, want 0", restoredChild["position"])
+	}
+	// One baseline: the space is back at revision 0 and so is every node
+	// field revision, otherwise a resynced device's first operation (sent
+	// against base_revision 0) reads as a concurrent update.
+	for id, n := range byID {
+		if n["created_revision"].(float64) != 0 || n["structure_revision"].(float64) != 0 {
+			t.Fatalf("restored node %s carries revisions %v/%v, want the 0 baseline",
+				id, n["created_revision"], n["structure_revision"])
+		}
+	}
+	_, body = doJSON(t, "GET", f.ts.URL+"/api/v1/spaces", h, nil)
+	for _, sp := range body["spaces"].([]any) {
+		m := sp.(map[string]any)
+		if m["id"] != f.spaceID {
+			continue
+		}
+		if m["revision"].(float64) != 0 {
+			t.Fatalf("space revision = %v, want 0 after restore", m["revision"])
+		}
+		if m["epoch"].(float64) != 2 {
+			t.Fatalf("space epoch = %v, want 2", m["epoch"])
+		}
+	}
+}

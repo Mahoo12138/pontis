@@ -141,13 +141,20 @@ func (f dirFiles) Remove(key string) error {
 	return nil
 }
 
-// Payload is the on-disk logical backup format.
+// formatTag and payloadVersion identify the on-disk logical backup format.
+const (
+	formatTag      = "pontis-backup"
+	payloadVersion = 1
+)
+
+// Payload is one space's snapshot: root slots plus nodes with stable
+// canonical ids.
 type Payload struct {
-	Format    string             `json:"format"`
-	Version   int                `json:"version"`
-	SpaceID   string             `json:"space_id"`
-	RootSlots []SlotDTO          `json:"root_slots"`
-	Nodes     []NodeDTO          `json:"nodes"`
+	Format    string    `json:"format"`
+	Version   int       `json:"version"`
+	SpaceID   string    `json:"space_id"`
+	RootSlots []SlotDTO `json:"root_slots"`
+	Nodes     []NodeDTO `json:"nodes"`
 }
 
 // SlotDTO is one root slot snapshot.
@@ -185,11 +192,13 @@ type Store interface {
 	Get(ctx context.Context, id string) (Backup, error)
 	Delete(ctx context.Context, id string) error
 	SetProtected(ctx context.Context, id string, protected bool) error
-	// ReplaceBaseline swaps the space's tree atomically: it wipes nodes
-	// and journal history, rewrites root slots, inserts the snapshot with
-	// the ORIGINAL node ids at baseline revision 1, bumps the epoch and
-	// resets every binding to pending_initial for resync.
-	ReplaceBaseline(ctx context.Context, spaceID string, newEpoch int64, slots []SlotDTO, nodes []NodeDTO) error
+	// ReplaceBaseline swaps the space's tree atomically: it wipes nodes and
+	// journal history, rewrites root slots, inserts the snapshot with the
+	// ORIGINAL node ids at the new zero baseline, bumps the epoch inside the
+	// write transaction and resets every binding to pending_initial. nodes
+	// must arrive parent-first: nodes.parent_id is an immediate foreign key.
+	// It reports the epoch the space now carries.
+	ReplaceBaseline(ctx context.Context, spaceID string, slots []SlotDTO, nodes []NodeDTO) (int64, error)
 }
 
 // Service implements backup operations.
@@ -222,7 +231,7 @@ func (s *Service) Create(ctx context.Context, spaceID canonical.SpaceID, kind Ki
 		return Backup{}, err
 	}
 
-	payload := Payload{Format: "pontis-backup", Version: 1, SpaceID: string(spaceID)}
+	payload := Payload{Format: formatTag, Version: payloadVersion, SpaceID: string(spaceID)}
 	bookmarks := int64(0)
 	for _, slot := range slots {
 		payload.RootSlots = append(payload.RootSlots, SlotDTO{
@@ -344,9 +353,11 @@ func (s *Service) SetProtected(ctx context.Context, id string, protected bool) e
 	return s.store.SetProtected(ctx, id, protected)
 }
 
-// Restore replaces the space's tree with the backup content. A pre-restore
-// safety backup is created first (doc 14 §12); the epoch is bumped and all
-// bindings fall back to pending_initial so devices resync.
+// Restore replaces the space's tree with the backup content. The payload is
+// validated and ordered first, then a pre-restore safety backup is captured
+// (doc 14 §12), and finally the baseline is replaced in one transaction that
+// allocates the new epoch itself. Bindings fall back to pending_initial so
+// devices resync against the new baseline.
 func (s *Service) Restore(ctx context.Context, spaceID canonical.SpaceID, id string) (newEpoch int64, safetyID string, err error) {
 	b, err := s.store.Get(ctx, id)
 	if err != nil {
@@ -370,8 +381,16 @@ func (s *Service) Restore(ctx context.Context, spaceID canonical.SpaceID, id str
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return 0, "", ErrInvalidPayload
 	}
-	if payload.SpaceID != string(spaceID) || payload.Format != "pontis-backup" {
-		return 0, "", ErrInvalidPayload
+	// Prove the whole tree is restorable before touching live data or
+	// spending a safety backup on a payload that cannot be applied.
+	if err := validatePayload(spaceID, payload); err != nil {
+		return 0, "", err
+	}
+	// Export order is not a writable order: rewrite it parent-first so the
+	// immediate nodes.parent_id accepts the insert.
+	ordered, err := orderParentFirst(payload.Nodes)
+	if err != nil {
+		return 0, "", err
 	}
 
 	// Step 1: capture the current state as a safety backup.
@@ -380,14 +399,10 @@ func (s *Service) Restore(ctx context.Context, spaceID canonical.SpaceID, id str
 		return 0, "", err
 	}
 
-	sp, err := s.trees.Space(ctx, spaceID)
+	// Step 2: atomic baseline replacement; the epoch is allocated inside that
+	// transaction so a concurrent change cannot be overwritten blindly.
+	newEpoch, err = s.store.ReplaceBaseline(ctx, string(spaceID), payload.RootSlots, ordered)
 	if err != nil {
-		return 0, "", err
-	}
-	newEpoch = sp.Epoch + 1
-
-	// Step 2: atomic baseline replacement.
-	if err := s.store.ReplaceBaseline(ctx, string(spaceID), newEpoch, payload.RootSlots, payload.Nodes); err != nil {
 		return 0, "", err
 	}
 	return newEpoch, safety.ID, nil

@@ -63,13 +63,16 @@ func (f *fakeTrees) ListRootSlots(_ context.Context, space canonical.SpaceID) ([
 }
 
 type fakeStore struct {
-	rows         map[string]Backup
-	insertErr    error
-	replacedWith []NodeDTO
+	rows          map[string]Backup
+	insertErr     error
+	replaceErr    error
+	replacedSlots []SlotDTO
+	replacedWith  []NodeDTO
+	epoch         int64
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{rows: map[string]Backup{}}
+	return &fakeStore{rows: map[string]Backup{}, epoch: 1}
 }
 
 func (f *fakeStore) Insert(_ context.Context, b Backup) error {
@@ -116,9 +119,14 @@ func (f *fakeStore) SetProtected(_ context.Context, id string, protected bool) e
 	return nil
 }
 
-func (f *fakeStore) ReplaceBaseline(_ context.Context, _ string, _ int64, _ []SlotDTO, nodes []NodeDTO) error {
+func (f *fakeStore) ReplaceBaseline(_ context.Context, _ string, slots []SlotDTO, nodes []NodeDTO) (int64, error) {
+	if f.replaceErr != nil {
+		return 0, f.replaceErr
+	}
+	f.replacedSlots = slots
 	f.replacedWith = nodes
-	return nil
+	f.epoch++
+	return f.epoch, nil
 }
 
 // failingFiles wraps the real directory store so a single operation can fail.

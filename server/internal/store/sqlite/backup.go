@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"pontis/internal/backup"
+	"pontis/internal/canonical"
 )
 
 // BackupStore implements the backup catalog and the baseline replacement.
@@ -90,15 +91,38 @@ func (s *BackupStore) SetProtected(ctx context.Context, id string, protected boo
 }
 
 // ReplaceBaseline atomically swaps the space's canonical tree for the
-// snapshot content: canonical UUIDs are preserved, revisions restart at
-// the new epoch's baseline, journal/tombstones/receipts are cleared and
-// every binding returns to pending_initial (doc 14 §12).
-func (s *BackupStore) ReplaceBaseline(ctx context.Context, spaceID string, newEpoch int64, slots []backup.SlotDTO, nodes []backup.NodeDTO) error {
+// snapshot content: canonical UUIDs are preserved, the space returns to
+// revision 0 and so do every node field revision, journal/tombstones/receipts
+// are cleared and every binding returns to pending_initial (doc 14 §12). The
+// new epoch is allocated here, inside the write transaction, so it cannot
+// clobber a concurrent bump.
+func (s *BackupStore) ReplaceBaseline(ctx context.Context, spaceID string, slots []backup.SlotDTO, nodes []backup.NodeDTO) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
+
+	var currentEpoch int64
+	err = tx.QueryRowContext(ctx, `SELECT epoch FROM sync_spaces WHERE id = ?`, spaceID).Scan(&currentEpoch)
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("backup: %w", canonical.ErrSpaceNotFound)
+	} else if err != nil {
+		return 0, fmt.Errorf("backup: read epoch: %w", err)
+	}
+	newEpoch := currentEpoch + 1
+	res, err := tx.ExecContext(ctx, `
+		UPDATE sync_spaces SET epoch = ?, current_revision = 0, journal_floor_revision = 0, updated_at = ?
+		WHERE id = ? AND epoch = ?`,
+		newEpoch, formatTime(time.Now().UTC()), spaceID, currentEpoch)
+	if err != nil {
+		return 0, fmt.Errorf("backup: bump epoch: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		// Somebody moved the space between the read and the write: the caller
+		// must re-read rather than publish a stale baseline.
+		return 0, fmt.Errorf("backup: epoch changed while restoring %s", spaceID)
+	}
 
 	// Leaf-first wipe of the whole tree: the nodes FK is RESTRICT, so
 	// parents may only disappear after their children.
@@ -108,7 +132,7 @@ func (s *BackupStore) ReplaceBaseline(ctx context.Context, spaceID string, newEp
 				(SELECT parent_id FROM nodes WHERE space_id = ? AND parent_id IS NOT NULL)`,
 			spaceID, spaceID)
 		if err != nil {
-			return fmt.Errorf("backup: clear nodes: %w", err)
+			return 0, fmt.Errorf("backup: clear nodes: %w", err)
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
@@ -116,7 +140,7 @@ func (s *BackupStore) ReplaceBaseline(ctx context.Context, spaceID string, newEp
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM root_slots WHERE space_id = ?`, spaceID); err != nil {
-		return fmt.Errorf("backup: clear root slots: %w", err)
+		return 0, fmt.Errorf("backup: clear root slots: %w", err)
 	}
 	// Sync history of old epochs no longer participates in correctness.
 	for _, stmt := range []string{
@@ -126,7 +150,7 @@ func (s *BackupStore) ReplaceBaseline(ctx context.Context, spaceID string, newEp
 			(SELECT id FROM device_space_bindings WHERE space_id = ?)`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, spaceID); err != nil {
-			return fmt.Errorf("backup: clear history: %w", err)
+			return 0, fmt.Errorf("backup: clear history: %w", err)
 		}
 	}
 
@@ -136,10 +160,13 @@ func (s *BackupStore) ReplaceBaseline(ctx context.Context, spaceID string, newEp
 			INSERT INTO root_slots (space_id, key, display_name, position, created_at)
 			VALUES (?, ?, ?, ?, ?)`,
 			spaceID, slot.Key, slot.DisplayName, slot.Position, formatTime(createdAt)); err != nil {
-			return fmt.Errorf("backup: insert root slot: %w", err)
+			return 0, fmt.Errorf("backup: insert root slot: %w", err)
 		}
 	}
 
+	// nodes arrive parent-first (backup.Service orders them): parent_id is an
+	// immediate FK, so a child inserted before its folder would abort the
+	// whole restore.
 	for _, n := range nodes {
 		url := any(nil)
 		if n.URL != nil {
@@ -155,27 +182,27 @@ func (s *BackupStore) ReplaceBaseline(ctx context.Context, spaceID string, newEp
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO nodes (space_id, id, type, title, url, parent_id, root_key, position,
 				created_revision, title_revision, url_revision, structure_revision, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?)`,
 			spaceID, n.ID, n.Type, n.Title, url, parentID, rootKey, n.Position, n.CreatedAt, n.UpdatedAt); err != nil {
-			return fmt.Errorf("backup: insert node: %w", err)
+			return 0, fmt.Errorf("backup: insert node: %w", err)
 		}
 	}
 
-	// Epoch bump and revision baseline.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE sync_spaces SET epoch = ?, current_revision = 0, journal_floor_revision = 0, updated_at = ?
-		WHERE id = ?`, newEpoch, formatTime(time.Now().UTC()), spaceID); err != nil {
-		return fmt.Errorf("backup: bump epoch: %w", err)
-	}
-	// Every binding resyncs against the new baseline.
+	// Every binding resyncs against the new baseline. The space is back at
+	// revision 0, and so are the node field revisions, which is what lets a
+	// resynced device's first operation (base_revision 0) apply instead of
+	// looking like a concurrent update.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE device_space_bindings
 		SET epoch = ?, applied_revision = 0, received_revision = 0, state = 'pending_initial', updated_at = ?
 		WHERE space_id = ?`, newEpoch, formatTime(time.Now().UTC()), spaceID); err != nil {
-		return fmt.Errorf("backup: reset bindings: %w", err)
+		return 0, fmt.Errorf("backup: reset bindings: %w", err)
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return newEpoch, nil
 }
 
 func boolInt(b bool) int {
