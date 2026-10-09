@@ -65,6 +65,9 @@
 13. old-epoch Pending 不得原样 replay。
 14. Full/Initial/Recovery Verify 成功后才进入 ACTIVE。
 15. Server committed reconciliation 不因 Browser apply failure 回滚 Server。
+16. Operation 的 epoch / floor / client_seq 判定读取自它写入的那个事务；事务外的读取只能提前拒绝，不能放行写入。
+17. `max_client_seq` 与 Receipt 同一事务消费；水位写回不携带它。
+18. 一个回包的 head、floor 与 Change 页，以及 Snapshot 的 revision 标签与树，各自来自同一个读快照。
 
 ## C. Domain Invariants
 

@@ -257,6 +257,8 @@ UNIQUE(device_id,space_id)
 
 Browser mount IDs 不进入 Server Schema。
 
+Watermarks 由两条不同的路径写入，各自只碰自己那半：`max_client_seq` 在处理 Operation 的写事务里随 Receipt 推进；`applied_revision` / `received_revision` / `last_sync_at` 在一轮结束时按本轮服务的 epoch 写回，且只前进不倒退（04 §15）。
+
 ### `client_operation_receipts`
 
 ```text

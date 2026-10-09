@@ -11,17 +11,23 @@ import (
 )
 
 // fakeSyncStore implements the sync Store contract. The /sync validation
-// paths under test all fail before BeginTx, so the transactional methods
-// only guard against unexpected use.
+// paths under test all fail before any transaction is opened, so the
+// transactional methods only guard against unexpected use — except the read
+// transaction's change page, which tests use to prove a round got past
+// validation.
 type fakeSyncStore struct {
-	binding device.Binding
-	bindErr error
-	space   canonical.SyncSpace
+	binding  device.Binding
+	bindErr  error
+	space    canonical.SyncSpace
 	spaceErr error
 }
 
 func (f *fakeSyncStore) BeginTx(context.Context) (Tx, error) {
 	return nil, errors.New("fakeSyncStore: BeginTx must not be reached in validation tests")
+}
+
+func (f *fakeSyncStore) BeginReadTx(context.Context) (ReadTx, error) {
+	return fakeReadTx{store: f}, nil
 }
 
 func (f *fakeSyncStore) LoadBinding(context.Context, canonical.DeviceID, canonical.SpaceID) (device.Binding, error) {
@@ -32,17 +38,30 @@ func (f *fakeSyncStore) LoadSpace(context.Context, canonical.SpaceID) (canonical
 	return f.space, f.spaceErr
 }
 
-func (f *fakeSyncStore) LoadJournalChanges(context.Context, canonical.SpaceID, int64, int64, int) ([]JournalChange, error) {
-	return nil, errors.New("fakeSyncStore: LoadJournalChanges must not be reached")
-}
-
-func (f *fakeSyncStore) LoadSnapshotNodes(context.Context, canonical.SpaceID) ([]canonical.Node, error) {
-	return nil, errors.New("fakeSyncStore: LoadSnapshotNodes must not be reached")
-}
-
 func (f *fakeSyncStore) UpdateBindingSync(context.Context, string, int64, int64, int64, time.Time) error {
 	return errors.New("fakeSyncStore: UpdateBindingSync must not be reached")
 }
+
+// fakeReadTx serves the read snapshot out of the same fixed state.
+type fakeReadTx struct{ store *fakeSyncStore }
+
+func (r fakeReadTx) LoadBinding(_ context.Context, _ canonical.DeviceID, _ canonical.SpaceID) (device.Binding, error) {
+	return r.store.binding, r.store.bindErr
+}
+
+func (r fakeReadTx) LoadSpace(context.Context, canonical.SpaceID) (canonical.SyncSpace, error) {
+	return r.store.space, r.store.spaceErr
+}
+
+func (r fakeReadTx) LoadJournalChanges(context.Context, canonical.SpaceID, int64, int64, int) ([]JournalChange, error) {
+	return nil, errors.New("fakeSyncStore: LoadJournalChanges must not be reached")
+}
+
+func (r fakeReadTx) LoadSnapshotNodes(context.Context, canonical.SpaceID) ([]canonical.Node, error) {
+	return nil, errors.New("fakeSyncStore: LoadSnapshotNodes must not be reached")
+}
+
+func (r fakeReadTx) Rollback(context.Context) error { return nil }
 
 func baseSpace() canonical.SyncSpace {
 	return canonical.SyncSpace{

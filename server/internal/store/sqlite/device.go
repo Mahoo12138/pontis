@@ -216,19 +216,22 @@ func (s *DeviceStore) InsertBinding(ctx context.Context, b device.Binding) error
 	return err
 }
 
-// GetBinding loads the binding of a device for a space.
-func (s *DeviceStore) GetBinding(ctx context.Context, deviceID string, space canonical.SpaceID) (device.Binding, error) {
+// bindingColumns is the projection every binding read uses; scanBinding
+// turns a row of it into a device.Binding. Other stores (sync, reconcile)
+// read a binding inside their own transaction, so the pair lives here
+// rather than on DeviceStore.
+const bindingColumns = `
+	SELECT id, device_id, space_id, state, epoch, applied_revision, received_revision,
+	       max_client_seq, initialized_at, last_sync_at, created_at, updated_at
+	FROM device_space_bindings WHERE `
+
+func scanBinding(row interface{ Scan(dest ...any) error }) (device.Binding, error) {
 	var b device.Binding
 	var state string
 	var initialized, lastSync sql.NullString
 	var createdAt, updatedAt string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, device_id, space_id, state, epoch, applied_revision, received_revision,
-		       max_client_seq, initialized_at, last_sync_at, created_at, updated_at
-		FROM device_space_bindings WHERE device_id = ? AND space_id = ?`,
-		deviceID, string(space)).
-		Scan(&b.ID, &b.DeviceID, &b.SpaceID, &state, &b.Epoch, &b.AppliedRevision, &b.ReceivedRevision,
-			&b.MaxClientSeq, &initialized, &lastSync, &createdAt, &updatedAt)
+	err := row.Scan(&b.ID, &b.DeviceID, &b.SpaceID, &state, &b.Epoch, &b.AppliedRevision, &b.ReceivedRevision,
+		&b.MaxClientSeq, &initialized, &lastSync, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return device.Binding{}, device.ErrBindingNotFound
 	}
@@ -247,34 +250,15 @@ func (s *DeviceStore) GetBinding(ctx context.Context, deviceID string, space can
 	return b, nil
 }
 
+// GetBinding loads the binding of a device for a space.
+func (s *DeviceStore) GetBinding(ctx context.Context, deviceID string, space canonical.SpaceID) (device.Binding, error) {
+	return scanBinding(s.db.QueryRowContext(ctx, bindingColumns+"device_id = ? AND space_id = ?",
+		deviceID, string(space)))
+}
+
 // GetBindingByID loads a binding by its id.
 func (s *DeviceStore) GetBindingByID(ctx context.Context, bindingID string) (device.Binding, error) {
-	var b device.Binding
-	var state string
-	var initialized, lastSync sql.NullString
-	var createdAt, updatedAt string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, device_id, space_id, state, epoch, applied_revision, received_revision,
-		       max_client_seq, initialized_at, last_sync_at, created_at, updated_at
-		FROM device_space_bindings WHERE id = ?`, bindingID).
-		Scan(&b.ID, &b.DeviceID, &b.SpaceID, &state, &b.Epoch, &b.AppliedRevision, &b.ReceivedRevision,
-			&b.MaxClientSeq, &initialized, &lastSync, &createdAt, &updatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return device.Binding{}, device.ErrBindingNotFound
-	}
-	if err != nil {
-		return device.Binding{}, err
-	}
-	b.State = device.BindingState(state)
-	if initialized.Valid {
-		b.InitializedAt, _ = time.Parse(time.RFC3339Nano, initialized.String)
-	}
-	if lastSync.Valid {
-		b.LastSyncAt, _ = time.Parse(time.RFC3339Nano, lastSync.String)
-	}
-	b.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-	b.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
-	return b, nil
+	return scanBinding(s.db.QueryRowContext(ctx, bindingColumns+"id = ?", bindingID))
 }
 
 // ListBindingsByDevice returns all bindings of a device.
@@ -346,12 +330,30 @@ func (s *DeviceStore) ActivateBinding(ctx context.Context, bindingID string, at 
 	return nil
 }
 
-// UpdateBindingSync advances the binding watermarks.
-func (s *DeviceStore) UpdateBindingSync(ctx context.Context, bindingID string, appliedRevision, receivedRevision, maxClientSeq int64, lastSyncAt time.Time) error {
+// UpdateBindingSync advances the binding watermarks of one epoch.
+//
+// The write is guarded on purpose: a binding that has been deactivated, whose
+// epoch moved on (a restore replaces the world the client reported against), or
+// that already holds newer numbers must keep them. max_client_seq is not
+// written here at all — an operation spends its sequence in the same
+// transaction that records its receipt.
+func (s *DeviceStore) UpdateBindingSync(ctx context.Context, bindingID string, epoch, appliedRevision, receivedRevision int64, lastSyncAt time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE device_space_bindings
-		SET applied_revision = ?, received_revision = ?, max_client_seq = ?, last_sync_at = ?, updated_at = ?
-		WHERE id = ?`,
-		appliedRevision, receivedRevision, maxClientSeq, formatTime(lastSyncAt), formatTime(lastSyncAt), bindingID)
+		SET applied_revision = ?, received_revision = ?, last_sync_at = ?, updated_at = ?
+		WHERE id = ? AND state = 'active' AND epoch = ?
+		  AND applied_revision <= ? AND received_revision <= ?`,
+		appliedRevision, receivedRevision, formatTime(lastSyncAt), formatTime(lastSyncAt),
+		bindingID, epoch, appliedRevision, receivedRevision)
+	return err
+}
+
+// advanceBindingMaxSeq raises the binding's sequence watermark to clientSeq
+// inside the transaction that processed the operation which carried it.
+func advanceBindingMaxSeq(ctx context.Context, tx *sql.Tx, bindingID string, clientSeq int64) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE device_space_bindings SET max_client_seq = ?, updated_at = ?
+		WHERE id = ? AND max_client_seq < ?`,
+		clientSeq, formatTime(time.Now().UTC()), bindingID, clientSeq)
 	return err
 }

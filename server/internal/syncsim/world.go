@@ -86,6 +86,14 @@ func (w *World) wireServices() {
 	w.Reconcile = reconcile.NewService(sqlite.NewReconcileStore(w.db))
 }
 
+// SyncWith rebuilds the world's sync service over another store and returns
+// it. A test uses it to wrap the real store in a boundary probe that lets
+// another writer commit at a chosen point of one round.
+func (w *World) SyncWith(store sync.Store) *sync.Service {
+	w.Sync = sync.NewService(store, w.changesets)
+	return w.Sync
+}
+
 // AddBrowser registers a device, binds it to the world's space and
 // returns the fake replica. The browser starts with one empty root
 // container mapped to the space's "main" root slot.

@@ -319,6 +319,27 @@ OPERATION_HISTORY_EXPIRED
 BINDING_NOT_ACTIVE
 RECONCILIATION_IN_PROGRESS
 SYNC_PROTOCOL_UNSUPPORTED
+OP_ID_REUSED
+CLIENT_SEQ_REGRESSED
+INVALID_WATERMARK
 ```
 
 HTTP 状态只作为 transport category；Client 逻辑主要依赖稳定 `error.code`。
+
+## 15. 一轮请求的读写边界
+
+Client 交出的是它对某个世界的三个数字；Server 的每个判定都必须针对它实际写入的那个世界。请求到达时的检查与真正落库之间，Restore、Journal GC、另一个 Device 的写入都可能已经提交。
+
+### Operation 判定
+
+- 进入写事务后重新读取 Space Head（epoch / current_revision / journal_floor_revision）与 Binding（state / epoch / max_client_seq），`EPOCH_MISMATCH`、`BINDING_NOT_ACTIVE`、`CLIENT_SEQ_REGRESSED`、`OPERATION_HISTORY_EXPIRED` 一律以事务内的读数判定。
+- 事务外的读取只用于提前拒绝明显错误的请求，不得放行写入。
+- Canonical Mutation、Journal、Tombstone、Receipt、`client_seq` 水位在同一事务提交。Batch 是逐 Operation 原子：一条 Operation 失败不回滚前面已提交的 Operation，Client 依靠 Receipt 重放收敛。
+
+### Watermark 写回
+
+`applied_revision` / `received_revision` 只在本轮服务的那个 epoch 下、且只允许前进不允许倒退时写入；Binding 已失活或 epoch 已换代时保持旧数字。`max_client_seq` 不由这一步携带，它随 Receipt 一起提交，否则一次水位写失败会让已提交的 seq 被后续 Operation 复用。
+
+### 回包读取
+
+`server_revision`、`journal_floor_revision` 与本轮返回的 Change 页取自同一个读快照，并且 floor 在快照内重新判定：一页从 `from_revision` 之后开始却跳过了已被 GC 的区间，比直接报 `HISTORY_EXPIRED` 更糟。Snapshot 的 revision 标签与整棵树同理，必须来自同一个读事务（见 06 §8）。

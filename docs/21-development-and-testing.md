@@ -182,6 +182,10 @@ out-of-order client arrival
 - Browser API success before checkpoint；
 - change applied before watermark advance。
 
+### 并发交错
+
+一次请求的"检查"与它的"落库"之间，另一个写入者可以提交。syncsim 用同一个 SQLite 文件的第二个连接，在一次 round 的指定读取点之后提交这些写入：Restore 换 epoch、Journal GC 抬 floor、另一个 Device 的 CREATE 落在 Snapshot 的两次读取之间、round 结束时的水位写失败。因此每条边界测试断言的是实际发生过的交错，而不是理论上可能的交错。
+
 ## 8. Protocol Invariants
 
 最终 bring all replicas online 并 drain queues 后：

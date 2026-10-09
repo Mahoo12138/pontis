@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"pontis/internal/canonical"
@@ -31,19 +32,37 @@ func (s *SyncStore) BeginTx(ctx context.Context) (sync.Tx, error) {
 	return &syncTxImpl{canonTx: &canonTx{tx: sqlTx}}, nil
 }
 
-// LoadBinding loads the device-space binding.
-func (s *SyncStore) LoadBinding(ctx context.Context, deviceID canonical.DeviceID, space canonical.SpaceID) (device.Binding, error) {
-	return s.devices.GetBinding(ctx, string(deviceID), space)
+// BeginReadTx starts one consistent read snapshot. Every read a response
+// labels with a revision happens inside it: two statements of the same
+// connection can still straddle another request's commit, and the pair they
+// then describe never existed at any instant (doc 04 §15, doc 06 §8).
+func (s *SyncStore) BeginReadTx(ctx context.Context) (sync.ReadTx, error) {
+	sqlTx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin sync read tx: %w", err)
+	}
+	return &syncReadTx{tx: sqlTx}, nil
 }
 
-// LoadSpace loads a sync space.
-func (s *SyncStore) LoadSpace(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error) {
-	return scanSpace(s.db.QueryRowContext(ctx, spaceColumns, string(id)))
+// syncReadTx is the read-only half of the sync store.
+type syncReadTx struct {
+	tx *sql.Tx
+}
+
+func (r *syncReadTx) Rollback(ctx context.Context) error { return r.tx.Rollback() }
+
+func (r *syncReadTx) LoadBinding(ctx context.Context, deviceID canonical.DeviceID, space canonical.SpaceID) (device.Binding, error) {
+	return scanBinding(r.tx.QueryRowContext(ctx, bindingColumns+"device_id = ? AND space_id = ?",
+		string(deviceID), string(space)))
+}
+
+func (r *syncReadTx) LoadSpace(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error) {
+	return scanSpace(r.tx.QueryRowContext(ctx, spaceColumns, string(id)))
 }
 
 // LoadJournalChanges returns journal rows of one epoch ordered by revision.
-func (s *SyncStore) LoadJournalChanges(ctx context.Context, space canonical.SpaceID, epoch, fromRevision int64, limit int) ([]sync.JournalChange, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func (r *syncReadTx) LoadJournalChanges(ctx context.Context, space canonical.SpaceID, epoch, fromRevision int64, limit int) ([]sync.JournalChange, error) {
+	rows, err := r.tx.QueryContext(ctx, `
 		SELECT revision, change_type, COALESCE(node_id, ''), payload
 		FROM journal
 		WHERE space_id = ? AND epoch = ? AND revision >= ?
@@ -66,15 +85,10 @@ func (s *SyncStore) LoadJournalChanges(ctx context.Context, space canonical.Spac
 	return changes, rows.Err()
 }
 
-// UpdateBindingSync persists the binding watermarks.
-func (s *SyncStore) UpdateBindingSync(ctx context.Context, bindingID string, appliedRevision, receivedRevision, maxClientSeq int64, lastSyncAt time.Time) error {
-	return s.devices.UpdateBindingSync(ctx, bindingID, appliedRevision, receivedRevision, maxClientSeq, lastSyncAt)
-}
-
 // LoadSnapshotNodes returns all canonical nodes of a space, ordered
 // deterministically for a client snapshot rebuild.
-func (s *SyncStore) LoadSnapshotNodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error) {
-	rows, err := s.db.QueryContext(ctx, nodeColumns+`
+func (r *syncReadTx) LoadSnapshotNodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error) {
+	rows, err := r.tx.QueryContext(ctx, nodeColumns+`
 		FROM nodes WHERE space_id = ? ORDER BY root_key, position, id`, string(space))
 	if err != nil {
 		return nil, err
@@ -92,9 +106,37 @@ func (s *SyncStore) LoadSnapshotNodes(ctx context.Context, space canonical.Space
 	return nodes, rows.Err()
 }
 
+// LoadBinding loads the device-space binding.
+func (s *SyncStore) LoadBinding(ctx context.Context, deviceID canonical.DeviceID, space canonical.SpaceID) (device.Binding, error) {
+	return s.devices.GetBinding(ctx, string(deviceID), space)
+}
+
+// LoadSpace loads a sync space.
+func (s *SyncStore) LoadSpace(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error) {
+	return scanSpace(s.db.QueryRowContext(ctx, spaceColumns, string(id)))
+}
+
+// UpdateBindingSync persists the binding watermarks of one epoch.
+func (s *SyncStore) UpdateBindingSync(ctx context.Context, bindingID string, epoch, appliedRevision, receivedRevision int64, lastSyncAt time.Time) error {
+	return s.devices.UpdateBindingSync(ctx, bindingID, epoch, appliedRevision, receivedRevision, lastSyncAt)
+}
+
 // syncTxImpl implements sync.Tx by extending the canonical transaction.
 type syncTxImpl struct {
 	*canonTx
+}
+
+// LoadBinding reads the binding inside this transaction, so the round is
+// served against the state its own writes see.
+func (t *syncTxImpl) LoadBinding(ctx context.Context, deviceID canonical.DeviceID, space canonical.SpaceID) (device.Binding, error) {
+	return scanBinding(t.canonTx.tx.QueryRowContext(ctx, bindingColumns+"device_id = ? AND space_id = ?",
+		string(deviceID), string(space)))
+}
+
+// AdvanceClientSeq raises the binding's sequence watermark. A receipt and
+// the sequence it consumed commit together, or neither does.
+func (t *syncTxImpl) AdvanceClientSeq(ctx context.Context, bindingID string, clientSeq int64) error {
+	return advanceBindingMaxSeq(ctx, t.canonTx.tx, bindingID, clientSeq)
 }
 
 // LoadTombstone reads the deletion record of a node, if any.

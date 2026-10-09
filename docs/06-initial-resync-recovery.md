@@ -168,6 +168,8 @@ received_revision = snapshot_revision
 
 再正常 `/sync` 拉取 snapshot 之后的新 changes。
 
+标签与内容必须同生同死：Binding、Space Head、roots、nodes 在同一个读事务里取（04 §15）。Client 会把三个 Watermark 直接设成 `snapshot_revision`，如果树里混进了那次读取之后才提交的 Node，它就是这份副本永远不会收到的一条 Change。
+
 ## 9. Recovery Snapshot
 
 Recovery 开始前保存：

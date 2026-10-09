@@ -54,10 +54,6 @@ type Store interface {
 	// ActivateBinding moves a pending binding to active and stamps
 	// initialized_at.
 	ActivateBinding(ctx context.Context, bindingID string, at time.Time) error
-
-	// UpdateBindingSync advances the binding watermarks after a successful
-	// sync round.
-	UpdateBindingSync(ctx context.Context, bindingID string, appliedRevision, receivedRevision, maxClientSeq int64, lastSyncAt time.Time) error
 }
 
 // GetBindingByID loads a binding by its id.

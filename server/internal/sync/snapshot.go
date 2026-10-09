@@ -37,13 +37,24 @@ type SnapshotResponse struct {
 // it never mutates journal, binding state or receipts. The snapshot is
 // not scoped per binding mode; partial-mode clients filter to their
 // mount root client-side (root keys travel in the parent refs).
+//
+// Binding, head and tree are read in one transaction: a client that sets
+// its watermarks to snapshot_revision believes it holds exactly the tree
+// labelled with that revision, so a node that arrived between the head read
+// and the tree read would be a change the replica never sees.
 func (s *Service) Snapshot(ctx context.Context, deviceID canonical.DeviceID, spaceID canonical.SpaceID) (SnapshotResponse, error) {
-	binding, err := s.store.LoadBinding(ctx, deviceID, spaceID)
+	read, err := s.store.BeginReadTx(ctx)
+	if err != nil {
+		return SnapshotResponse{}, err
+	}
+	defer func() { _ = read.Rollback(ctx) }()
+
+	binding, err := read.LoadBinding(ctx, deviceID, spaceID)
 	if err != nil || binding.State != device.StateActive {
 		return SnapshotResponse{}, protocolErr(CodeBindingNotActive, "binding is not active")
 	}
 
-	space, err := s.store.LoadSpace(ctx, spaceID)
+	space, err := read.LoadSpace(ctx, spaceID)
 	if err != nil {
 		return SnapshotResponse{}, protocolErr(CodeBindingNotActive, "sync space unavailable")
 	}
@@ -51,7 +62,7 @@ func (s *Service) Snapshot(ctx context.Context, deviceID canonical.DeviceID, spa
 		return SnapshotResponse{}, protocolErr(CodeEpochMismatch, "canonical epoch changed")
 	}
 
-	nodes, err := s.store.LoadSnapshotNodes(ctx, spaceID)
+	nodes, err := read.LoadSnapshotNodes(ctx, spaceID)
 	if err != nil {
 		return SnapshotResponse{}, err
 	}
