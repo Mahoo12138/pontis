@@ -17,9 +17,13 @@ type runLinkCheckResponse struct {
 }
 
 func (s *Server) handleRunLinkCheck(w http.ResponseWriter, r *http.Request) {
+	u, _ := currentUser(r)
 	spaceID := canonical.SpaceID(chi.URLParam(r, "spaceID"))
-	jobID, total, err := s.Organizer.RunLinkCheck(r.Context(), spaceID)
+	// The request only enqueues: the run is executed by the job queue, and
+	// its progress is read back from the persisted rows.
+	jobID, total, err := s.Organizer.StartLinkCheck(r.Context(), s.Jobs, canonical.UserID(u.ID), spaceID)
 	if err != nil {
+		s.Logger.Error("link check enqueue failed", "err", err, "space", string(spaceID))
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}
@@ -28,7 +32,11 @@ func (s *Server) handleRunLinkCheck(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLinkCheckResults(w http.ResponseWriter, r *http.Request) {
 	spaceID := canonical.SpaceID(chi.URLParam(r, "spaceID"))
-	run, ok := s.Organizer.LinkResults(r.Context(), spaceID)
+	run, ok, err := s.Organizer.LinkResults(r.Context(), spaceID)
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]any{"job_id": "", "total": 0, "done": 0, "results": []organizer.LinkResult{}})
 		return

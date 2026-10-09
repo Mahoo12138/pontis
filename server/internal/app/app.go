@@ -81,7 +81,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 		// will connect to on behalf of any user's bookmark.
 		logger.Info("link check may reach operator-approved ranges", "count", len(allow))
 	}
-	organizerSvc := organizer.NewService(libraryStore, organizer.Outbound{Allow: allow})
+	organizerSvc := organizer.NewService(libraryStore, sqlite.NewLinkCheckStore(db),
+		organizer.Outbound{Allow: allow})
 	jobSvc, err := buildJobService(db, backupSvc, organizerSvc, accountStore, libraryStore)
 	if err != nil {
 		return err

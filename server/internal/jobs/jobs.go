@@ -352,23 +352,29 @@ func (s *Service) run(ctx context.Context, workerID string, job Job) {
 	}
 	err := handler(runCtx, job, report)
 
+	// The terminal write must survive the reason the handler stopped: if the
+	// service is shutting down, its context is already cancelled, and losing
+	// this write would leave the row 'running' with a dropped attempt count
+	// instead of a scheduled retry.
+	settleCtx := context.WithoutCancel(ctx)
+
 	// Re-read cancel flag: handlers may finish despite a cancel request.
 	latest, gerr := s.store.Get(context.Background(), job.ID)
 	if gerr == nil && latest.CancelRequested {
-		_ = s.store.Finish(context.Background(), job.ID, StatusCancelled, "", time.Now().UTC())
+		_ = s.store.Finish(settleCtx, job.ID, StatusCancelled, "", time.Now().UTC())
 		return
 	}
 
 	now := time.Now().UTC()
 	switch {
 	case err == nil:
-		_ = s.store.Finish(ctx, job.ID, StatusSucceeded, "", now)
+		_ = s.store.Finish(settleCtx, job.ID, StatusSucceeded, "", now)
 	case errors.Is(err, FatalError):
-		_ = s.store.Finish(ctx, job.ID, StatusFailed, err.Error(), now)
+		_ = s.store.Finish(settleCtx, job.ID, StatusFailed, err.Error(), now)
 	default:
 		attempt := job.Attempt + 1
 		if attempt >= job.MaxAttempts {
-			_ = s.store.Finish(ctx, job.ID, StatusFailed, err.Error(), now)
+			_ = s.store.Finish(settleCtx, job.ID, StatusFailed, err.Error(), now)
 			return
 		}
 		// Bounded exponential backoff, capped at 15 minutes.
@@ -381,10 +387,10 @@ func (s *Service) run(ctx context.Context, workerID string, job Job) {
 			}
 		}
 		if _, retryable := err.(Retryable); !retryable && !isRetryableKind(err) {
-			_ = s.store.Finish(ctx, job.ID, StatusFailed, err.Error(), now)
+			_ = s.store.Finish(settleCtx, job.ID, StatusFailed, err.Error(), now)
 			return
 		}
-		_ = s.store.ScheduleRetry(ctx, job.ID, attempt, now.Add(backoff), err.Error())
+		_ = s.store.ScheduleRetry(settleCtx, job.ID, attempt, now.Add(backoff), err.Error())
 	}
 	_ = workerID
 }

@@ -21,7 +21,7 @@ Scope：
 - RootSlot；
 - Folder subtree。
 
-异步 LinkCheckJob：
+异步 LinkCheckJob 就是队列里的一个 `organizer.link_check` Job，organizer 不另设第二套任务系统：
 
 ```text
 enumerate bookmarks
@@ -77,6 +77,15 @@ checked_at
 `checked_url` 很重要：当前 node.url 改变后，旧 scan 自动判定 stale。
 
 这些是 Derived Data，不进入 Bookmark Backup。
+
+实际落在两张表里（migration 000019）：
+
+- `link_check_runs(job_id, space_id, created_at, finished_at)`：一次运行一行，`job_id` 外键到 `jobs(id) ON DELETE CASCADE`，所以 Job 摘要被保留策略清掉时结果一起消失。
+- `link_check_items(job_id, node_id, …, status)`：`(job_id, node_id)` 主键，`status` 只有 `pending`/`checked`。种子写入来自运行开始时的书签快照，重复入队不会重复计数；只有 `checked` 的行才会被读成结果。
+
+运行的 `total` / `done` 都从 items 数出来，不另存一份，因此不会出现进度分母和实际条目不一致。
+
+因此取消、进程重启或 Worker 被抢占都不会丢掉已检查出来的结果：同一个 Job 带 `retry_wait` 回来，只处理仍然 `pending` 的条目。
 
 ## 4. Duplicate Detection
 

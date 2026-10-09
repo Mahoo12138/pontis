@@ -372,6 +372,8 @@ node_id + checked_url + status
 
 Crash 后继续 `status=pending`，不从头扫描。
 
+实现方式（migration 000019）：Link Check 结果写 `link_check_runs` / `link_check_items`，Worker 被抢占、服务停机或管理员取消时 handler 返回 `Retryable`，同一个 Job 带 `retry_wait` 回到队列，只补没检查完的条目；已经写下的结果不会因为在取消的瞬间返回错误而丢失（结果写入用不带取消的 context）。因此 organizer 内部不再有第二套任务表，重启后页面仍能读到上次运行的结果。
+
 ## 17. Email
 
 Password Reset / Verify / Invite 等邮件走 Job Queue，不让 HTTP request 同步等待 SMTP。

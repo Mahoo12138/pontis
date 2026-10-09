@@ -566,6 +566,8 @@ diagnostic_events
 security_audit_log
 ```
 
+Link Check 已经按这个方向落地（migration 000019），实际表名是 `link_check_runs` + `link_check_items`：一次运行一行、每条书签一行，`(job_id, node_id)` 主键，`status` 只有 `pending`/`checked`，`job_id` 外键到 `jobs(id) ON DELETE CASCADE`，所以 Job 摘要被保留策略清理时结果一起消失。断点续跑靠的就是这张表，而不是进程内的 map。
+
 不要为了 initial schema“看起来完整”提前冻结 Organizer derived tables。
 
 ## 13. SQLite Pragmas

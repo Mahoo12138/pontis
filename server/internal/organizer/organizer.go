@@ -1,12 +1,15 @@
 // Package organizer implements detection-only tree hygiene: duplicate
-// bookmark detection (exact + conservative normalization) and asynchronous
-// link health checks. It never mutates the canonical tree (doc 12 §1):
-// detect/propose, the user selects, the domain mutates.
+// bookmark detection (exact + conservative normalization) and link health
+// checks. A link check is a queue job like any other: its work and its
+// results live in the database, so the organizer keeps no task system of its
+// own. It never mutates the canonical tree (doc 12 §1): detect/propose, the
+// user selects, the domain mutates.
 package organizer
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -16,9 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"pontis/internal/canonical"
+	"pontis/internal/jobs"
 )
 
 // TreeSource reads the canonical tree.
@@ -77,12 +79,46 @@ type DuplicateItem struct {
 	Path   string `json:"path"`
 }
 
+// LinkItem is one bookmark waiting to be checked.
+type LinkItem struct {
+	NodeID string
+	Title  string
+	URL    string
+}
+
+// RunStore is where a run's work and results live. It replaces the in-memory
+// registry the organizer used to keep: the rows are the checkpoint, so a
+// restarted worker resumes with the items that were never checked, and two
+// runs of one space cannot see each other's results.
+type RunStore interface {
+	// SeedRun records the bookmark snapshot for one job. Idempotent: a
+	// replay adds nothing and leaves already-checked items alone.
+	SeedRun(ctx context.Context, jobID string, space canonical.SpaceID, items []LinkItem, at time.Time) error
+	// PendingItems returns the items of one job that have no result yet.
+	PendingItems(ctx context.Context, jobID string) ([]LinkItem, error)
+	// CountItems reports the snapshot size and how much of it is done.
+	CountItems(ctx context.Context, jobID string) (total int, checked int, err error)
+	// RecordResult stores one outcome and marks the item checked.
+	RecordResult(ctx context.Context, jobID, nodeID string, res LinkResult) error
+	// FinishRun stamps the run's completion time.
+	FinishRun(ctx context.Context, jobID string, at time.Time) error
+	// LatestRun returns the newest run of a space, finished or not.
+	LatestRun(ctx context.Context, space canonical.SpaceID) (LinkRun, bool, error)
+}
+
+// Queue is the job queue a run is submitted to. It is a parameter rather
+// than service state because the queue and the organizer refer to each
+// other: the queue runs the organizer's handler, and the organizer hands it
+// the jobs. The organizer runs nothing of its own — enqueuing is the only
+// way work begins.
+type Queue interface {
+	Enqueue(ctx context.Context, t jobs.Type, owner canonical.UserID, spaceID, payload string) (jobs.Job, error)
+}
+
 // Service implements organizer features.
 type Service struct {
 	trees TreeSource
-
-	mu   sync.Mutex
-	runs map[canonical.SpaceID]*LinkRun
+	runs  RunStore
 	// checker is injectable for tests; defaults to HTTP.
 	checker LinkChecker
 }
@@ -90,97 +126,156 @@ type Service struct {
 // NewService returns an organizer service using the real HTTP checker under
 // the given outbound policy. The zero policy is the safe one: only
 // publicly routable destinations are checked.
-func NewService(trees TreeSource, outbound Outbound) *Service {
-	return &Service{trees: trees, runs: map[canonical.SpaceID]*LinkRun{}, checker: httpChecker(outbound)}
+func NewService(trees TreeSource, runs RunStore, outbound Outbound) *Service {
+	return &Service{trees: trees, runs: runs, checker: httpChecker(outbound)}
 }
 
 // NewServiceWithChecker returns an organizer service with a custom checker.
-func NewServiceWithChecker(trees TreeSource, checker LinkChecker) *Service {
-	return &Service{trees: trees, runs: map[canonical.SpaceID]*LinkRun{}, checker: checker}
+func NewServiceWithChecker(trees TreeSource, runs RunStore, checker LinkChecker) *Service {
+	return &Service{trees: trees, runs: runs, checker: checker}
 }
 
-// checkConcurrency bounds the fan-out of one run.
-const checkConcurrency = 8
+const (
+	// checkConcurrency bounds the fan-out of one run.
+	checkConcurrency = 8
+	// checkTimeout is one item's request budget.
+	checkTimeout = 8 * time.Second
+)
 
-// RunLinkCheck starts an asynchronous check of every bookmark in the
-// space and returns the job id.
-func (s *Service) RunLinkCheck(ctx context.Context, space canonical.SpaceID) (string, int, error) {
+// StartLinkCheck submits one link check and snapshots the space's bookmarks,
+// so the caller learns how much work it just asked for. Nothing here is
+// executed: the queue runs it.
+func (s *Service) StartLinkCheck(ctx context.Context, queue Queue, user canonical.UserID, space canonical.SpaceID) (string, int, error) {
+	job, err := queue.Enqueue(ctx, jobs.TypeLinkCheck, user, string(space), "")
+	if err != nil {
+		return "", 0, err
+	}
+	items, err := s.bookmarks(ctx, space)
+	if err != nil {
+		return "", 0, err
+	}
+	if err := s.runs.SeedRun(ctx, job.ID, space, items, time.Now().UTC()); err != nil {
+		return "", 0, err
+	}
+	return job.ID, len(items), nil
+}
+
+// bookmarks snapshots the space's checkable URLs.
+func (s *Service) bookmarks(ctx context.Context, space canonical.SpaceID) ([]LinkItem, error) {
 	nodes, err := s.trees.ListNodes(ctx, space)
 	if err != nil {
-		return "", 0, err
+		return nil, err
 	}
-	var bookmarks []canonical.Node
+	var out []LinkItem
 	for _, n := range nodes {
 		if n.Type == canonical.NodeTypeBookmark && n.URL != "" {
-			bookmarks = append(bookmarks, n)
+			out = append(out, LinkItem{NodeID: string(n.ID), Title: n.Title, URL: n.URL})
 		}
 	}
-
-	id, err := uuid.NewV7()
-	if err != nil {
-		return "", 0, err
-	}
-	run := &LinkRun{JobID: id.String(), Total: len(bookmarks)}
-	s.mu.Lock()
-	s.runs[space] = run
-	s.mu.Unlock()
-
-	go s.execute(run, bookmarks)
-	return run.JobID, run.Total, nil
+	return out, nil
 }
 
-func (s *Service) execute(run *LinkRun, bookmarks []canonical.Node) {
-	sem := make(chan struct{}, checkConcurrency)
-	var wg sync.WaitGroup
-	var mu sync.Mutex // protects run.Results ordering append
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+// CheckRun is the job handler for organizer.link_check. It visits the items
+// this job has not checked yet, persisting each result as it lands. Every
+// request it starts inherits the job's context, so a cancelled or reclaimed
+// job stops the requests it made rather than finishing them unseen.
+func (s *Service) CheckRun(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
+	if job.ID == "" || job.SpaceID == "" {
+		return fmt.Errorf("%w: organizer: link check job needs an id and a space", jobs.FatalError)
+	}
+	space := canonical.SpaceID(job.SpaceID)
+	// A schedule-triggered job arrives without a snapshot; take one now.
+	items, err := s.bookmarks(ctx, space)
+	if err != nil {
+		return resumable(ctx, err)
+	}
+	if err := s.runs.SeedRun(ctx, job.ID, space, items, time.Now().UTC()); err != nil {
+		return resumable(ctx, err)
+	}
+	pending, err := s.runs.PendingItems(ctx, job.ID)
+	if err != nil {
+		return resumable(ctx, err)
+	}
+	total, checked, err := s.runs.CountItems(ctx, job.ID)
+	if err != nil {
+		return resumable(ctx, err)
+	}
 
-	for _, b := range bookmarks {
+	results := make(chan LinkResult, len(pending))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, checkConcurrency)
+	for _, it := range pending {
+		if ctx.Err() != nil {
+			break
+		}
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(n canonical.Node) {
+		go func(it LinkItem) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			// Individual checks get a hard budget independent of the
-			// request that spawned the run.
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			checkCtx, cancel := context.WithTimeout(ctx, checkTimeout)
 			defer cancel()
-			out := s.checker(ctx, n.URL)
-			mu.Lock()
-			run.Results = append(run.Results, LinkResult{
-				NodeID:      string(n.ID),
-				Title:       n.Title,
-				CheckedURL:  n.URL,
+			out := s.checker(checkCtx, it.URL)
+			if errors.Is(checkCtx.Err(), context.Canceled) {
+				// The job was cancelled or reclaimed mid-flight. This item
+				// has no answer, and storing an invented one would mark it
+				// checked forever instead of resuming it.
+				return
+			}
+			results <- LinkResult{
+				NodeID:      it.NodeID,
+				Title:       it.Title,
+				CheckedURL:  it.URL,
 				StatusClass: out.StatusClass,
 				HTTPStatus:  out.HTTPStatus,
 				ErrorType:   out.ErrorType,
 				LatencyMS:   out.LatencyMS,
 				FinalURL:    out.FinalURL,
-				CheckedAt:   now,
-			})
-			run.Done = len(run.Results)
-			if run.Done >= run.Total {
-				run.FinishedAt = now
+				CheckedAt:   time.Now().UTC().Format(time.RFC3339Nano),
 			}
-			mu.Unlock()
-		}(b)
+		}(it)
 	}
-	wg.Wait()
+	go func() { wg.Wait(); close(results) }()
+
+	// One writer: the goroutines above share no state with the run, so there
+	// is no second lock for a reader to disagree with.
+	done := checked
+	for res := range results {
+		// Write without the job's context: a cancellation must not throw away
+		// what was already learned, the checkpoint is the point of persisting.
+		if err := s.runs.RecordResult(context.WithoutCancel(ctx), job.ID, res.NodeID, res); err != nil {
+			return err
+		}
+		done++
+		if ctx.Err() == nil {
+			cur, tot := int64(done), int64(total)
+			if err := report("检查链接可达性", &cur, &tot); err != nil {
+				return err
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		// An interrupted run is unfinished work, not a failed one: the items
+		// already checked stay checked and the queue re-runs the same job for
+		// the rest (doc 13 §5).
+		return jobs.Retryable{Err: err}
+	}
+	return s.runs.FinishRun(ctx, job.ID, time.Now().UTC())
+}
+
+// resumable turns a failure caused by an interrupted job into a retry: the
+// same job comes back for the items it did not reach, instead of failing with
+// them still pending.
+func resumable(ctx context.Context, err error) error {
+	if err != nil && ctx.Err() != nil {
+		return jobs.Retryable{Err: err}
+	}
+	return err
 }
 
 // LinkResults returns the latest run for the space, if any.
-func (s *Service) LinkResults(ctx context.Context, space canonical.SpaceID) (LinkRun, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	run, ok := s.runs[space]
-	if !ok {
-		return LinkRun{}, false
-	}
-	// Sorted copy: results arrive out of order.
-	out := LinkRun{JobID: run.JobID, Total: run.Total, Done: run.Done, FinishedAt: run.FinishedAt}
-	out.Results = append([]LinkResult(nil), run.Results...)
-	sort.Slice(out.Results, func(i, j int) bool { return out.Results[i].NodeID < out.Results[j].NodeID })
-	return out, true
+func (s *Service) LinkResults(ctx context.Context, space canonical.SpaceID) (LinkRun, bool, error) {
+	return s.runs.LatestRun(ctx, space)
 }
 
 // DuplicateItem path building needs parent titles; computed per request.
@@ -342,7 +437,6 @@ func normalizeURL(raw string) (key string, reasons []string) {
 // directly, and each redirect hop is validated again.
 func httpChecker(ob Outbound) LinkChecker {
 	const (
-		checkTimeout  = 8 * time.Second
 		maxRedirects  = 5
 		maxResponseKB = 4 << 10
 	)

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -32,6 +33,14 @@ import (
 
 func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	t.Helper()
+	srv, ts, _ := newTestServerWithDB(t)
+	return srv, ts
+}
+
+// newTestServerWithDB also hands back the database, so a test can bring up a
+// second set of services over the same file: that is how a restarted process
+// is simulated (doc 13 §5).
+func newTestServerWithDB(t *testing.T) (*Server, *httptest.Server, *sql.DB) {
 	db, err := sqlite.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -64,7 +73,7 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 		Library:       library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db), changesetSvc),
 		Changesets:    changesetSvc,
 		Tokens:        token.NewService(sqlite.NewTokenStore(db)),
-		Organizer:     organizer.NewService(sqlite.NewLibraryStore(db), organizer.Outbound{}),
+		Organizer:     organizer.NewService(sqlite.NewLibraryStore(db), sqlite.NewLinkCheckStore(db), organizer.Outbound{}),
 		Transfer:      transfer.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db), changesetSvc),
 		Plaza:         plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db), changesetSvc), changesetSvc, sqlite.NewStore(db)),
 		Backups:       backupSvc,
@@ -76,7 +85,16 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	}
 	ts := httptest.NewServer(srv.Router())
 	t.Cleanup(ts.Close)
-	return srv, ts
+
+	// The queue runs link check the way app.go wires it: the organizer's
+	// persisted run under the job's context. Tests that want it executed
+	// start the queue; the rest just see the enqueued job.
+	if err := jobSvc.Register(jobs.TypeLinkCheck, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
+		return srv.Organizer.CheckRun(ctx, job, report)
+	}); err != nil {
+		t.Fatalf("register link check handler: %v", err)
+	}
+	return srv, ts, db
 }
 
 func doJSON(t *testing.T, method, url string, headers map[string]string, body any) (int, map[string]any) {
@@ -125,6 +143,7 @@ func errCode(t *testing.T, body map[string]any) string {
 type flowState struct {
 	ts           *httptest.Server
 	srv          *Server
+	db           *sql.DB
 	sessionToken string
 	spaceID      string
 	deviceToken  string
@@ -133,8 +152,8 @@ type flowState struct {
 
 func bootstrapFlow(t *testing.T) *flowState {
 	t.Helper()
-	srv, ts := newTestServer(t)
-	st := &flowState{ts: ts, srv: srv}
+	srv, ts, db := newTestServerWithDB(t)
+	st := &flowState{ts: ts, srv: srv, db: db}
 
 	// First setup.
 	code, body := doJSON(t, "POST", ts.URL+"/api/v1/auth/setup", nil,
