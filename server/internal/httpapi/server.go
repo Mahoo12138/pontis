@@ -222,6 +222,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/v1/device/spaces", s.handleDeviceSpaces)
 		r.Get("/api/v1/device/bindings", s.handleListBindings)
 		r.Post("/api/v1/device/bindings", s.handleCreateBinding)
+		// Unbind: the device drops its subscription; the space keeps its data.
+		r.Delete("/api/v1/device/bindings/{bindingID}", s.handleDeleteBinding)
 		r.Post("/api/v1/sync/bindings/{bindingID}", s.handleSync)
 		r.Get("/api/v1/sync/bindings/{bindingID}/snapshot", s.handleSnapshot)
 		r.Post("/api/v1/sync/transfers", s.handleDeviceTransfer)
@@ -264,6 +266,12 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, status int, 
 // writeErrorWithDetails emits the unified error envelope with optional
 // structured details (e.g. undo review reasons).
 func (s *Server) writeErrorWithDetails(w http.ResponseWriter, r *http.Request, status int, code, message string, details map[string]any) {
+	// A 5xx the operator cannot see is a 5xx nobody can diagnose: the client
+	// only ever gets the generic "internal error", so this is the record.
+	if status >= http.StatusInternalServerError && s.Logger != nil {
+		s.Logger.Error("request failed",
+			"code", code, "method", r.Method, "path", r.URL.Path, "status", status)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(errorEnvelope{Error: errorBody{

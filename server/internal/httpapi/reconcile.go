@@ -241,6 +241,11 @@ func (s *Server) writeReconcileError(w http.ResponseWriter, r *http.Request, err
 	case errors.Is(err, reconcile.ErrInvalidSessionState):
 		s.writeError(w, r, http.StatusConflict, "RECONCILIATION_PHASE_INVALID", "this call does not fit the session's phase")
 	default:
+		// The client gets a generic message; the log keeps the cause, without
+		// which a reconciliation that never plans is undiagnosable.
+		if s.Logger != nil {
+			s.Logger.Error("reconciliation request failed", "path", r.URL.Path, "error", err)
+		}
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
 	}
 }

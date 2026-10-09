@@ -155,9 +155,25 @@ func TestBindSpaceLifecycle(t *testing.T) {
 		t.Errorf("sync_mode = %q, want partial (implicit after first binding)", mode)
 	}
 
-	// Duplicate binding rejected.
+	// A second bind of a still-pending space hands the same row back: the
+	// device may have dropped its local replica and be starting over, and a
+	// conflict would leave it nothing to bind to.
+	again, err := svc.BindSpace(ctx, dev.ID, canonical.SpaceID("s1"))
+	if err != nil {
+		t.Fatalf("rebind a pending space: %v", err)
+	}
+	if again.ID != b.ID {
+		t.Errorf("rebind opened %s, want the existing row %s", again.ID, b.ID)
+	}
+
+	// Once the binding is live, its watermarks describe a replica the
+	// requester does not hold, so binding again stays a conflict.
+	if _, err := h.db.ExecContext(ctx,
+		`UPDATE device_space_bindings SET state = 'active' WHERE id = ?`, b.ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := svc.BindSpace(ctx, dev.ID, canonical.SpaceID("s1")); !errors.Is(err, device.ErrBindingExists) {
-		t.Errorf("duplicate binding: err = %v, want ErrBindingExists", err)
+		t.Errorf("rebind an active space: err = %v, want ErrBindingExists", err)
 	}
 
 	// Foreign space rejected.

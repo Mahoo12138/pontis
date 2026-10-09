@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"pontis/internal/device"
 	"pontis/internal/reconcile"
 	"pontis/internal/sync"
 )
@@ -661,5 +662,79 @@ func TestReconciliationResourcesAreOwnedByTheirDevice(t *testing.T) {
 	if code, body := doJSON(t, "GET", base+"/reconciliations/does-not-exist", ownerAuth, nil); code != http.StatusNotFound ||
 		errCode(t, body) != "RECONCILIATION_NOT_FOUND" {
 		t.Errorf("unknown session = %d %v, want 404 RECONCILIATION_NOT_FOUND", code, body)
+	}
+}
+
+// TestUnbindThenRebind covers doc 03 §5: unbinding resets *that device's*
+// subscription and nothing else. The space keeps its journal for every other
+// device, and the device that unbound must be able to bind the same space again
+// and run its first synchronization from scratch — including when it unbound
+// while a reconciliation was still open.
+func TestUnbindThenRebind(t *testing.T) {
+	ts, sessionToken, spaceID, sessionAuth := bootstrapInstance(t)
+	base := ts.URL + "/api/v1/sync"
+	aAuth, aBinding := pairDevice(t, ts, sessionToken, spaceID, "Chrome@Home")
+	bAuth, _ := pairDevice(t, ts, sessionToken, spaceID, "Edge@Work")
+	_, baseline := initializeBinding(t, ts, aAuth, aBinding, browserSnapshotWith(
+		reconcile.ClientNodeJSON{LocalRef: "l_2", ParentLocalRef: "l_1", Type: "bookmark",
+			Title: "Example", URL: "https://example.com"},
+	))
+
+	bind := func(auth map[string]string) (int, map[string]any) {
+		return doJSON(t, "POST", ts.URL+"/api/v1/device/bindings", auth, map[string]string{"space_id": spaceID})
+	}
+
+	// A binding is only its own device's to drop.
+	if code, body := doJSON(t, "DELETE", ts.URL+"/api/v1/device/bindings/"+aBinding, bAuth, nil); code != http.StatusForbidden ||
+		errCode(t, body) != "NOT_BINDING_OWNER" {
+		t.Fatalf("another device unbinding it = %d %v, want 403 NOT_BINDING_OWNER", code, body)
+	}
+	// While the binding is active, binding again stays a conflict: the
+	// requester would have to claim watermarks it does not hold.
+	if code, body := bind(aAuth); code != http.StatusConflict || errCode(t, body) != "BINDING_EXISTS" {
+		t.Fatalf("rebind an active binding = %d %v, want 409 BINDING_EXISTS", code, body)
+	}
+
+	code, body := doJSON(t, "DELETE", ts.URL+"/api/v1/device/bindings/"+aBinding, aAuth, nil)
+	if code != http.StatusOK {
+		t.Fatalf("unbind = %d %v, want 200", code, body)
+	}
+	if state := fieldString(body, "state"); state != string(device.StatePendingInitial) {
+		t.Errorf("state after unbind = %s, want %s", state, device.StatePendingInitial)
+	}
+	if got := fieldInt(t, body, "applied_revision"); got != 0 {
+		t.Errorf("applied_revision after unbind = %d, want 0 (it was %d)", got, baseline)
+	}
+	if got := nodeTitles(t, ts, sessionAuth, spaceID); len(got) == 0 {
+		t.Fatalf("unbinding one device dropped the space's own data")
+	}
+
+	// The same device binds again and gets the revoked row back.
+	code, rebind := bind(aAuth)
+	if code != http.StatusCreated {
+		t.Fatalf("rebind after unbind = %d %v, want 201", code, rebind)
+	}
+	if fieldString(rebind, "id") != aBinding {
+		t.Fatalf("rebind opened a second binding %v, want the revoked row reused", rebind["id"])
+	}
+	// It is pending again, so ordinary sync stays refused until it initializes.
+	if code, body := doJSON(t, "POST", base+"/bindings/"+aBinding, aAuth, map[string]any{
+		"protocol_version": sync.ProtocolVersion, "epoch": 1,
+		"applied_revision": 0, "received_revision": 0, "operations": []any{},
+	}); code != http.StatusConflict || errCode(t, body) != "BINDING_NOT_ACTIVE" {
+		t.Fatalf("sync on the rebound binding = %d %v, want 409 BINDING_NOT_ACTIVE", code, body)
+	}
+
+	// Unbinding with a reconciliation open must not leave the binding locked:
+	// that session was building a replica which no longer exists.
+	mustCall(t, "POST", base+"/bindings/"+aBinding+"/reconciliations", aAuth,
+		map[string]string{"type": "initial", "reason": "first synchronization"})
+	if code, body := doJSON(t, "DELETE", ts.URL+"/api/v1/device/bindings/"+aBinding, aAuth, nil); code != http.StatusOK {
+		t.Fatalf("unbind with an open reconciliation = %d %v, want 200", code, body)
+	}
+	second := mustCall(t, "POST", base+"/bindings/"+aBinding+"/reconciliations", aAuth,
+		map[string]string{"type": "initial", "reason": "first synchronization"})
+	if sessionOf(t, second)["id"] == nil {
+		t.Fatalf("reconciliation after the second unbind = %v, want a fresh session", second)
 	}
 }

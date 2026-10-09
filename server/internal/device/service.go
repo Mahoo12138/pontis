@@ -48,6 +48,10 @@ type Store interface {
 	// ListBindingsByDevice returns all bindings of a device.
 	ListBindingsByDevice(ctx context.Context, deviceID string) ([]Binding, error)
 
+	// RevokeBinding resets one binding to pending_initial with both
+	// watermarks at zero. The space and its journal are untouched.
+	RevokeBinding(ctx context.Context, bindingID string, at time.Time) error
+
 	// ListByOwner returns all devices of a user.
 	ListByOwner(ctx context.Context, ownerUserID canonical.UserID) ([]Device, error)
 }
@@ -148,6 +152,20 @@ func (s *Service) BindSpace(ctx context.Context, deviceID string, space canonica
 		return Binding{}, err
 	}
 
+	// Re-binding a space whose row is still pending (a revoked binding, or one
+	// the device unbound locally) hands the same row back: refusing with
+	// "already exists" would leave the device no way to bind again. An active
+	// binding is not handed out, because its watermarks describe a replica the
+	// requester claims not to have.
+	if existing, err := s.store.GetBinding(ctx, deviceID, space); err == nil {
+		if existing.State == StatePendingInitial {
+			return existing, nil
+		}
+		return Binding{}, ErrBindingExists
+	} else if !errors.Is(err, ErrBindingNotFound) {
+		return Binding{}, err
+	}
+
 	mode := SyncModePartial
 	if n, err := s.store.CountBindings(ctx, deviceID); err != nil {
 		return Binding{}, err
@@ -182,6 +200,23 @@ func (s *Service) BindSpace(ctx context.Context, deviceID string, space canonica
 		return Binding{}, err
 	}
 	return s.store.GetBinding(ctx, deviceID, space)
+}
+
+// RevokeBinding puts one device's binding back to pending_initial with empty
+// watermarks, which is what an unbind on the device means server-side: the
+// space and its journal stay, the device's subscription restarts from scratch.
+func (s *Service) RevokeBinding(ctx context.Context, deviceID, bindingID string) (Binding, error) {
+	b, err := s.store.GetBindingByID(ctx, bindingID)
+	if err != nil {
+		return Binding{}, err
+	}
+	if b.DeviceID != deviceID {
+		return Binding{}, ErrNotBindingOwner
+	}
+	if err := s.store.RevokeBinding(ctx, bindingID, time.Now().UTC()); err != nil {
+		return Binding{}, err
+	}
+	return s.store.GetBindingByID(ctx, bindingID)
 }
 
 // GetBinding returns the binding of a device for a space.

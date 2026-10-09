@@ -548,7 +548,7 @@ func (s *Service) computeAndStorePlan(ctx context.Context, sess Session, decisio
 	if err != nil {
 		return Session{}, nil, Artifact{}, err
 	}
-	serverTree, err := s.loadSnapshotTree(ctx, sess.ServerSnapshotArtifact)
+	serverTree, unaddressable, err := s.loadSnapshotTree(ctx, sess.ServerSnapshotArtifact)
 	if err != nil {
 		return Session{}, nil, Artifact{}, err
 	}
@@ -596,6 +596,13 @@ func (s *Service) computeAndStorePlan(ctx context.Context, sess Session, decisio
 	}
 	if err != nil {
 		return Session{}, nil, Artifact{}, err
+	}
+	if unaddressable > 0 {
+		// Say it out loud: the merge is not the whole tree, and silently
+		// dropping canonical nodes would look like a successful plan.
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
+			"%d canonical node(s) carry no id, so no device can address them and they took no part in this merge",
+			unaddressable))
 	}
 
 	steps, err := DeriveClientSteps(clientTree, desired, policy, clientResolver)
@@ -744,17 +751,27 @@ func (noopIdentity) currentRef(*DesiredNode) string { return "" }
 
 // loadSnapshotTree rebuilds the engine input tree from a frozen server
 // snapshot.
-func (s *Service) loadSnapshotTree(ctx context.Context, artifactID string) (*Tree, error) {
+// loadSnapshotTree rebuilds the engine input tree from a frozen server
+// snapshot. It reports how many rows it had to leave out: a node without an id
+// cannot be addressed by any device (rename, move, delete all name it by id),
+// so it is skipped and the plan says so — one such row must not cost the device
+// its whole initialization.
+func (s *Service) loadSnapshotTree(ctx context.Context, artifactID string) (*Tree, int, error) {
 	snap, err := s.store.GetServerSnapshotByArtifact(ctx, artifactID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	nodes, err := s.store.ListSnapshotNodes(ctx, snap.ID, 0, snap.NodeCount+1)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	treeNodes := make([]TreeNode, 0, len(nodes))
+	skipped := 0
 	for _, n := range nodes {
+		if n.NodeRef == "" && n.Type != "root" {
+			skipped++
+			continue
+		}
 		treeNode := TreeNode{
 			Ref:       n.NodeRef,
 			ParentRef: n.ParentRef,
@@ -778,9 +795,9 @@ func (s *Service) loadSnapshotTree(ctx context.Context, artifactID string) (*Tre
 	}
 	tr := &Tree{Nodes: treeNodes}
 	if _, err := tr.index(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return tr, nil
+	return tr, skipped, nil
 }
 
 func snapshotNodeOf(snapshot ClientSnapshotJSON, localRef string) (ClientNodeJSON, bool) {
@@ -1073,6 +1090,14 @@ func (s *Service) Complete(ctx context.Context, sessionID string) (Session, erro
 // (doc 08 §8), and the transport layer needs to say so.
 func (s *Service) ActiveSession(ctx context.Context, bindingID string) (Session, bool, error) {
 	return s.store.GetActiveSession(ctx, bindingID)
+}
+
+// AbandonOpen closes the binding's open sessions and reports how many it
+// closed. Called when a binding is revoked: the replica the session was
+// building is gone with the device's local state, and an open session would
+// otherwise block every later reconciliation on that binding.
+func (s *Service) AbandonOpen(ctx context.Context, bindingID string) error {
+	return s.store.FailOpenSessions(ctx, bindingID, time.Now().UTC())
 }
 
 // loadActive fetches the session and verifies it is still open.

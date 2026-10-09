@@ -129,6 +129,18 @@ func (s *ReconcileStore) UpdateSessionPlan(ctx context.Context, id, state, phase
 	return err
 }
 
+// FailOpenSessions closes every session a binding still has open. A device
+// that unbound lost the replica its session was building, so the session can
+// no longer be resumed by anything.
+func (s *ReconcileStore) FailOpenSessions(ctx context.Context, bindingID string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE reconciliations SET state = ?, phase = '', completed_at = ?, updated_at = ?
+		WHERE binding_id = ? AND state IN (?, ?)`,
+		string(reconcile.StateFailed), formatTime(at), formatTime(at), bindingID,
+		string(reconcile.StateRunning), string(reconcile.StateWaitingUser))
+	return err
+}
+
 // MarkSessionCommitted flips server_committed inside the commit
 // transaction.
 func (t *reconcileTx) MarkSessionCommitted(ctx context.Context, id string, commitRevision int64, at time.Time) error {

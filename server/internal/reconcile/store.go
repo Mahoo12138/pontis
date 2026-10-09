@@ -20,6 +20,10 @@ type Store interface {
 	UpdateSessionSnapshot(ctx context.Context, id, phase string, clientArtifactID string, sourceEpoch, sourceRevision int64, at time.Time) error
 	UpdateSessionPlan(ctx context.Context, id, state, phase, planArtifactID, stepsArtifactID, planHash string, at time.Time) error
 
+	// FailOpenSessions closes the sessions a binding still has open, so a
+	// revoked binding cannot leave a reconciliation nobody can resume.
+	FailOpenSessions(ctx context.Context, bindingID string, at time.Time) error
+
 	InsertArtifact(ctx context.Context, a Artifact) error
 	GetArtifact(ctx context.Context, id string) (Artifact, error)
 

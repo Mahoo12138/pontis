@@ -314,6 +314,30 @@ func (s *DeviceStore) ListBindingsByDevice(ctx context.Context, deviceID string)
 	return out, rows.Err()
 }
 
+// RevokeBinding resets one binding to pending_initial with both watermarks at
+// zero: the next initial reconciliation starts from scratch. The space, its
+// journal and max_client_seq stay as they are — the sequence is a per-binding
+// monotonic counter, and recycling it would let a new operation look like an
+// old, already-receipted one.
+func (s *DeviceStore) RevokeBinding(ctx context.Context, bindingID string, at time.Time) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE device_space_bindings
+		SET state = 'pending_initial', applied_revision = 0, received_revision = 0,
+		    last_sync_at = NULL, updated_at = ?
+		WHERE id = ?`, formatTime(at), bindingID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return device.ErrBindingNotFound
+	}
+	return nil
+}
+
 // UpdateBindingSync advances the binding watermarks of one epoch.
 //
 // The write is guarded on purpose: a binding that has been deactivated, whose

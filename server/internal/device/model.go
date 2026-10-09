@@ -39,6 +39,10 @@ var (
 	// ErrBindingNotFound is returned for unknown bindings.
 	ErrBindingNotFound = errors.New("device: binding not found")
 
+	// ErrNotBindingOwner is returned when a device acts on another device's
+	// binding.
+	ErrNotBindingOwner = errors.New("device: binding belongs to another device")
+
 	// ErrFullBindingLimit is returned when a full-mode device would get a
 	// second binding.
 	ErrFullBindingLimit = errors.New("device: full mode allows only one binding")

@@ -197,6 +197,42 @@ func (s *Server) handleCreateBinding(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, fromBinding(b))
 }
 
+// handleDeleteBinding unbinds this device from a space (doc 03 §5). The
+// binding goes back to pending_initial with empty watermarks and its open
+// reconciliation is closed; the space and its journal are untouched, because
+// unbinding one device says nothing about the user's data.
+func (s *Server) handleDeleteBinding(w http.ResponseWriter, r *http.Request) {
+	dev, _ := currentDevice(r)
+	bindingID := chi.URLParam(r, "bindingID")
+
+	b, err := s.Devices.GetBindingByID(r.Context(), bindingID)
+	if errors.Is(err, device.ErrBindingNotFound) {
+		s.writeError(w, r, http.StatusNotFound, "BINDING_NOT_FOUND", "unknown binding")
+		return
+	} else if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	if b.DeviceID != dev.ID {
+		s.writeError(w, r, http.StatusForbidden, "NOT_BINDING_OWNER", "binding belongs to another device")
+		return
+	}
+
+	// The session is closed first: a reset binding that still holds an open
+	// reconciliation could never start the next one, and retrying this call
+	// would not clear it either.
+	if err := s.Reconcile.AbandonOpen(r.Context(), bindingID); err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	updated, err := s.Devices.RevokeBinding(r.Context(), dev.ID, bindingID)
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, fromBinding(updated))
+}
+
 type bindingResponse struct {
 	ID               string `json:"id"`
 	DeviceID         string `json:"device_id"`
