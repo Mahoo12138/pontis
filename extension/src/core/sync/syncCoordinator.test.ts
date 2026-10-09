@@ -2,7 +2,7 @@
 // received_revision, serial apply, settle cleanup, protocol error handling.
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { PontisDB, type BindingRecord } from '../store/db';
+import { acquireRunLock, PontisDB, releaseAllRunLocks, RUN_LOCK_STALE_MS, type BindingRecord } from '../store/db';
 import { FakeBrowserAdapter } from '../browser/fakeAdapter';
 import { RemoteChangeApplier } from './remoteChangeApplier';
 import { SyncCoordinator, type SyncOutcome } from './syncCoordinator';
@@ -235,5 +235,43 @@ describe('SyncCoordinator', () => {
     expect(binding?.appliedRevision).toBe(100);
     expect(await db.remoteChanges.get(`${bindingId}:101`)).toBeDefined();
     expect(adapter.calls).toEqual([]);
+  });
+
+  it('will not run two rounds on one binding at the same time', async () => {
+    await seedBinding();
+    let reached = false;
+    const probe: SyncTransport = {
+      sync: () => {
+        reached = true;
+        return Promise.reject(new Error('must not be called'));
+      },
+    };
+    const guarded = new SyncCoordinator(db, new RemoteChangeApplier(db, adapter), probe);
+    expect(await acquireRunLock(db, bindingId, 'someone-else')).toBe('someone-else');
+
+    expect(await guarded.syncBinding(bindingId)).toBe('inactive');
+    expect(reached).toBe(false);
+    // Skipped, not failed: the round that holds the binding is the one that
+    // advances it, and the log says so.
+    const skipped = await db.diagnostics.toArray();
+    expect(skipped.map((e) => [e.level, e.message])).toEqual([
+      ['info', 'another round holds this binding, skipping'],
+    ]);
+
+    // A holder that died stops blocking: the next trigger takes the lock over
+    // instead of parking the binding forever.
+    await db.runLocks.put({ bindingId, token: 'dead', takenAt: Date.now() - RUN_LOCK_STALE_MS - 1 });
+    await guarded.syncBinding(bindingId).catch(() => undefined);
+    expect(reached).toBe(true);
+  });
+
+  it('forgets locks abandoned by a killed worker', async () => {
+    await seedBinding();
+    expect(await acquireRunLock(db, bindingId, 'killed-worker')).toBe('killed-worker');
+
+    expect(await releaseAllRunLocks(db)).toBe(1);
+
+    // The next trigger is not stuck behind the dead holder's stale window.
+    await expect(acquireRunLock(db, bindingId, 'fresh-worker')).resolves.toBe('fresh-worker');
   });
 });

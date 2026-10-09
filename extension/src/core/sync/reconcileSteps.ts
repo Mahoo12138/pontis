@@ -147,7 +147,15 @@ async function applyCreate(
   const canonicalId = step.canonical_id ?? '';
   if (!canonicalId) throw new StepResolutionError('target', step.local_ref ?? '');
   const existing = await findMirrorByCanonical(db, scope.bindingId, canonicalId);
-  if (existing) return; // the create already landed (resume)
+  if (existing && (await adapter.getNode(existing.browserId))) return; // the create already landed (resume)
+  if (existing) {
+    // A mirror row whose browser node is gone is not "already done". Leaving
+    // it would make the retry skip the create, and hundreds of planned nodes
+    // can go uncreated that way while the reconciliation still reports
+    // success — which is what a crash mid-apply used to produce.
+    const stale = await collectSubtree(db, scope.bindingId, existing.browserId);
+    await db.localNodes.bulkDelete(stale.map((r) => [scope.bindingId, r.browserId] as [string, string]));
+  }
   const parentBrowserId = await resolveParent(db, scope, step.parent);
   const index = await indexForBefore(db, adapter, scope, parentBrowserId, step.before_id ?? '', null);
 
@@ -396,4 +404,42 @@ async function adoptBrowserOrder(
       if (child.type === 'folder') queue.push(child.id);
     }
   }
+}
+
+/**
+ * Did the plan actually land in the browser? Returns one problem per unsatisfied
+ * requirement, empty when the reconciliation may be called successful. A
+ * mapping is only proof if the node behind it is there: without this check the
+ * replica can claim a tree the user's bookmark bar does not contain, and the
+ * watermarks then hide the difference from every later round.
+ */
+export async function verifyAppliedSteps(
+  db: PontisDB,
+  adapter: BrowserAdapter,
+  bindingId: string,
+  steps: ApplyStepWire[],
+): Promise<string[]> {
+  const problems: string[] = [];
+  const checked = new Set<string>();
+  for (const step of steps) {
+    const canonicalId = step.canonical_id;
+    if (!canonicalId || step.kind === 'delete' || checked.has(canonicalId)) continue;
+    checked.add(canonicalId);
+    const mirror = await findMirrorByCanonical(db, bindingId, canonicalId);
+    if (!mirror) {
+      problems.push(`planned node ${canonicalId} ended with no mapping`);
+      continue;
+    }
+    if (!(await adapter.getNode(mirror.browserId))) {
+      problems.push(`planned node ${canonicalId} is not in the browser (browser id ${mirror.browserId})`);
+    }
+  }
+  const rows = await db.localNodes.where('bindingId').equals(bindingId).toArray();
+  for (const row of rows) {
+    if (checked.has(row.canonicalId ?? '')) continue;
+    if (!(await adapter.getNode(row.browserId))) {
+      problems.push(`mirror row ${row.browserId} points at a node the browser no longer has`);
+    }
+  }
+  return problems;
 }

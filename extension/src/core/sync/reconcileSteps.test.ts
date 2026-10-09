@@ -75,6 +75,29 @@ describe('create steps', () => {
     expect(await db.expectedMutations.count()).toBe(1);
   });
 
+  it('creates again when the mirror claims a node the browser lost', async () => {
+    // Trusting the row is the exact shape of the alpha failure: the plan is
+    // reported applied, the node is never created, and the watermarks then
+    // hide the difference from every later round.
+    await mirror({ browserId: 'ghost', canonicalId: 'n1', title: 'Home', url: 'https://home.example.com' });
+
+    await applyReconcileSteps(db, adapter, scope, [
+      {
+        kind: 'create',
+        canonical_id: 'n1',
+        type: 'bookmark',
+        title: 'Home',
+        url: 'https://home.example.com',
+        parent: ROOT,
+      },
+    ]);
+
+    const rows = (await db.localNodes.toArray()).filter((r) => r.canonicalId === 'n1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.browserId).not.toBe('ghost');
+    expect(await adapter.getNode(rows[0]!.browserId)).not.toBeNull();
+  });
+
   it('creates inside the canonical folder the plan named as parent', async () => {
     await mirror({ browserId: 'f3', canonicalId: 'nf', type: 'folder', title: 'Reading' });
 

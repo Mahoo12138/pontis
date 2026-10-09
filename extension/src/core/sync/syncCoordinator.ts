@@ -5,7 +5,18 @@
 //   alone; pending cleanup follows settle_after_revision (doc 04 §7).
 
 import { ApiError, type SyncTransport, type TransferTransport } from '../transport/client';
-import { activeReconSession, collectSubtree, logDiagnostic, type BindingRecord, type LocalNodeRecord, type PontisDB, type PendingOpRecord } from '../store/db';
+import {
+  acquireRunLock,
+  activeReconSession,
+  collectSubtree,
+  logDiagnostic,
+  releaseRunLock,
+  type BindingRecord,
+  type LocalNodeRecord,
+  type PontisDB,
+  type PendingOpRecord,
+} from '../store/db';
+import { uuidv7 } from '../util/ids';
 import {
   MAX_CHANGES_PER_ROUND,
   SYNC_PROTOCOL_VERSION,
@@ -32,6 +43,26 @@ export class SyncCoordinator {
   ) {}
 
   async syncBinding(bindingId: string): Promise<SyncOutcome> {
+    const binding = await this.db.bindings.get(bindingId);
+    if (!binding || !(await this.canRun(binding))) return 'inactive';
+    // One holder per binding. An alarm, a manual click, a worker wake and a
+    // recovery attempt otherwise interleave on the same inbox and the same
+    // watermarks, and the replica ends up reporting a tree it never applied.
+    const lockToken = uuidv7();
+    if (!(await acquireRunLock(this.db, bindingId, lockToken))) {
+      await logDiagnostic(this.db, 'info', 'coordinator', 'another round holds this binding, skipping', {
+        bindingId,
+      });
+      return 'inactive';
+    }
+    try {
+      return await this.rounds(bindingId);
+    } finally {
+      await releaseRunLock(this.db, bindingId, lockToken);
+    }
+  }
+
+  private async rounds(bindingId: string): Promise<SyncOutcome> {
     const binding = await this.db.bindings.get(bindingId);
     if (!binding || !(await this.canRun(binding))) return 'inactive';
 

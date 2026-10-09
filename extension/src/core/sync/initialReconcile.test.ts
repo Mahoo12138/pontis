@@ -4,7 +4,14 @@
 // baseline it adopts when the server says the plan is committed.
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { PontisDB, emptyReconProgress, type BindingRecord, type ReconSessionRecord } from '../store/db';
+import {
+  acquireRunLock,
+  emptyReconProgress,
+  PontisDB,
+  RUN_LOCK_STALE_MS,
+  type BindingRecord,
+  type ReconSessionRecord,
+} from '../store/db';
 import { FakeBrowserAdapter } from '../browser/fakeAdapter';
 import { RemoteChangeApplier } from './remoteChangeApplier';
 import { SyncCoordinator } from './syncCoordinator';
@@ -381,6 +388,88 @@ describe('initial reconciliation lifecycle', () => {
     expect(await reconciler.runBinding(bindingId)).toBe('idle');
     expect(lifecycle.calls).toEqual([]);
     expect((await db.bindings.get(bindingId))?.state).toBe('initializing');
+  });
+
+  it('replaces a mirror row whose browser node vanished instead of skipping it', async () => {
+    await seedBinding();
+    // The state a killed worker leaves behind: a mirror row for a node the
+    // browser no longer has. Skipping on it is what let 146 planned nodes go
+    // uncreated while the reconciliation still reported success.
+    await db.localNodes.put({
+      bindingId,
+      browserId: 'vanished',
+      canonicalId: 'n1',
+      type: 'bookmark',
+      title: 'Home',
+      url: 'https://home.example.com',
+      parentBrowserId: 'f1',
+      position: 0,
+    });
+    lifecycle.steps = [
+      {
+        kind: 'create',
+        canonical_id: 'n1',
+        type: 'bookmark',
+        title: 'Home',
+        url: 'https://home.example.com',
+        parent: { type: 'root', key: 'main' },
+      },
+    ];
+
+    expect(await reconciler.runBinding(bindingId)).toBe('completed');
+
+    const mapped = (await db.localNodes.toArray()).filter((m) => m.canonicalId === 'n1');
+    expect(mapped).toHaveLength(1);
+    expect(mapped[0]!.browserId).not.toBe('vanished');
+    expect(await adapter.getNode(mapped[0]!.browserId)).not.toBeNull();
+    expect((await db.bindings.get(bindingId))?.state).toBe('active');
+  });
+
+  it('refuses to activate while a planned node is not in the browser', async () => {
+    await seedBinding();
+    // A create the browser did not keep: the write must not be able to pass
+    // itself off as an applied plan, because completing adopts the commit
+    // revision as the new baseline and the difference disappears for good.
+    class CreateVanishes extends FakeBrowserAdapter {
+      override async create(parentId: string, details: { title: string; url?: string; index?: number | null }) {
+        const node = await super.create(parentId, details);
+        await this.removeSubtree(node.id);
+        return node;
+      }
+    }
+    const vanishing = new CreateVanishes();
+    vanishing.seed({ id: 'f1', parentId: '0', title: 'Sync' });
+    const flaky = new InitialReconciler(db, vanishing, lifecycle);
+    lifecycle.steps = [
+      {
+        kind: 'create',
+        canonical_id: 'n9',
+        type: 'bookmark',
+        title: 'Now you see me',
+        url: 'https://gone.example.com',
+        parent: { type: 'root', key: 'main' },
+      },
+    ];
+
+    await expect(flaky.runBinding(bindingId)).rejects.toThrow(/plan not satisfied/);
+    const failed = await db.bindings.get(bindingId);
+    expect(failed?.state).toBe('initializing');
+    expect(failed?.appliedRevision).toBe(0);
+    expect((await db.reconSessions.toArray()).find((x) => x.driver === 'server')?.error).toContain(
+      'not in the browser',
+    );
+  });
+
+  it('will not hold two rounds on one binding at the same time', async () => {
+    await seedBinding();
+    expect(await acquireRunLock(db, bindingId, 'other-holder')).toBe('other-holder');
+
+    expect(await reconciler.runBinding(bindingId)).toBe('idle');
+    expect(lifecycle.calls).toEqual([]);
+
+    // A lock from a worker that died is taken over rather than waited on.
+    await db.runLocks.put({ bindingId, token: 'dead-holder', takenAt: Date.now() - RUN_LOCK_STALE_MS - 1 });
+    expect(await reconciler.runBinding(bindingId)).toBe('completed');
   });
 
   it('refuses to run an ordinary sync round for a pending binding', async () => {

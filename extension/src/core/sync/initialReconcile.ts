@@ -14,9 +14,11 @@
 
 import type { BrowserAdapter } from '../browser/types';
 import {
+  acquireRunLock,
   activeReconSession,
   emptyReconProgress,
   logDiagnostic,
+  releaseRunLock,
   type BindingRecord,
   type PontisDB,
   type ReconSessionRecord,
@@ -28,7 +30,7 @@ import type {
 } from '../protocol/types';
 import { ApiError, type ReconciliationTransport } from '../transport/client';
 import { uuidv7 } from '../util/ids';
-import { applyReconcileSteps, type StepScope } from './reconcileSteps';
+import { applyReconcileSteps, verifyAppliedSteps, type StepScope } from './reconcileSteps';
 
 /** Round budget for one run(); each round advances exactly one server phase. */
 const MAX_LIFECYCLE_ROUNDS = 16;
@@ -167,6 +169,16 @@ export class InitialReconciler {
    * kill in the middle of the lifecycle harmless.
    */
   async runBinding(bindingId: string): Promise<LifecycleOutcome | 'idle'> {
+    const token = uuidv7();
+    if (!(await acquireRunLock(this.db, bindingId, token))) return 'idle';
+    try {
+      return await this.driveBinding(bindingId);
+    } finally {
+      await releaseRunLock(this.db, bindingId, token);
+    }
+  }
+
+  private async driveBinding(bindingId: string): Promise<LifecycleOutcome | 'idle'> {
     const binding = await this.mustGetBinding(bindingId);
     // A waiting_user session is driven by `answer`, not by a sync trigger: the
     // server will not move until the user picks a candidate.
@@ -177,7 +189,7 @@ export class InitialReconciler {
     // even when the first server call failed before an id came back.
     if (found && found.driver !== 'server' && !found.serverSessionId) return 'idle';
     const session = found ?? (await this.openSession(binding));
-    await this.db.bindings.update(bindingId, { state: 'initializing' });
+    await this.db.bindings.update(binding.id, { state: 'initializing' });
     return this.run(binding, session);
   }
 
@@ -210,11 +222,29 @@ export class InitialReconciler {
       throw new Error('initialReconcile: session has no server reconciliation to answer');
     }
     const binding = await this.mustGetBinding(bindingId);
-    await this.transport.decideReconciliation(session.serverSessionId, decisions);
+    // The decisions call drives the rest of the lifecycle, so it holds the
+    // same lock a sync trigger would take.
+    const token = uuidv7();
+    if (!(await acquireRunLock(this.db, bindingId, token))) {
+      throw new Error('initialReconcile: another round is holding this binding');
+    }
+    try {
+      return await this.decideAndRun(binding, session, decisions);
+    } finally {
+      await releaseRunLock(this.db, bindingId, token);
+    }
+  }
+
+  private async decideAndRun(
+    binding: BindingRecord,
+    session: ReconSessionRecord,
+    decisions: Record<string, string>,
+  ): Promise<LifecycleOutcome> {
+    await this.transport.decideReconciliation(session.serverSessionId!, decisions);
     session.state = 'RUNNING';
     session.issues = undefined;
     await this.touch(session);
-    await this.db.bindings.update(bindingId, { state: 'initializing' });
+    await this.db.bindings.update(binding.id, { state: 'initializing' });
     return this.run(binding, session);
   }
 
@@ -287,8 +317,25 @@ export class InitialReconciler {
       roots: mountRoots(binding),
     };
     await applyReconcileSteps(this.db, this.adapter, scope, steps);
+    // Do not ask the server to close out a plan the browser does not hold:
+    // completing adopts the commit revision as the new baseline, which would
+    // hide every node that never landed.
+    const problems = await verifyAppliedSteps(this.db, this.adapter, binding.id, steps);
+    if (problems.length > 0) {
+      await logDiagnostic(this.db, 'error', 'initial-reconcile', 'applied plan is not satisfied, retrying next round', {
+        bindingId: binding.id,
+        sessionId,
+        problems: problems.slice(0, 10),
+        problemCount: problems.length,
+      });
+      session.error = `${problems.length} planned node(s) are not in the browser`;
+      await this.touch(session);
+      throw new Error(`initialReconcile: plan not satisfied after apply (${problems[0]})`);
+    }
     session.progress.applied = session.commitRevision ?? session.progress.applied;
+    session.progress.serverOnly = 0;
     session.serverPhase = 'committed';
+    session.error = undefined;
     await this.touch(session);
     const done = await this.transport.completeReconciliation(sessionId);
     return this.finish(binding, session, done);

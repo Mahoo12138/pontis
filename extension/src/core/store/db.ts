@@ -269,6 +269,7 @@ export class PontisDB extends Dexie {
   remoteChanges!: Table<RemoteChangeRecord, string>;
   reconSessions!: Table<ReconSessionRecord, string>;
   emergencySnapshots!: Table<EmergencySnapshotRecord, number>;
+  runLocks!: Table<RunLockRecord, string>;
   diagnostics!: Table<DiagnosticEvent, number>;
 
   constructor(name = 'pontis-replica') {
@@ -287,7 +288,69 @@ export class PontisDB extends Dexie {
       reconSessions: 'id, bindingId, [bindingId+state]',
       emergencySnapshots: '++id, bindingId, ts',
     });
+    this.version(3).stores({
+      // One row per binding being driven right now (doc 05 §15). Held in
+      // IndexedDB rather than memory because an MV3 worker can be replaced by
+      // a second instance at any await, and two workers interleaving on one
+      // binding corrupts the replica.
+      runLocks: 'bindingId, takenAt',
+    });
   }
+}
+
+/** A binding's exclusive right to run sync or a reconciliation. */
+export interface RunLockRecord {
+  bindingId: string;
+  token: string;
+  takenAt: number;
+}
+
+/**
+ * A lock older than this belongs to a worker that was killed mid-round; the
+ * next trigger may take it over. Well above a real round's duration, so a live
+ * owner is never stolen from.
+ */
+export const RUN_LOCK_STALE_MS = 5 * 60 * 1000;
+
+/**
+ * Compare-and-set the run lock for one binding. Returns the token on success
+ * and null when another live holder has it; callers release in a finally.
+ */
+export async function acquireRunLock(
+  db: PontisDB,
+  bindingId: string,
+  token: string,
+  now = Date.now(),
+): Promise<string | null> {
+  let held: string | null = null;
+  await db.transaction('rw', [db.runLocks], async () => {
+    const current = await db.runLocks.get(bindingId);
+    if (current && current.bindingId !== bindingId) return;
+    if (current && current.token !== token && now - current.takenAt < RUN_LOCK_STALE_MS) return;
+    await db.runLocks.put({ bindingId, token, takenAt: now });
+    held = token;
+  });
+  return held;
+}
+
+/**
+ * Forget every lock. A worker runs this at startup: MV3 keeps one service
+ * worker per extension, so a lock that survives into a new worker belongs to
+ * the instance that was killed mid-round, and leaving it would stall the
+ * binding until the stale window expires.
+ */
+export async function releaseAllRunLocks(db: PontisDB): Promise<number> {
+  const stale = await db.runLocks.toArray();
+  await db.runLocks.clear();
+  return stale.length;
+}
+
+/** Drop the lock, but only if we still hold it (a stale lock was taken over). */
+export async function releaseRunLock(db: PontisDB, bindingId: string, token: string): Promise<void> {
+  await db.transaction('rw', [db.runLocks], async () => {
+    const current = await db.runLocks.get(bindingId);
+    if (current?.token === token) await db.runLocks.delete(bindingId);
+  });
 }
 
 /** Ring-buffer diagnostic log (doc 16 direction; local only). */
