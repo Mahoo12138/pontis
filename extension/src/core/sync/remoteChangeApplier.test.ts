@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { PontisDB, findMirrorByCanonical, type BindingRecord } from '../store/db';
 import { FakeBrowserAdapter } from '../browser/fakeAdapter';
+import type { BrowserAdapter } from '../browser/types';
 import { RemoteChangeApplier } from './remoteChangeApplier';
 import type { ChangeWire } from '../protocol/types';
 
@@ -52,6 +53,24 @@ function createChange(revision: number, nodeId: string): ChangeWire {
       position: 0,
     },
   };
+}
+
+// Dexie ends a transaction once the task queue turns over without new
+// requests, and every chrome.* call settles exactly that way. A transaction
+// body that awaits the browser therefore dies with PrematureCommitError and
+// the whole round is lost — a double answering in a microtask cannot show it.
+function onMacrotasks(inner: FakeBrowserAdapter): BrowserAdapter {
+  const wrapped: Record<string, unknown> = {};
+  const proto = Object.getPrototypeOf(inner) as Record<string, unknown>;
+  for (const name of Object.getOwnPropertyNames(proto)) {
+    const method = proto[name];
+    if (name === 'constructor' || typeof method !== 'function') continue;
+    wrapped[name] = async (...args: unknown[]) => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return (method as (...a: unknown[]) => unknown).apply(inner, args);
+    };
+  }
+  return wrapped as unknown as BrowserAdapter;
 }
 
 describe('RemoteChangeApplier', () => {
@@ -265,5 +284,48 @@ describe('RemoteChangeApplier', () => {
     expect(mirror).toMatchObject({ browserId: orphan.id, canonicalId: 'n-1' });
     expect((await db.bindings.get(bindingId))?.appliedRevision).toBe(101);
     void binding;
+  });
+
+  it('keeps browser reads out of the create mirror transaction', async () => {
+    adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
+    await seedBinding();
+
+    const applier2 = new RemoteChangeApplier(db, onMacrotasks(adapter));
+    await expect(applier2.applyChange(bindingId, createChange(101, 'n-1'))).resolves.toBeUndefined();
+
+    expect((await adapter.getChildren('f1')).map((k) => k.title)).toEqual(['GitHub']);
+    expect((await findMirrorByCanonical(db, bindingId, 'n-1'))?.position).toBe(0);
+    expect((await db.bindings.get(bindingId))?.appliedRevision).toBe(101);
+  });
+
+  it('keeps browser reads out of the recovery commit transaction', async () => {
+    adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
+    adapter.seed({ id: 'b1', parentId: 'f1', title: 'GitHub', url: 'https://github.com' });
+    await seedBinding();
+    await db.localNodes.put({
+      bindingId, browserId: 'b1', canonicalId: 'n-1', type: 'bookmark',
+      title: 'GitHub', url: 'https://github.com', parentBrowserId: 'f1', position: null,
+    });
+    // Crash simulation: the browser API landed, the expectation is settled,
+    // and the mirror still has to be repaired (doc 05 §10).
+    await db.expectedMutations.add({
+      bindingId,
+      revision: 101,
+      kind: 'create',
+      canonicalId: 'n-1',
+      browserId: 'b1',
+      parentBrowserId: 'f1',
+      position: 0,
+      title: 'GitHub',
+      url: 'https://github.com',
+      createdAt: Date.now(),
+    });
+
+    const applier2 = new RemoteChangeApplier(db, onMacrotasks(adapter));
+    await expect(applier2.recover(bindingId)).resolves.toBeUndefined();
+
+    expect(await db.expectedMutations.count()).toBe(0);
+    expect((await findMirrorByCanonical(db, bindingId, 'n-1'))?.position).toBe(0);
+    expect((await db.bindings.get(bindingId))?.appliedRevision).toBe(101);
   });
 });

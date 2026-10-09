@@ -269,6 +269,7 @@ export class RemoteChangeApplier {
       url: payload.url || undefined,
       index,
     });
+    const order = await this.readOrder(parentBrowserId);
     await this.db.transaction('rw', [this.db.bindings, this.db.localNodes, this.db.expectedMutations], async () => {
       const b = await this.db.bindings.get(binding.id);
       if (!b) return;
@@ -288,7 +289,7 @@ export class RemoteChangeApplier {
       });
       // The server's positions for this parent are now dense; adopt the
       // browser order so the mirrors say the same thing.
-      await this.mirrorPositions(binding.id, parentBrowserId);
+      await this.writeOrder(order, b.id, parentBrowserId);
       await this.advanceApplied(b, change.revision);
     });
   }
@@ -439,16 +440,14 @@ export class RemoteChangeApplier {
     };
     await this.db.expectedMutations.add(exp);
     await this.adapter.move(mirror.browserId, parentBrowserId, index);
+    const order = await this.readOrder(parentBrowserId, mirror.parentBrowserId);
     await this.db.transaction('rw', [this.db.bindings, this.db.localNodes, this.db.expectedMutations], async () => {
       const b = await this.db.bindings.get(binding.id);
       if (!b) return;
       // The onMoved echo consumes this one (doc 05 §8).
       await this.db.localNodes.put({ ...mirror, parentBrowserId, position: payload.position });
       // A move renumbers the destination *and* the parent it left.
-      await this.mirrorPositions(binding.id, parentBrowserId);
-      if (mirror.parentBrowserId && mirror.parentBrowserId !== parentBrowserId) {
-        await this.mirrorPositions(binding.id, mirror.parentBrowserId);
-      }
+      await this.writeOrder(order, b.id, parentBrowserId, mirror.parentBrowserId);
       await this.advanceApplied(b, change.revision);
     });
   }
@@ -553,13 +552,31 @@ export class RemoteChangeApplier {
   }
 
   /**
-   * Re-read the browser's order for a parent and mirror it onto the mapped
-   * children. A single CREATE/MOVE change renumbers the whole sibling set on
-   * the server; without this the mirrors keep the pre-change positions and
-   * every later index computation is off by one.
+   * Sibling order of the given parents, read before a transaction opens: a
+   * `chrome.*` promise settles on a macrotask and would commit a Dexie
+   * transaction early, so the transaction bodies only take these snapshots.
+   * A single CREATE/MOVE change renumbers the whole sibling set on the server;
+   * without mirroring it the mirrors keep the pre-change positions and every
+   * later index computation is off by one.
    */
-  private async mirrorPositions(bindingId: string, parentBrowserId: string): Promise<void> {
-    await syncMirrorPositions(this.db, this.adapter, bindingId, parentBrowserId);
+  private async readOrder(...parentBrowserIds: (string | null | undefined)[]): Promise<Map<string, BrowserNode[]>> {
+    const order = new Map<string, BrowserNode[]>();
+    for (const id of parentBrowserIds) {
+      if (!id || order.has(id)) continue;
+      order.set(id, await this.adapter.getChildren(id));
+    }
+    return order;
+  }
+
+  private async writeOrder(
+    order: Map<string, BrowserNode[]>,
+    bindingId: string,
+    ...parentBrowserIds: (string | null | undefined)[]
+  ): Promise<void> {
+    for (const id of parentBrowserIds) {
+      const children = id ? order.get(id) : undefined;
+      if (children) await writeMirrorPositions(this.db, bindingId, children);
+    }
   }
 
   /**
@@ -585,11 +602,17 @@ export class RemoteChangeApplier {
     exp: ExpectedMutationRecord,
     node?: { id: string; parentId: string | null; title: string; url: string | null; type: 'folder' | 'bookmark' },
   ): Promise<void> {
+    // Everything the browser has to answer for is read here: the transaction
+    // below must stay a pure Dexie scope.
+    const mirror = await findMirrorByCanonical(this.db, binding.id, exp.canonicalId);
+    const parentId = node?.parentId ?? exp.parentBrowserId ?? mirror?.parentBrowserId ?? null;
+    const sourceParentId = exp.kind === 'move' ? mirror?.parentBrowserId : null;
+    const reparented = Boolean(parentId) && (exp.kind === 'move' || exp.kind === 'create');
+    const order = reparented ? await this.readOrder(parentId, sourceParentId) : new Map<string, BrowserNode[]>();
     await this.db.transaction('rw', [this.db.bindings, this.db.localNodes, this.db.expectedMutations], async () => {
       const b = await this.db.bindings.get(binding.id);
       if (!b) return;
       await this.db.expectedMutations.delete(exp.id!);
-      const mirror = await findMirrorByCanonical(this.db, b.id, exp.canonicalId);
       if (mirror) {
         // A folder has no url: the create payload carries '' for one, and
         // writing that onto the mirror would claim the browser holds a folder
@@ -603,11 +626,8 @@ export class RemoteChangeApplier {
           position: exp.position ?? mirror.position,
         });
       }
-      const parentId = node?.parentId ?? exp.parentBrowserId ?? mirror?.parentBrowserId ?? null;
-      if (parentId && (exp.kind === 'move' || exp.kind === 'create')) {
-        await this.mirrorPositions(b.id, parentId);
-        const source = exp.kind === 'move' ? mirror?.parentBrowserId : null;
-        if (source && source !== parentId) await this.mirrorPositions(b.id, source);
+      if (reparented && parentId) {
+        await this.writeOrder(order, b.id, parentId, sourceParentId);
       }
       await this.advanceApplied(b, exp.revision);
     });
@@ -629,18 +649,18 @@ export class RemoteChangeApplier {
 }
 
 /**
- * Re-read the browser's sibling order for one parent and write it onto the
- * mapped children. The browser is the local source of truth for order, so
- * every path that reshapes a parent's children (an incremental change, a
- * reconciliation step) ends by adopting the order it just produced.
+ * Write a sibling order that was already read from the browser onto the mapped
+ * children. The browser is the local source of truth for order, so every path
+ * that reshapes a parent's children (an incremental change, a reconciliation
+ * step) ends by adopting the order it just produced. Takes the children rather
+ * than reading them because a Dexie transaction may not await a `chrome.*`
+ * call: it settles on a macrotask and commits the transaction early.
  */
-export async function syncMirrorPositions(
+export async function writeMirrorPositions(
   db: PontisDB,
-  adapter: BrowserAdapter,
   bindingId: string,
-  parentBrowserId: string,
+  children: BrowserNode[],
 ): Promise<void> {
-  const children = await adapter.getChildren(parentBrowserId);
   let rank = 0;
   for (const child of children) {
     const m = await db.localNodes.get([bindingId, child.id]);
@@ -648,4 +668,14 @@ export async function syncMirrorPositions(
     if (m.position !== rank) await db.localNodes.put({ ...m, position: rank });
     rank += 1;
   }
+}
+
+/** Read-then-write form, for callers that are not inside a transaction. */
+export async function syncMirrorPositions(
+  db: PontisDB,
+  adapter: BrowserAdapter,
+  bindingId: string,
+  parentBrowserId: string,
+): Promise<void> {
+  await writeMirrorPositions(db, bindingId, await adapter.getChildren(parentBrowserId));
 }
