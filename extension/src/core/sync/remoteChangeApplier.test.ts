@@ -71,10 +71,14 @@ describe('RemoteChangeApplier', () => {
     expect(probe.calls).toEqual(['create:f1:GitHub']);
     expect(expectationAtApiTime).not.toBeNull();
     expect(expectationAtApiTime).toHaveLength(1);
-    // After success the expectation is consumed and the mirror is mapped.
-    expect(await db.expectedMutations.count()).toBe(0);
+    // After success the mirror is mapped, and the expectation now names the
+    // browser node it created: it stays until the onCreated echo consumes it,
+    // which is what stops our own create from being uploaded as user intent.
     const mirror = await findMirrorByCanonical(db, bindingId, 'n-1');
     expect(mirror).toMatchObject({ canonicalId: 'n-1', title: 'GitHub', parentBrowserId: 'f1' });
+    const outstanding = await db.expectedMutations.toArray();
+    expect(outstanding).toHaveLength(1);
+    expect(outstanding[0]).toMatchObject({ kind: 'create', canonicalId: 'n-1', browserId: mirror!.browserId });
     const binding = await db.bindings.get(bindingId);
     expect(binding?.appliedRevision).toBe(101);
   });
@@ -110,7 +114,7 @@ describe('RemoteChangeApplier', () => {
     await applier.applyChange(bindingId, createChange(101, 'n-1'));
 
     expect(adapter.calls).toEqual([]); // ensure-state satisfied, nothing done
-    expect(await db.expectedMutations.count()).toBe(0);
+    expect(await db.expectedMutations.count()).toBe(1); // still awaiting its echo, not doubled
     expect((await db.bindings.get(bindingId))?.appliedRevision).toBe(101);
   });
 

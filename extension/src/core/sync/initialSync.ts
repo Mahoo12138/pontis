@@ -861,7 +861,9 @@ export class InitialSyncEngine {
         baseRevision: b.appliedRevision,
         status: 'QUEUED',
         type: 'create',
-        nodeId: '',
+        // Client-assigned canonical id (doc 04): an empty one would land a
+        // node no device can ever address again.
+        nodeId: uuidv7(),
         nodeType: create.nodeType,
         title: create.title,
         url: create.url || undefined,

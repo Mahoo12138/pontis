@@ -383,6 +383,37 @@ func TestFirstUseGoesFromEmptyInstanceToIncrementalSync(t *testing.T) {
 	}
 }
 
+// TestSyncRejectsCreateWithoutNodeID covers the id a device owes the node it
+// creates (doc 04): it is how the ack and the change stream name that bookmark
+// afterwards. An empty node_id used to be stored as a node whose primary key
+// is the empty string — no device could ever address, rename or delete it, and
+// the next unnamed create would collide with the row already there.
+func TestSyncRejectsCreateWithoutNodeID(t *testing.T) {
+	ts, sessionToken, spaceID, sessionAuth := bootstrapInstance(t)
+	auth, binding := pairDevice(t, ts, sessionToken, spaceID, "Chrome@Guard")
+	_, baseline := initializeBinding(t, ts, auth, binding, emptyBrowserSnapshot())
+
+	r := &replica{bindingID: binding, auth: auth, epoch: 1, applied: baseline, received: baseline}
+	body := r.round(t, ts, []map[string]any{{
+		"op_id": uuid.Must(uuid.NewV7()).String(), "client_seq": 1, "base_revision": baseline,
+		"type": "create", "node_id": "", "node_type": "bookmark",
+		"title": "Nameless", "url": "https://nameless.example",
+		"parent": map[string]any{"type": "root", "key": "main"},
+	}})
+	results, _ := body["operation_results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("unnamed create returned %d results: %v", len(results), results)
+	}
+	res := results[0].(map[string]any)
+	if res["status"] != string(sync.StatusRejected) || res["reason"] != sync.ReasonInvalidPayload {
+		t.Errorf("unnamed create = %v %v, want %s %s",
+			res["status"], res["reason"], sync.StatusRejected, sync.ReasonInvalidPayload)
+	}
+	if got := nodeTitles(t, ts, sessionAuth, spaceID); len(got) != 0 {
+		t.Errorf("the tree kept the nameless node: %v", got)
+	}
+}
+
 // TestSyncYieldsToAnOpenReconciliation covers doc 08 §8: a binding cannot run
 // normal sync writes and a reconciliation at the same time. Reads stay open —
 // the engine re-freezes its target and PLAN_STALE protects the commit.

@@ -249,7 +249,7 @@ export class RemoteChangeApplier {
     if (adopted) return;
 
     // Rule 2 (doc 05 §16): expectation BEFORE the browser API. Create is
-    // provisional — the browser id is unknown until the event arrives.
+    // provisional — the browser id is unknown until the API answers.
     const exp: ExpectedMutationRecord = {
       bindingId: binding.id,
       revision: change.revision,
@@ -272,7 +272,10 @@ export class RemoteChangeApplier {
     await this.db.transaction('rw', [this.db.bindings, this.db.localNodes, this.db.expectedMutations], async () => {
       const b = await this.db.bindings.get(binding.id);
       if (!b) return;
-      await this.db.expectedMutations.delete(exp.id!);
+      // The expectation is the echo's, not ours to consume: deleting it here
+      // would leave the onCreated event with nothing to match, and the node we
+      // just created would be queued as if the user had made it.
+      await this.db.expectedMutations.put({ ...exp, id: exp.id, browserId: created.id });
       await this.db.localNodes.put({
         bindingId: b.id,
         browserId: created.id,
@@ -303,12 +306,15 @@ export class RemoteChangeApplier {
     const ops = await this.db.pendingOps
       .where('bindingId')
       .equals(binding.id)
-      .filter((o) => o.type === 'create' && o.nodeId === '' && o.browserId != null)
+      .filter((o) => o.type === 'create' && o.browserId != null)
       .toArray();
     if (ops.length === 0) return false;
+    // Identity first: a create op carries the canonical id the client named for
+    // its own node (doc 04), so the change for that id is the ack's own words.
     const op =
+      ops.find((o) => o.nodeId === change.node_id) ??
       ops.find((o) => o.result?.resultRevision === change.revision) ??
-      ops.find((o) => o.title === payload.title && (o.url ?? '') === payload.url);
+      ops.find((o) => o.status === 'QUEUED' && o.title === payload.title && (o.url ?? '') === payload.url);
     if (!op?.browserId) return false;
     const local = await this.db.localNodes.get([binding.id, op.browserId]);
     if (!local || local.canonicalId != null) return false;
@@ -373,7 +379,8 @@ export class RemoteChangeApplier {
     await this.db.transaction('rw', [this.db.bindings, this.db.localNodes, this.db.expectedMutations], async () => {
       const b = await this.db.bindings.get(binding.id);
       if (!b) return;
-      await this.db.expectedMutations.delete(exp.id!);
+      // Left for the onChanged echo to consume (doc 05 §8): consuming it here
+      // would turn our own rename into a pending local edit.
       await this.db.localNodes.put({
         ...mirror,
         title: target.title ?? mirror.title,
@@ -435,7 +442,7 @@ export class RemoteChangeApplier {
     await this.db.transaction('rw', [this.db.bindings, this.db.localNodes, this.db.expectedMutations], async () => {
       const b = await this.db.bindings.get(binding.id);
       if (!b) return;
-      await this.db.expectedMutations.delete(exp.id!);
+      // The onMoved echo consumes this one (doc 05 §8).
       await this.db.localNodes.put({ ...mirror, parentBrowserId, position: payload.position });
       // A move renumbers the destination *and* the parent it left.
       await this.mirrorPositions(binding.id, parentBrowserId);
@@ -584,11 +591,15 @@ export class RemoteChangeApplier {
       await this.db.expectedMutations.delete(exp.id!);
       const mirror = await findMirrorByCanonical(this.db, b.id, exp.canonicalId);
       if (mirror) {
+        // A folder has no url: the create payload carries '' for one, and
+        // writing that onto the mirror would claim the browser holds a folder
+        // bookmark and fail verification on every resync.
+        const type = node?.type ?? mirror.type;
         await this.db.localNodes.put({
           ...mirror,
           parentBrowserId: node?.parentId ?? mirror.parentBrowserId,
           title: node?.title ?? exp.title ?? mirror.title,
-          url: node?.url ?? exp.url ?? mirror.url,
+          url: type === 'folder' ? null : (node?.url ?? exp.url ?? mirror.url),
           position: exp.position ?? mirror.position,
         });
       }

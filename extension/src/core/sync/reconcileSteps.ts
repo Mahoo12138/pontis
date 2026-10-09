@@ -170,7 +170,10 @@ async function applyCreate(
     index,
   });
   await db.transaction('rw', [db.localNodes, db.expectedMutations], async () => {
-    await db.expectedMutations.delete(exp.id!);
+    // Left for the browser's onCreated echo to consume: deleting it here would
+    // make the node this reconciliation created look like user intent and get
+    // uploaded back as a second copy of the same canonical node.
+    await db.expectedMutations.put({ ...exp, id: exp.id, browserId: created.id });
     await db.localNodes.put({
       bindingId: scope.bindingId,
       browserId: created.id,
@@ -226,7 +229,7 @@ async function mutateField(
   await db.expectedMutations.add(exp);
   await adapter.update(mirror.browserId, changes.title !== undefined ? { title: changes.title } : { url: changes.url ?? '' });
   await db.transaction('rw', [db.localNodes, db.expectedMutations], async () => {
-    await db.expectedMutations.delete(exp.id!);
+    // The onChanged echo consumes the expectation (doc 05 §8).
     const cur = await db.localNodes.get([scope.bindingId, mirror.browserId]);
     if (cur) await db.localNodes.put({ ...cur, ...(changes.title !== undefined ? { title: changes.title } : { url: changes.url ?? null }) });
   });
@@ -261,7 +264,7 @@ async function applyMove(
   await db.expectedMutations.add(exp);
   await adapter.move(browserId, parentBrowserId, index);
   await db.transaction('rw', [db.localNodes, db.expectedMutations], async () => {
-    await db.expectedMutations.delete(exp.id!);
+    // The onMoved echo consumes the expectation.
     const cur = await db.localNodes.get([scope.bindingId, browserId]);
     if (cur) await db.localNodes.put({ ...cur, parentBrowserId });
   });

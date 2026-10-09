@@ -13,6 +13,12 @@ import (
 // is recovered under a Recovered/<Device> root slot instead of being
 // dropped.
 func (s *Service) decideCreate(ctx context.Context, tx Tx, space canonical.SyncSpace, binding device.Binding, op Operation, deviceName string, origin canonical.Origin) (OperationResult, error) {
+	// A create names its own node (doc 04): the id is what the ack and the
+	// change stream refer to the bookmark by. An empty one would store a node
+	// no device can ever address, rename or delete again.
+	if op.NodeID == "" {
+		return rejectedResult(op, ReasonInvalidPayload), nil
+	}
 	// Duplicate client-generated UUID: the node already exists; report a
 	// no-op so the client can settle on the existing canonical state.
 	if existing, err := tx.LoadNode(ctx, space.ID, op.NodeID); err == nil {

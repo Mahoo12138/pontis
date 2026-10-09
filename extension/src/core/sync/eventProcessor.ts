@@ -81,6 +81,34 @@ export class EventProcessor {
       return 'ignored';
     }
 
+    // A create the applier already resolved to this browser id: the mirror is
+    // written, only the expectation is still waiting for this echo. Consuming
+    // it here is what keeps a sync-created bookmark from being uploaded as if
+    // the user had just made it.
+    const settled = await this.db.expectedMutations
+      .where('[bindingId+kind]')
+      .equals([binding.id, 'create'])
+      .filter((e) => e.browserId === node.id)
+      .toArray();
+    if (settled.length > 0) {
+      await this.db.transaction('rw', [this.db.localNodes, this.db.expectedMutations], async () => {
+        await this.db.expectedMutations.bulkDelete(settled.map((e) => e.id!));
+        if (!(await this.db.localNodes.get([binding.id, node.id]))) {
+          await this.db.localNodes.put({
+            bindingId: binding.id,
+            browserId: node.id,
+            canonicalId: settled[0]!.canonicalId,
+            type: node.type,
+            title: node.title,
+            url: node.url,
+            parentBrowserId: node.parentId,
+            position: null,
+          });
+        }
+      });
+      return 'expected';
+    }
+
     const parentRef = await this.canonicalParentRef(binding, node.parentId);
     if (!parentRef) {
       await logDiagnostic(this.db, 'warn', 'event-processor', 'local create under unmapped parent, skipped', {
@@ -113,7 +141,10 @@ export class EventProcessor {
         baseRevision: b.appliedRevision,
         status: 'QUEUED',
         type: 'create',
-        nodeId: '',
+        // The client names its own node (doc 04): this id is what the ack and
+        // the change stream come back with, so the browser node is mapped to
+        // the canonical node it produced instead of being re-created.
+        nodeId: uuidv7(),
         nodeType: node.type,
         title: node.title,
         url: node.url ?? undefined,

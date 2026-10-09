@@ -71,8 +71,8 @@ describe('create steps', () => {
       ['n2', 2],
       ['n3', 1],
     ]);
-    // The expectation is retired with the mirror write, not left to age out.
-    expect(await db.expectedMutations.count()).toBe(0);
+    // The create's expectation is left for the browser echo to consume.
+    expect(await db.expectedMutations.count()).toBe(1);
   });
 
   it('creates inside the canonical folder the plan named as parent', async () => {
