@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -62,10 +63,10 @@ type LinkRun struct {
 
 // DuplicateGroup is one group of same-URL bookmarks.
 type DuplicateGroup struct {
-	ID     string           `json:"id"`
-	Kind   string           `json:"kind"` // exact | suspected
-	Reason string           `json:"reason,omitempty"`
-	Items  []DuplicateItem  `json:"items"`
+	ID     string          `json:"id"`
+	Kind   string          `json:"kind"` // exact | suspected
+	Reason string          `json:"reason,omitempty"`
+	Items  []DuplicateItem `json:"items"`
 }
 
 // DuplicateItem is one member of a duplicate group.
@@ -86,9 +87,11 @@ type Service struct {
 	checker LinkChecker
 }
 
-// NewService returns an organizer service using the real HTTP checker.
-func NewService(trees TreeSource) *Service {
-	return &Service{trees: trees, runs: map[canonical.SpaceID]*LinkRun{}, checker: httpChecker()}
+// NewService returns an organizer service using the real HTTP checker under
+// the given outbound policy. The zero policy is the safe one: only
+// publicly routable destinations are checked.
+func NewService(trees TreeSource, outbound Outbound) *Service {
+	return &Service{trees: trees, runs: map[canonical.SpaceID]*LinkRun{}, checker: httpChecker(outbound)}
 }
 
 // NewServiceWithChecker returns an organizer service with a custom checker.
@@ -334,15 +337,49 @@ func normalizeURL(raw string) (key string, reasons []string) {
 }
 
 // httpChecker performs a bounded HEAD-first check with a GET fallback,
-// classifying by final status (doc 12 §2).
-func httpChecker() LinkChecker {
+// classifying by final status (doc 12 §2). Every destination passes the
+// outbound policy: the address is resolved and checked here and then dialed
+// directly, and each redirect hop is validated again.
+func httpChecker(ob Outbound) LinkChecker {
+	const (
+		checkTimeout  = 8 * time.Second
+		maxRedirects  = 5
+		maxResponseKB = 4 << 10
+	)
+	dialValidated := ob.Dial
+	if dialValidated == nil {
+		dialer := &net.Dialer{Timeout: checkTimeout}
+		dialValidated = dialer.DialContext
+	}
 	client := &http.Client{
-		Timeout: 8 * time.Second,
+		Timeout: checkTimeout,
+		// A proxy would fetch the real target somewhere this policy has no
+		// say, so the transport always connects directly.
+		Transport: &http.Transport{
+			ForceAttemptHTTP2:     true,
+			TLSHandshakeTimeout:   checkTimeout,
+			ExpectContinueTimeout: time.Second,
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				host, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				target, err := ob.validateTarget(ctx, host)
+				if err != nil {
+					return nil, err
+				}
+				// Dial the address that was just checked; the name is never
+				// resolved a second time, so DNS cannot move underneath.
+				return dialValidated(ctx, network, net.JoinHostPort(target, port))
+			},
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
+			if len(via) >= maxRedirects {
 				return errors.New("too many redirects")
 			}
-			return nil
+			// A public front page that hops to an internal address is the
+			// whole point of this check, so validate every leg.
+			return validateTargetURL(req.URL)
 		},
 	}
 	return func(ctx context.Context, rawURL string) LinkOutcome {
@@ -356,6 +393,10 @@ func httpChecker() LinkChecker {
 				FinalURL:    finalURL,
 			}
 		}
+		// Only http(s), no credentials in the url, no non-network scheme.
+		if err := validateURL(rawURL); err != nil {
+			return outcome("network_error", 0, "ssrf_blocked", "")
+		}
 		try := func(method string) (int, string, error) {
 			req, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
 			if err != nil {
@@ -366,15 +407,20 @@ func httpChecker() LinkChecker {
 				return 0, "", err
 			}
 			defer resp.Body.Close()
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseKB))
 			return resp.StatusCode, resp.Request.URL.String(), nil
 		}
 		status, final, err := try("HEAD")
-		if err != nil || status == http.StatusMethodNotAllowed || status == http.StatusNotImplemented {
-			// HEAD may be unsupported; fall back to a bounded GET.
+		if !errors.Is(err, ErrBlocked) &&
+			(err != nil || status == http.StatusMethodNotAllowed || status == http.StatusNotImplemented) {
+			// HEAD may be unsupported; fall back to a bounded GET. A refused
+			// destination is final, retrying it only asks twice.
 			status, final, err = try("GET")
 		}
 		if err != nil {
+			if errors.Is(err, ErrBlocked) {
+				return outcome("network_error", 0, "ssrf_blocked", "")
+			}
 			class, errType := "network_error", "request_failed"
 			if strings.Contains(err.Error(), "timeout") || ctx.Err() == context.DeadlineExceeded {
 				class, errType = "timeout", "timeout"

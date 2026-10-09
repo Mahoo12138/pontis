@@ -35,6 +35,7 @@ public_url = "https://bm.example.com"
 log_level = "debug"
 trusted_proxies = ["10.0.0.0/8", "172.16.0.0/12"]
 shutdown_timeout = "30s"
+link_check_allow_cidrs = ["192.168.7.0/24", "10.10.0.0/16"]
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -61,6 +62,21 @@ shutdown_timeout = "30s"
 	if cfg.ShutdownTimeout != 30*time.Second {
 		t.Errorf("ShutdownTimeout = %v", cfg.ShutdownTimeout)
 	}
+	if got := cfg.LinkCheckAllow; len(got) != 2 || got[0] != "192.168.7.0/24" {
+		t.Errorf("LinkCheckAllow = %v", got)
+	}
+}
+
+// A link check that reaches the operator's LAN has to be written down
+// somewhere; the default grants nothing.
+func TestLinkCheckAllowlistDefaultsEmpty(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.LinkCheckAllow) != 0 {
+		t.Errorf("LinkCheckAllow = %v, want empty", cfg.LinkCheckAllow)
+	}
 }
 
 func TestEnvOverrides(t *testing.T) {
@@ -68,6 +84,7 @@ func TestEnvOverrides(t *testing.T) {
 	t.Setenv("PONTIS_DATA_DIR", "d2")
 	t.Setenv("PONTIS_LOG_LEVEL", "warn")
 	t.Setenv("PONTIS_TRUSTED_PROXIES", "1.2.3.4, 5.6.7.8")
+	t.Setenv("PONTIS_LINK_CHECK_ALLOW_CIDRS", "192.168.7.0/24")
 	t.Setenv("PONTIS_SHUTDOWN_TIMEOUT", "5s")
 
 	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
@@ -88,6 +105,9 @@ func TestEnvOverrides(t *testing.T) {
 	}
 	if len(cfg.TrustedProxies) != 2 || cfg.TrustedProxies[0] != "1.2.3.4" {
 		t.Errorf("TrustedProxies = %v", cfg.TrustedProxies)
+	}
+	if got := cfg.LinkCheckAllow; len(got) != 1 || got[0] != "192.168.7.0/24" {
+		t.Errorf("LinkCheckAllow = %v", got)
 	}
 }
 

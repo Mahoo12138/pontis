@@ -53,7 +53,8 @@ Network Error
 - max redirect；
 - bounded response read；
 - global concurrency；
-- per-host concurrency。
+- per-host concurrency；
+- outbound network policy：Link Check 用服务器自己的网络身份发起，因此默认只允许公网可路由地址。loopback、link-local（云 metadata 所在）、RFC1918/ULA、CGNAT、multicast、6to4/Teredo 一律拒绝，`error_type = ssrf_blocked`；URL 的 scheme 必须是 http/https 且不得带 credentials。域名解析出的每个地址都要校验，校验通过的那个地址才被直接 dial（不再二次解析），每一跳 redirect 都重新校验。管理员可以为受管 LAN 配置 allowlist（`link_check_allow_cidrs` / `PONTIS_LINK_CHECK_ALLOW_CIDRS`），allowlist 只能打开私有段，永远打不开 loopback/link-local 这一层。
 
 404 是正常 LinkCheck Result，不是 Job Failure。
 

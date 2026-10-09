@@ -72,7 +72,16 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	organizerSvc := organizer.NewService(libraryStore)
+	allow, err := organizer.ParseAllowlist(cfg.LinkCheckAllow)
+	if err != nil {
+		return err
+	}
+	if len(allow) > 0 {
+		// Worth a line in the log: these ranges are servers this instance
+		// will connect to on behalf of any user's bookmark.
+		logger.Info("link check may reach operator-approved ranges", "count", len(allow))
+	}
+	organizerSvc := organizer.NewService(libraryStore, organizer.Outbound{Allow: allow})
 	jobSvc, err := buildJobService(db, backupSvc, organizerSvc, accountStore, libraryStore)
 	if err != nil {
 		return err

@@ -64,7 +64,7 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 		Library:       library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db), changesetSvc),
 		Changesets:    changesetSvc,
 		Tokens:        token.NewService(sqlite.NewTokenStore(db)),
-		Organizer:     organizer.NewService(sqlite.NewLibraryStore(db)),
+		Organizer:     organizer.NewService(sqlite.NewLibraryStore(db), organizer.Outbound{}),
 		Transfer:      transfer.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db), changesetSvc),
 		Plaza:         plaza.NewService(sqlite.NewPublicationStore(db), library.NewService(sqlite.NewLibraryStore(db), sqlite.NewStore(db), changesetSvc), changesetSvc, sqlite.NewStore(db)),
 		Backups:       backupSvc,
