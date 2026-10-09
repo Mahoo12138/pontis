@@ -7,7 +7,7 @@ import { createChromiumAdapter } from '../core/browser/chromium';
 import type { BrowserEvent } from '../core/browser/types';
 import { ApiClient } from '../core/transport/client';
 import { BootstrapStore } from '../core/store/bootstrap';
-import { PontisDB, logDiagnostic, type ReconDecision } from '../core/store/db';
+import { PontisDB, logDiagnostic, releaseAllRunLocks, type ReconDecision } from '../core/store/db';
 import { EventProcessor } from '../core/sync/eventProcessor';
 import { integrityCheck } from '../core/sync/integrity';
 import { InitialReconciler } from '../core/sync/initialReconcile';
@@ -186,8 +186,16 @@ export default defineBackground(() => {
   adapter.onMoved((node, oldParentId) => dispatch({ kind: 'moved', node, oldParentId }));
   adapter.onRemoved((node) => dispatch({ kind: 'removed', node }));
 
-  // Sync on worker wake (covers popup-open, event wake, update).
-  void runSync('wake');
+  // A lock left behind belongs to the worker this one replaced: MV3 runs a
+  // single service worker, so anything still held was abandoned by a kill.
+  void releaseAllRunLocks(db)
+    .then((cleared) => {
+      if (cleared > 0) {
+        return logDiagnostic(db, 'warn', 'background', 'cleared run locks left by the previous worker', { cleared });
+      }
+      return undefined;
+    })
+    .then(() => runSync('wake'));
 });
 
 function isMessage(msg: unknown, type: string): boolean {
