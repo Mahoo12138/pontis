@@ -27,7 +27,13 @@ export interface BrowserAdapter {
   /** Resolve a browser id. Returns null for an id the browser does not know. */
   getNode(id: string): Promise<BrowserNode | null>;
   getChildren(parentId: string): Promise<BrowserNode[]>;
-  create(parentId: string, details: { title: string; url?: string }): Promise<BrowserNode>;
+  /**
+   * Create under `parentId`. `index` is the position among the parent's
+   * children after creation; omitting it appends. Projection needs this:
+   * recording a canonical position the browser never received makes the
+   * mirror claim an order the user's bookmark bar does not have.
+   */
+  create(parentId: string, details: { title: string; url?: string; index?: number | null }): Promise<BrowserNode>;
   update(id: string, changes: { title?: string; url?: string }): Promise<void>;
   move(id: string, parentId: string, index: number | null): Promise<void>;
   /**

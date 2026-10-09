@@ -74,18 +74,25 @@ export class FakeBrowserAdapter implements BrowserAdapter {
     return this.childrenOf(parentId).sort((a, b) => a.index - b.index);
   }
 
-  async create(parentId: string, details: { title: string; url?: string }): Promise<BrowserNode> {
+  async create(parentId: string, details: { title: string; url?: string; index?: number | null }): Promise<BrowserNode> {
     await this.options.onMutation?.(`create:${parentId}:${details.title}`);
     this.calls.push(`create:${parentId}:${details.title}`);
+    const ordered = await this.getChildren(parentId);
+    const at =
+      details.index == null ? ordered.length : Math.max(0, Math.min(details.index, ordered.length));
     const node: BrowserNode = {
       id: `b${this.nextId++}`,
       parentId,
       title: details.title,
       url: details.url ?? null,
       type: details.url ? 'bookmark' : 'folder',
-      index: this.childrenOf(parentId).length,
+      index: at,
     };
     this.nodes.set(node.id, node);
+    ordered.splice(at, 0, node);
+    ordered.forEach((n, i) => {
+      n.index = i;
+    });
     return node;
   }
 

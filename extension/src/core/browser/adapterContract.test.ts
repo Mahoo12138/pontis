@@ -113,6 +113,24 @@ for (const impl of impls) {
       expect((await adapter.getChildren(rootId)).map((n) => n.id)).toContain(b.id);
     });
 
+    it('creates at an explicit index and appends when omitted', async () => {
+      const { adapter, rootId } = impl.build();
+      const a = await adapter.create(rootId, { title: 'A', url: 'https://a.test' });
+      const b = await adapter.create(rootId, { title: 'B', url: 'https://b.test' });
+
+      const mid = await adapter.create(rootId, { title: 'Mid', url: 'https://mid.test', index: 1 });
+      expect((await adapter.getChildren(rootId)).map((n) => n.title)).toEqual(['A', 'Mid', 'B']);
+
+      await adapter.create(rootId, { title: 'Last', url: 'https://last.test' });
+      expect((await adapter.getChildren(rootId)).map((n) => n.title)).toEqual(['A', 'Mid', 'B', 'Last']);
+
+      // An out-of-range index clamps instead of rejecting.
+      await adapter.create(rootId, { title: 'Far', url: 'https://far.test', index: 99 });
+      expect((await adapter.getChildren(rootId)).map((n) => n.title)).toEqual(['A', 'Mid', 'B', 'Last', 'Far']);
+      expect(await adapter.getNode(mid.id)).toMatchObject({ title: 'Mid' });
+      expect(a.id).not.toBe(b.id);
+    });
+
     it('renumbers the remaining siblings after a removal', async () => {
       const { adapter, rootId } = impl.build();
       const a = await adapter.create(rootId, { title: 'A', url: 'https://a.test' });

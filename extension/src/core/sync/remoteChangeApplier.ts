@@ -141,7 +141,12 @@ export class RemoteChangeApplier {
         satisfied = node == null;
       } else if (node) {
         if (exp.kind === 'move') {
-          satisfied = node.parentId === exp.parentBrowserId;
+          // Parent equality is not enough: a same-parent reorder that
+          // crashed before the API call would otherwise look satisfied and
+          // strand the browser in the old order.
+          const inPlace = node.parentId === exp.parentBrowserId;
+          const rank = inPlace ? await this.mappedRank(bindingId, exp.parentBrowserId!, node.id) : null;
+          satisfied = inPlace && (exp.position == null || rank === exp.position);
         } else if (exp.kind === 'update_title') {
           satisfied = node.title === exp.title;
         } else if (exp.kind === 'update_url') {
@@ -209,9 +214,11 @@ export class RemoteChangeApplier {
       createdAt: Date.now(),
     };
     await this.db.expectedMutations.add(exp);
+    const index = await this.browserIndexForPosition(binding.id, parentBrowserId, payload.position, null);
     const created = await this.adapter.create(parentBrowserId, {
       title: payload.title,
       url: payload.url || undefined,
+      index,
     });
     await this.db.transaction('rw', [this.db.bindings, this.db.localNodes, this.db.expectedMutations], async () => {
       const b = await this.db.bindings.get(binding.id);
@@ -227,6 +234,9 @@ export class RemoteChangeApplier {
         parentBrowserId: created.parentId,
         position: payload.position,
       });
+      // The server's positions for this parent are now dense; adopt the
+      // browser order so the mirrors say the same thing.
+      await this.mirrorPositions(binding.id, parentBrowserId);
       await this.advanceApplied(b, change.revision);
     });
   }
@@ -354,7 +364,7 @@ export class RemoteChangeApplier {
       return;
     }
 
-    const index = await this.browserIndexForPosition(binding.id, parentBrowserId, payload.position, change.node_id);
+    const index = await this.browserIndexForPosition(binding.id, parentBrowserId, payload.position, mirror.browserId);
     const exp: ExpectedMutationRecord = {
       bindingId: binding.id,
       revision: change.revision,
@@ -372,6 +382,11 @@ export class RemoteChangeApplier {
       if (!b) return;
       await this.db.expectedMutations.delete(exp.id!);
       await this.db.localNodes.put({ ...mirror, parentBrowserId, position: payload.position });
+      // A move renumbers the destination *and* the parent it left.
+      await this.mirrorPositions(binding.id, parentBrowserId);
+      if (mirror.parentBrowserId && mirror.parentBrowserId !== parentBrowserId) {
+        await this.mirrorPositions(binding.id, mirror.parentBrowserId);
+      }
       await this.advanceApplied(b, change.revision);
     });
   }
@@ -435,25 +450,70 @@ export class RemoteChangeApplier {
   }
 
   /**
-   * Translate a canonical sibling position into a browser child index:
-   * insert before the first mapped sibling whose canonical position is
-   * greater; append when none. Separators etc. stay local-only (doc 05 §12).
+   * Translate a canonical sibling position into a browser child index.
+   *
+   * The browser removes the node first and then inserts at the index, so the
+   * answer is the browser slot of the mapped sibling that must end up
+   * directly after it: the (position)-th mapped sibling, excluding the node
+   * being placed. Appending is the length of that same list.
+   *
+   * Browser ids and canonical ids are different namespaces and are only ever
+   * compared within their own kind, and unmapped local-only children (a
+   * separator, a folder outside the projection) still occupy browser slots,
+   * so the index is looked up in the full child list.
    */
   private async browserIndexForPosition(
     bindingId: string,
     parentBrowserId: string,
     position: number,
-    movedCanonicalId: string,
+    movedBrowserId: string | null,
   ): Promise<number> {
     const children = await this.adapter.getChildren(parentBrowserId);
-    for (const child of children) {
-      if (child.id === movedCanonicalId) continue;
+    const withoutMoved = children.filter((c) => c.id !== movedBrowserId);
+    const mapped: { id: string; position: number }[] = [];
+    for (const child of withoutMoved) {
       const m: LocalNodeRecord | undefined = await this.db.localNodes.get([bindingId, child.id]);
-      if (m?.canonicalId && m.position != null && m.position > position) {
-        return child.index;
-      }
+      if (m?.canonicalId && m.position != null) mapped.push({ id: child.id, position: m.position });
     }
-    return null as unknown as number; // append → adapter passes undefined index
+    mapped.sort((a, b) => a.position - b.position);
+    const target = mapped[position];
+    if (!target) return withoutMoved.length;
+    const at = withoutMoved.findIndex((c) => c.id === target.id);
+    return at < 0 ? withoutMoved.length : at;
+  }
+
+  /**
+   * Re-read the browser's order for a parent and mirror it onto the mapped
+   * children. A single CREATE/MOVE change renumbers the whole sibling set on
+   * the server; without this the mirrors keep the pre-change positions and
+   * every later index computation is off by one.
+   */
+  private async mirrorPositions(bindingId: string, parentBrowserId: string): Promise<void> {
+    const children = await this.adapter.getChildren(parentBrowserId);
+    let rank = 0;
+    for (const child of children) {
+      const m = await this.db.localNodes.get([bindingId, child.id]);
+      if (!m?.canonicalId) continue;
+      if (m.position !== rank) await this.db.localNodes.put({ ...m, position: rank });
+      rank += 1;
+    }
+  }
+
+  /**
+   * A node's rank among the *mapped* children in the browser's real sibling
+   * order. Equal to its canonical position when the projection holds, which
+   * is what makes an order regression detectable after a crash: parent alone
+   * cannot tell a same-parent reorder from one that never ran.
+   */
+  private async mappedRank(bindingId: string, parentBrowserId: string, browserId: string): Promise<number | null> {
+    const children = await this.adapter.getChildren(parentBrowserId);
+    let rank = 0;
+    for (const child of children) {
+      if (child.id === browserId) return rank;
+      const m = await this.db.localNodes.get([bindingId, child.id]);
+      if (m?.canonicalId) rank += 1;
+    }
+    return null;
   }
 
   /** Commit a resolved expectation: repair the mirror and advance. */
@@ -475,6 +535,12 @@ export class RemoteChangeApplier {
           url: node?.url ?? exp.url ?? mirror.url,
           position: exp.position ?? mirror.position,
         });
+      }
+      const parentId = node?.parentId ?? exp.parentBrowserId ?? mirror?.parentBrowserId ?? null;
+      if (parentId && (exp.kind === 'move' || exp.kind === 'create')) {
+        await this.mirrorPositions(b.id, parentId);
+        const source = exp.kind === 'move' ? mirror?.parentBrowserId : null;
+        if (source && source !== parentId) await this.mirrorPositions(b.id, source);
       }
       await this.advanceApplied(b, exp.revision);
     });

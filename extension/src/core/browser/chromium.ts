@@ -73,7 +73,17 @@ export function createChromiumAdapter(api: ChromeBookmarksApi): BrowserAdapter {
   return {
     getNode,
     getChildren: async (parentId) => (await api.getChildren(parentId)).map(toNode),
-    create: async (parentId, details) => toNode(await api.create({ parentId, title: details.title, url: details.url })),
+    create: async (parentId, details) =>
+      toNode(
+        await api.create({
+          parentId,
+          title: details.title,
+          url: details.url,
+          // Chrome treats an explicit undefined index as "append", but the
+          // key must stay absent for the parameter to be ignored at all.
+          ...(details.index == null ? {} : { index: details.index }),
+        }),
+      ),
     update: async (id, changes) => {
       await api.update(id, changes);
     },
