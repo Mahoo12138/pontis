@@ -18,7 +18,9 @@ import (
 )
 
 // sessionDTO is a reconciliation session as the client sees it. Phase, not
-// state, carries the progress a client resumes after an MV3 restart.
+// state, carries the progress a client resumes after an MV3 restart. A
+// completed session has no phase left to resume from, so the field is absent
+// rather than an empty string the client would have to special-case.
 type sessionDTO struct {
 	ID              string `json:"id"`
 	BindingID       string `json:"binding_id"`
@@ -26,7 +28,7 @@ type sessionDTO struct {
 	Type            string `json:"type"`
 	Reason          string `json:"reason,omitempty"`
 	State           string `json:"state"`
-	Phase           string `json:"phase"`
+	Phase           string `json:"phase,omitempty"`
 	SourceEpoch     int64  `json:"source_epoch"`
 	SourceRevision  int64  `json:"source_revision"`
 	TargetEpoch     int64  `json:"target_epoch"`

@@ -3,7 +3,14 @@
 // fact lives here, and mirror + pending op updates share one transaction.
 
 import Dexie, { type Table } from 'dexie';
-import type { NodeType, OpStatus, OpType, ParentRefWire } from '../protocol/types';
+import type {
+  NodeType,
+  OpStatus,
+  OpType,
+  ParentRefWire,
+  ReconciliationIssueWire,
+  ReconciliationPhase,
+} from '../protocol/types';
 
 export type BindingMode = 'full' | 'partial';
 
@@ -12,6 +19,8 @@ export type BindingState =
   | 'paused'
   | 'mount_missing'
   | 'needs_recovery'
+  /** Freshly created binding: only an initial reconciliation can activate it (doc 08 §11). */
+  | 'pending_initial'
   /** Initial sync / mapping-lost reconciliation running (doc 06 §4). */
   | 'initializing'
   /** Full resync running (doc 06 §7). */
@@ -184,6 +193,19 @@ export interface ReconSessionRecord {
   snapshotApplied?: boolean;
   /** Recovery intents already reviewed; resync may replay the re-created ops. */
   intentReviewed?: boolean;
+  // --- server-driven lifecycle (doc 08 §11-§13) ---
+  /** The server reconciliation session this client session mirrors. */
+  serverSessionId?: string;
+  /** Last phase the server reported; the resume anchor after an MV3 kill. */
+  serverPhase?: ReconciliationPhase;
+  /** Plan hash the commit must echo back. */
+  planHash?: string;
+  /** Open questions the server still wants answered, for the UI to render. */
+  issues?: ReconciliationIssueWire[];
+  /** Client snapshot local_ref → browser node id, used by the step applier. */
+  localRefs?: Record<string, string>;
+  /** Revision the server committed its plan at (the new baseline). */
+  commitRevision?: number;
   error?: string;
   createdAt: number;
   updatedAt: number;

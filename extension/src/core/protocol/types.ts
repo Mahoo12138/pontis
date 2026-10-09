@@ -247,9 +247,10 @@ export interface ReconciliationSessionWire {
   binding_id: string;
   space_id: string;
   type: ReconciliationType;
-  reason: string;
+  reason?: string;
   state: ReconciliationState;
-  phase: ReconciliationPhase;
+  /** Absent once the session is terminal: there is no phase left to resume. */
+  phase?: ReconciliationPhase;
   source_epoch: number;
   source_revision: number;
   target_epoch: number;

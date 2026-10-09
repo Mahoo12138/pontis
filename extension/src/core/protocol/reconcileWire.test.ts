@@ -49,7 +49,9 @@ describe('reconciliation lifecycle envelope', () => {
   it('reads the binding a completed session wrote back', () => {
     const body = parseReconciliationEnvelope(golden('reconcile-session-completed-v1.json'));
     expect(body.session.state).toBe('completed');
-    expect(body.session.phase).toBe('committed');
+    // Completion is terminal: the session reports no phase to resume from,
+    // so the client branches on state first and never sees an empty string.
+    expect(body.session.phase).toBeUndefined();
     // The baseline the device starts its first ordinary round from.
     expect(body.session.commit_revision).toBe(121);
     expect(body.issues).toEqual([]);
@@ -64,6 +66,14 @@ describe('reconciliation lifecycle envelope', () => {
     expect(() => parseReconciliationEnvelope({ issues: planned['issues'] })).toThrow(ProtocolShapeError);
     expect(() => parseReconciliationEnvelope({ ...planned, issues: null })).toThrow(ProtocolShapeError);
     expect(() => parseReconciliationEnvelope({ session: planned['session'] })).toThrow(ProtocolShapeError);
+  });
+
+  it('refuses a session phase that is not a string', () => {
+    const completed = golden('reconcile-session-completed-v1.json') as Record<string, unknown>;
+    const session = (completed['session'] ?? {}) as Record<string, unknown>;
+    expect(() => parseReconciliationEnvelope({ ...completed, session: { ...session, phase: 42 } })).toThrow(
+      ProtocolShapeError,
+    );
   });
 });
 

@@ -123,9 +123,9 @@ export function decodeReconciliationSession(data: unknown): ReconciliationSessio
     binding_id: str(raw.binding_id),
     space_id: str(raw.space_id),
     type: str(raw.type) as ReconciliationSession['type'],
-    reason: str(raw.reason),
+    reason: optStr(raw.reason),
     state: str(raw.state) as ReconciliationSession['state'],
-    phase: str(raw.phase),
+    phase: optStr(raw.phase) as ReconciliationSession['phase'],
     source_epoch: num(raw.source_epoch),
     source_revision: num(raw.source_revision),
     target_epoch: num(raw.target_epoch),
@@ -221,6 +221,11 @@ function str(v: unknown): string {
     throw new Error(`protocol: expected string, got ${JSON.stringify(v)}`);
   }
   return v;
+}
+
+/** A field the Go DTO marshals with omitempty: absent is a valid answer. */
+function optStr(v: unknown): string | undefined {
+  return v === undefined ? undefined : str(v);
 }
 
 /**

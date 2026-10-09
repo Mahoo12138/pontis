@@ -77,6 +77,11 @@ function requireString(value: unknown, field: string): void {
   }
 }
 
+/** A field the server may leave out entirely: checked only when present. */
+function optionalString(value: unknown, field: string): void {
+  if (value !== undefined) requireString(value, field);
+}
+
 function objectAt(value: unknown, field: string): Record<string, unknown> {
   if (value == null || typeof value !== 'object') {
     throw new ProtocolShapeError(`field "${field}" must be an object, got ${JSON.stringify(value)}`);
@@ -94,7 +99,9 @@ export function parseReconciliationEnvelope(json: unknown): ReconciliationEnvelo
   const session = objectAt(body.session, 'session');
   requireString(session.id, 'session.id');
   requireString(session.state, 'session.state');
-  requireString(session.phase, 'session.phase');
+  // A terminal session reports no phase (doc 08 §11); the client branches on
+  // state first, so an absent phase is a valid answer, a wrong type is not.
+  optionalString(session.phase, 'session.phase');
   requireNumber(session.commit_revision, 'session.commit_revision');
   requireArray(body.issues, 'issues');
   for (const raw of body.issues as unknown[]) {

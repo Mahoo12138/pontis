@@ -84,6 +84,7 @@ export function App() {
 function StateBadge({ state }: { state: BindingRecord['state'] }) {
   const map: Record<BindingRecord['state'], { color: string; label: string }> = {
     active: { color: 'green', label: '同步中' },
+    pending_initial: { color: 'blue', label: '待初始化' },
     paused: { color: 'gray', label: '已暂停' },
     mount_missing: { color: 'orange', label: '目录缺失' },
     needs_recovery: { color: 'red', label: '需要恢复' },

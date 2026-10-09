@@ -208,7 +208,9 @@ func goldenFixtures() []fixtureFile {
 				BindingID: "0198c0de-7000-7000-8000-000000000010",
 				SpaceID:   "0198c0de-7000-7000-8000-000000000020",
 				Type:      "initial", Reason: "first synchronization",
-				State: "completed", Phase: "committed",
+				// A completed session carries no phase: there is nothing left
+				// for a client to resume.
+				State:       "completed",
 				SourceEpoch: 1, SourceRevision: 44, TargetEpoch: 1, TargetRevision: 120,
 				PlanHash:        "6f7e8d9c0b1a2f3e4d5c6b7a8990a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
 				ServerCommitted: true, CommitRevision: 121,

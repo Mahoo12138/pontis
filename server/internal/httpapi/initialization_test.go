@@ -122,6 +122,10 @@ func initializeBinding(t *testing.T, ts *httptest.Server, deviceAuth map[string]
 	committed := mustCall(t, "POST", base+"/reconciliations/"+sessionID+"/commit", deviceAuth, nil)
 	commitRevision = fieldInt(t, sessionOf(t, committed), "commit_revision")
 
+	if fieldString(sessionOf(t, planned), "phase") != string(reconcile.PhasePlanned) {
+		t.Fatalf("planned session phase = %v, want %s", sessionOf(t, planned)["phase"], reconcile.PhasePlanned)
+	}
+
 	steps := mustCall(t, "GET", base+"/reconciliations/"+sessionID+"/steps", deviceAuth, nil)
 	if _, ok := steps["steps"].([]any); !ok {
 		t.Fatalf("steps payload has no step list: %v", steps)
@@ -130,6 +134,11 @@ func initializeBinding(t *testing.T, ts *httptest.Server, deviceAuth map[string]
 	done := mustCall(t, "POST", base+"/reconciliations/"+sessionID+"/complete", deviceAuth, nil)
 	if state := fieldString(sessionOf(t, done), "state"); state != string(reconcile.StateCompleted) {
 		t.Fatalf("session state after complete = %s", state)
+	}
+	// A finished session has no phase left to resume from, so the field is
+	// absent rather than an empty string every client must special-case.
+	if _, hasPhase := sessionOf(t, done)["phase"]; hasPhase {
+		t.Fatalf("completed session carries a phase: %v", sessionOf(t, done))
 	}
 	binding, _ := done["binding"].(map[string]any)
 	if binding == nil {

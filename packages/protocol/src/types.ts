@@ -157,6 +157,12 @@ export interface SnapshotNode {
 }
 
 export type ReconciliationType = 'initial' | 'full_resync' | 'recovery';
+export type ReconciliationPhase =
+  | 'collecting'
+  | 'snapshot_ready'
+  | 'server_ready'
+  | 'planned'
+  | 'committed';
 export type ReconciliationState = 'running' | 'waiting_user' | 'completed' | 'failed';
 
 export interface ReconciliationIssue {
@@ -173,9 +179,14 @@ export interface ReconciliationSession {
   binding_id: string;
   space_id: string;
   type: ReconciliationType;
-  reason: string;
+  /** Absent when the server opened the session without a reason. */
+  reason?: string;
   state: ReconciliationState;
-  phase: string;
+  /**
+   * The resumable progress marker. Absent once the session is terminal:
+   * a completed reconciliation has no phase left to continue from.
+   */
+  phase?: ReconciliationPhase;
   source_epoch: number;
   source_revision: number;
   target_epoch: number;

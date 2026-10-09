@@ -66,7 +66,10 @@ export class PairingService {
       spaceId: wire.space_id,
       spaceName,
       mode: 'partial',
-      state: 'active',
+      // The server opens a fresh binding as pending_initial and only an
+      // initial reconciliation activates it; syncing it before that would
+      // apply changes onto an unmapped tree.
+      state: wire.state === 'active' ? 'active' : 'pending_initial',
       epoch: wire.epoch,
       appliedRevision: wire.applied_revision,
       receivedRevision: wire.received_revision,

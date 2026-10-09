@@ -6,7 +6,6 @@
     "type": "initial",
     "reason": "first synchronization",
     "state": "completed",
-    "phase": "committed",
     "source_epoch": 1,
     "source_revision": 44,
     "target_epoch": 1,

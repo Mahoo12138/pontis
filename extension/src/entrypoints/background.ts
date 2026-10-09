@@ -10,6 +10,7 @@ import { BootstrapStore } from '../core/store/bootstrap';
 import { PontisDB, logDiagnostic, type ReconDecision } from '../core/store/db';
 import { EventProcessor } from '../core/sync/eventProcessor';
 import { integrityCheck } from '../core/sync/integrity';
+import { InitialReconciler } from '../core/sync/initialReconcile';
 import { InitialSyncEngine } from '../core/sync/initialSync';
 import { RemoteChangeApplier } from '../core/sync/remoteChangeApplier';
 import { ResyncService, type IntentDecision } from '../core/sync/resync';
@@ -29,6 +30,7 @@ export default defineBackground(() => {
   const coordinator = new SyncCoordinator(db, applier, client, client);
   const engine = new InitialSyncEngine(db, adapter, client, coordinator);
   const resync = new ResyncService(db, client, bootstrap, coordinator, engine);
+  const initialReconcile = new InitialReconciler(db, adapter, client);
 
   // --- sync triggers (doc 05 §15) ---
 
@@ -43,6 +45,23 @@ export default defineBackground(() => {
 
   async function runSync(trigger: string): Promise<void> {
     try {
+      // A pending binding has no mapping yet, so incremental sync must not
+      // touch it: the server-driven initial reconciliation is the only thing
+      // that turns it active (doc 08 §11).
+      const pending = await db.bindings
+        .where('state')
+        .anyOf(['pending_initial', 'initializing'])
+        .toArray();
+      for (const b of pending) {
+        try {
+          await initialReconcile.runBinding(b.id);
+        } catch (err) {
+          await logDiagnostic(db, 'warn', 'background', 'initial reconciliation round failed', {
+            bindingId: b.id,
+            error: String(err),
+          });
+        }
+      }
       await coordinator.syncAll();
       // Recovery is idempotent (doc 06 §7): attempt it on every trigger
       // for bindings stuck in needs_recovery.
@@ -117,6 +136,14 @@ export default defineBackground(() => {
       const { bindingId } = msg as { bindingId: string };
       void integrityCheck(db, engine, bindingId)
         .then((result) => sendResponse({ ok: true, result }))
+        .catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
+    if (isMessage(msg, 'pontis/initial-reconcile-answer')) {
+      const { bindingId, decisions } = msg as { bindingId: string; decisions: Record<string, string> };
+      void initialReconcile
+        .answer(bindingId, decisions)
+        .then((outcome) => sendResponse({ ok: true, outcome }))
         .catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }
