@@ -225,11 +225,20 @@ export class RemoteChangeApplier {
     }
     const parentBrowserId = parent.browserId;
 
-    // Ensure-state: already satisfied?
+    // One canonical id owns one browser node. A mirror row for it means the
+    // node is already here — creating again would split the same server node
+    // across two bookmarks and the user would have to delete one by hand.
+    // Only a node the user really deleted locally lets this change create.
     const existing = await findMirrorByCanonical(this.db, binding.id, change.node_id);
-    if (existing && existing.parentBrowserId === parentBrowserId && existing.title === payload.title) {
+    if (existing && (await this.adapter.getNode(existing.browserId))) {
       await this.advanceTo(binding.id, change.revision);
       return;
+    }
+    if (existing) {
+      // The mirror claims a node the browser no longer has: drop that stale
+      // subtree first, otherwise the create below maps the same id twice.
+      const stale = await collectSubtree(this.db, binding.id, existing.browserId);
+      await this.db.localNodes.bulkDelete(stale.map((r) => [binding.id, r.browserId] as [string, string]));
     }
 
     // Two-phase CREATE (doc 05 §8): a local create that produced this
@@ -543,14 +552,7 @@ export class RemoteChangeApplier {
    * every later index computation is off by one.
    */
   private async mirrorPositions(bindingId: string, parentBrowserId: string): Promise<void> {
-    const children = await this.adapter.getChildren(parentBrowserId);
-    let rank = 0;
-    for (const child of children) {
-      const m = await this.db.localNodes.get([bindingId, child.id]);
-      if (!m?.canonicalId) continue;
-      if (m.position !== rank) await this.db.localNodes.put({ ...m, position: rank });
-      rank += 1;
-    }
+    await syncMirrorPositions(this.db, this.adapter, bindingId, parentBrowserId);
   }
 
   /**
@@ -612,5 +614,27 @@ export class RemoteChangeApplier {
       binding.appliedRevision = revision;
       await this.db.bindings.put(binding);
     }
+  }
+}
+
+/**
+ * Re-read the browser's sibling order for one parent and write it onto the
+ * mapped children. The browser is the local source of truth for order, so
+ * every path that reshapes a parent's children (an incremental change, a
+ * reconciliation step) ends by adopting the order it just produced.
+ */
+export async function syncMirrorPositions(
+  db: PontisDB,
+  adapter: BrowserAdapter,
+  bindingId: string,
+  parentBrowserId: string,
+): Promise<void> {
+  const children = await adapter.getChildren(parentBrowserId);
+  let rank = 0;
+  for (const child of children) {
+    const m = await db.localNodes.get([bindingId, child.id]);
+    if (!m?.canonicalId) continue;
+    if (m.position !== rank) await db.localNodes.put({ ...m, position: rank });
+    rank += 1;
   }
 }

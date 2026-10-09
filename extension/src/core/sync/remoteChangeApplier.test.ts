@@ -114,6 +114,61 @@ describe('RemoteChangeApplier', () => {
     expect((await db.bindings.get(bindingId))?.appliedRevision).toBe(101);
   });
 
+  it('never gives one canonical id a second browser node', async () => {
+    adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
+    adapter.seed({ id: 'b1', parentId: 'f1', title: 'Same', url: 'https://github.com' });
+    await seedBinding();
+    // The first reconciliation mapped this browser node to the server node;
+    // the mirror carries the title the browser shows.
+    await db.localNodes.put({
+      bindingId,
+      browserId: 'b1',
+      canonicalId: 'n-1',
+      type: 'bookmark',
+      title: 'Same',
+      url: 'https://github.com',
+      parentBrowserId: 'f1',
+      position: 0,
+    });
+
+    // The server's create for n-1 arrives with its own title. Creating here
+    // would split one server node across two bookmarks.
+    await applier.applyChange(bindingId, createChange(101, 'n-1'));
+
+    expect(adapter.calls).toEqual([]);
+    expect(await adapter.getChildren('f1')).toHaveLength(1);
+    expect((await db.localNodes.toArray()).filter((m) => m.canonicalId === 'n-1')).toHaveLength(1);
+    expect((await db.bindings.get(bindingId))?.appliedRevision).toBe(101);
+  });
+
+  it('recreates a mapped node the browser lost, and only that one', async () => {
+    adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
+    adapter.seed({ id: 'b1', parentId: 'f1', title: 'GitHub', url: 'https://github.com' });
+    await seedBinding();
+    await db.localNodes.put({
+      bindingId,
+      browserId: 'b1',
+      canonicalId: 'n-1',
+      type: 'bookmark',
+      title: 'GitHub',
+      url: 'https://github.com',
+      parentBrowserId: 'f1',
+      position: 0,
+    });
+    // The user deleted it by hand: the mirror is stale, not satisfied.
+    await adapter.removeBookmark('b1');
+    adapter.calls.length = 0;
+
+    await applier.applyChange(bindingId, createChange(101, 'n-1'));
+
+    expect(adapter.calls).toEqual(['create:f1:GitHub']);
+    const kids = await adapter.getChildren('f1');
+    expect(kids.map((k) => k.title)).toEqual(['GitHub']);
+    const mapped = await db.localNodes.toArray();
+    expect(mapped.filter((m) => m.canonicalId === 'n-1')).toHaveLength(1);
+    expect(mapped.some((m) => m.browserId === 'b1')).toBe(false);
+  });
+
   it('rejects non-contiguous revisions', async () => {
     adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
     await seedBinding();

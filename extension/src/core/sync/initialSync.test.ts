@@ -140,12 +140,16 @@ describe('initial sync: both non-empty decisions', () => {
     await engine.resume(bindingId, 'use_server');
 
     const kids = await adapter.getChildren('f1');
-    // b-local removed; b1 kept (its server twin's authoritative title is
-    // applied through the normal回流) n2 applied in.
-    expect(kids.map((k) => k.title).sort()).toEqual(['Server only', 'Whatever']);
+    // b-local removed, n2 applied in. b1 keeps the title the browser has: the
+    // server twin's create carries no rename, and applying it as one would
+    // overwrite what the user sees for a node that is already accounted for.
+    expect(kids.map((k) => k.title).sort()).toEqual(['Same', 'Server only']);
     const mirrors = await db.localNodes.toArray();
     expect(mirrors.some((m) => m.browserId === 'b-local')).toBe(false);
-    expect(mirrors.some((m) => m.canonicalId === 'n1')).toBe(true);
+    // One canonical node, one browser node — the matched pair is not created
+    // a second time when the server's create arrives through the inbox.
+    expect(mirrors.filter((m) => m.canonicalId === 'n1')).toHaveLength(1);
+    expect(mirrors.filter((m) => m.canonicalId === 'n1')[0]?.browserId).toBe('b1');
   });
 
   it('use_browser uploads local-only and deletes server-only canonical nodes', async () => {

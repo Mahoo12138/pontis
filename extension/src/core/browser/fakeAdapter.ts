@@ -43,6 +43,10 @@ export class FakeBrowserAdapter implements BrowserAdapter {
       index: node.index ?? this.childrenOf(node.parentId).length,
     };
     this.nodes.set(full.id, full);
+    // Generated ids continue the seeded bN sequence: without this, a create
+    // would hand back an id the test already seeded and overwrite that node.
+    const seededIndex = /^b(\d+)$/.exec(full.id);
+    if (seededIndex) this.nextId = Math.max(this.nextId, Number(seededIndex[1]) + 1);
     return full;
   }
 
