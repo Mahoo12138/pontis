@@ -16,7 +16,7 @@ import {
   type SyncResponseWire,
   type TransferResponseWire,
 } from '../protocol/types';
-import type { RemoteChangeApplier } from './remoteChangeApplier';
+import { UnmappedProjectionError, type RemoteChangeApplier } from './remoteChangeApplier';
 
 export type SyncOutcome = 'synced' | 'needs-recovery' | 'inactive' | 'error';
 
@@ -98,18 +98,35 @@ export class SyncCoordinator {
       const afterPersist = await this.db.bindings.get(b.id);
       if (afterPersist && afterPersist.state === 'needs_recovery') return 'needs-recovery';
 
-      // Apply the inbox strictly serially (doc 05 §7).
+      // Apply the inbox strictly serially (doc 05 §7). A change that targets
+      // a lost mapping stops the run here: applied_revision keeps its last
+      // genuinely reached value and the binding asks for repair.
       const inbox = await this.db.remoteChanges
         .where('[bindingId+revision]')
         .between([b.id, b.appliedRevision + 1], [b.id, Number.MAX_SAFE_INTEGER], true, true)
         .sortBy('revision');
       for (const rec of inbox) {
-        await this.applier.applyChange(b.id, {
-          revision: rec.revision,
-          type: rec.type,
-          node_id: rec.nodeId,
-          payload: rec.payload as SyncResponseWire['changes'][number]['payload'],
-        });
+        try {
+          await this.applier.applyChange(b.id, {
+            revision: rec.revision,
+            type: rec.type,
+            node_id: rec.nodeId,
+            payload: rec.payload as SyncResponseWire['changes'][number]['payload'],
+          });
+        } catch (err) {
+          if (!(err instanceof UnmappedProjectionError)) throw err;
+          await this.db.bindings.update(b.id, {
+            state: 'needs_recovery',
+            recovery: { code: err.code, message: err.message },
+          });
+          await logDiagnostic(this.db, 'error', 'coordinator', 'remote change targets a lost mapping', {
+            bindingId: b.id,
+            revision: rec.revision,
+            kind: err.kind,
+            target: err.target,
+          });
+          return 'needs-recovery';
+        }
       }
 
       // HTTP success ≠ pending deletable: settle only what the server

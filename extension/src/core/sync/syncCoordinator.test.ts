@@ -198,4 +198,42 @@ describe('SyncCoordinator', () => {
     // Network failure must not flip the binding into recovery.
     expect((await db.bindings.get(bindingId))?.state).toBe('active');
   });
+
+  // The inbox is persisted before applying, so a change that cannot be
+  // applied must leave both the watermark and the binding state honest.
+  it('parks a binding that targets a lost mapping instead of acknowledging it', async () => {
+    adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
+    await seedBinding();
+    const transport: SyncTransport = {
+      sync: async () =>
+        response({
+          through_revision: 101,
+          changes: [
+            {
+              revision: 101,
+              type: 'create',
+              node_id: 'n-orphan',
+              payload: {
+                type: 'bookmark',
+                title: 'Orphan',
+                url: 'https://orphan.test',
+                parent: { type: 'node', id: 'n-never-mapped' },
+                position: 0,
+              },
+            },
+          ],
+        }),
+    };
+    const coordinator = new SyncCoordinator(db, applier, transport);
+    expect(await coordinator.syncBinding(bindingId)).toBe('needs-recovery');
+
+    const binding = await db.bindings.get(bindingId);
+    expect(binding?.state).toBe('needs_recovery');
+    expect(binding?.recovery).toMatchObject({ code: 'UNMAPPED_PROJECTION' });
+    // received advanced (the stream was read) but applied did not (the state
+    // was not reached), so the change is still queued for the repair path.
+    expect(binding?.appliedRevision).toBe(100);
+    expect(await db.remoteChanges.get(`${bindingId}:101`)).toBeDefined();
+    expect(adapter.calls).toEqual([]);
+  });
 });

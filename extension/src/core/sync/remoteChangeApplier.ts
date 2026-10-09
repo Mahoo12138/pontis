@@ -27,6 +27,38 @@ import {
   type ParentRefWire,
 } from '../protocol/types';
 
+/**
+ * A change targets a node or parent whose mapping should exist but does not.
+ * Advancing applied_revision here would turn the watermark into "messages
+ * seen" instead of "state reached", and the server would never resend the
+ * change — the browser would be silently missing data while reporting a synced
+ * tree. Callers must move the binding to an explicit recovery state.
+ *
+ * A parent the mount deliberately does not project is a different answer: that
+ * change carries nothing for this replica, so it is acknowledged and skipped.
+ */
+export class UnmappedProjectionError extends Error {
+  readonly code = 'UNMAPPED_PROJECTION';
+
+  constructor(
+    readonly kind: 'node' | 'parent',
+    readonly bindingId: string,
+    readonly revision: number,
+    readonly target: string,
+  ) {
+    super(`unmapped ${kind} "${target}" at revision ${revision}`);
+    this.name = 'UnmappedProjectionError';
+  }
+}
+
+/** Outcome of resolving a wire parent ref against the mount. */
+type ParentResolution =
+  | { kind: 'mapped'; browserId: string }
+  /** The mount does not project this root: nothing to apply here. */
+  | { kind: 'excluded' }
+  /** Expected to be mapped and is not. */
+  | { kind: 'missing'; ref: string };
+
 export class RemoteChangeApplier {
   constructor(
     private db: PontisDB,
@@ -130,9 +162,13 @@ export class RemoteChangeApplier {
 
       const mirror = await findMirrorByCanonical(this.db, bindingId, exp.canonicalId);
       if (!mirror?.browserId) {
-        // Nothing to verify against; drop the stale expectation.
-        await this.db.expectedMutations.delete(exp.id!);
-        await this.advanceTo(bindingId, exp.revision);
+        // The mapping the expectation points at is gone. Dropping the
+        // expectation and advancing would mark an unapplied revision as
+        // reached; keep it so the binding stays visibly unfixed.
+        await logDiagnostic(this.db, 'error', 'applier', 'recovery: expectation has no mapping to verify, needs recovery', {
+          bindingId,
+          exp,
+        });
         continue;
       }
       const node = await this.adapter.getNode(mirror.browserId);
@@ -173,17 +209,21 @@ export class RemoteChangeApplier {
     change: ChangeWire,
     payload: { type: 'folder' | 'bookmark'; title: string; url: string; parent: ParentRefWire; position: number },
   ): Promise<void> {
-    const parentBrowserId = await this.resolveParentBrowser(binding, payload.parent);
-    if (!parentBrowserId) {
-      // Parent not mapped: mapping loss. Do not silently CREATE elsewhere;
-      // advance past the change and record for reconciliation.
-      await logDiagnostic(this.db, 'warn', 'applier', 'create with unmapped parent skipped', {
-        bindingId: binding.id,
-        change,
-      });
+    const parent = await this.resolveParent(binding, payload.parent);
+    if (parent.kind === 'excluded') {
+      // Outside this mount's projection: the change carries nothing to do.
       await this.advanceTo(binding.id, change.revision);
       return;
     }
+    if (parent.kind === 'missing') {
+      await logDiagnostic(this.db, 'error', 'applier', 'create with unmapped parent, binding needs recovery', {
+        bindingId: binding.id,
+        change,
+        ref: parent.ref,
+      });
+      throw new UnmappedProjectionError('parent', binding.id, change.revision, parent.ref);
+    }
+    const parentBrowserId = parent.browserId;
 
     // Ensure-state: already satisfied?
     const existing = await findMirrorByCanonical(this.db, binding.id, change.node_id);
@@ -290,12 +330,14 @@ export class RemoteChangeApplier {
   ): Promise<void> {
     const mirror = await findMirrorByCanonical(this.db, binding.id, change.node_id);
     if (!mirror?.browserId) {
-      await logDiagnostic(this.db, 'warn', 'applier', 'update for unmapped node skipped', {
+      // Applied revisions are contiguous, so the create for this node either
+      // landed here or was acknowledged as satisfied. A missing mapping means
+      // local state was lost; skipping would hide it from any later repair.
+      await logDiagnostic(this.db, 'error', 'applier', 'update for unmapped node, binding needs recovery', {
         bindingId: binding.id,
         change,
       });
-      await this.advanceTo(binding.id, change.revision);
-      return;
+      throw new UnmappedProjectionError('node', binding.id, change.revision, change.node_id);
     }
     // Ensure-state: mirror already at the target value.
     if (target.title !== undefined && mirror.title === target.title) {
@@ -341,22 +383,26 @@ export class RemoteChangeApplier {
   ): Promise<void> {
     const mirror = await findMirrorByCanonical(this.db, binding.id, change.node_id);
     if (!mirror?.browserId) {
-      await logDiagnostic(this.db, 'warn', 'applier', 'move for unmapped node skipped', {
+      await logDiagnostic(this.db, 'error', 'applier', 'move for unmapped node, binding needs recovery', {
         bindingId: binding.id,
         change,
       });
+      throw new UnmappedProjectionError('node', binding.id, change.revision, change.node_id);
+    }
+    const parent = await this.resolveParent(binding, payload.parent);
+    if (parent.kind === 'excluded') {
       await this.advanceTo(binding.id, change.revision);
       return;
     }
-    const parentBrowserId = await this.resolveParentBrowser(binding, payload.parent);
-    if (!parentBrowserId) {
-      await logDiagnostic(this.db, 'warn', 'applier', 'move with unmapped parent skipped', {
+    if (parent.kind === 'missing') {
+      await logDiagnostic(this.db, 'error', 'applier', 'move with unmapped parent, binding needs recovery', {
         bindingId: binding.id,
         change,
+        ref: parent.ref,
       });
-      await this.advanceTo(binding.id, change.revision);
-      return;
+      throw new UnmappedProjectionError('parent', binding.id, change.revision, parent.ref);
     }
+    const parentBrowserId = parent.browserId;
 
     // Ensure-state: same parent and canonical position already matches.
     if (mirror.parentBrowserId === parentBrowserId && mirror.position === payload.position) {
@@ -438,15 +484,23 @@ export class RemoteChangeApplier {
 
   // --- helpers ---
 
-  private async resolveParentBrowser(binding: BindingRecord, parent: ParentRefWire): Promise<string | null> {
+  private async resolveParent(binding: BindingRecord, parent: ParentRefWire): Promise<ParentResolution> {
     if (parent.type === 'root') {
       const mount = binding.mount;
-      if (mount.mode === 'partial' && parent.key === mount.rootKey) return mount.folderBrowserId ?? null;
-      if (mount.mode === 'full' && mount.roots && parent.key != null) return mount.roots[parent.key] ?? null;
-      return null;
+      if (mount.mode === 'partial' && parent.key === mount.rootKey) {
+        return mount.folderBrowserId ? { kind: 'mapped', browserId: mount.folderBrowserId } : { kind: 'missing', ref: `root:${parent.key}` };
+      }
+      if (mount.mode === 'full' && mount.roots && parent.key != null) {
+        const browserId = mount.roots[parent.key];
+        // A root the mount knows nothing about is outside this replica's
+        // projection, not a lost mapping.
+        return browserId ? { kind: 'mapped', browserId } : { kind: 'excluded' };
+      }
+      return { kind: 'excluded' };
     }
-    const row = await findMirrorByCanonical(this.db, binding.id, parent.id ?? '');
-    return row?.browserId ?? null;
+    const ref = parent.id ?? '';
+    const row = await findMirrorByCanonical(this.db, binding.id, ref);
+    return row?.browserId ? { kind: 'mapped', browserId: row.browserId } : { kind: 'missing', ref };
   }
 
   /**
