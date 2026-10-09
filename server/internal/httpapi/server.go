@@ -453,6 +453,13 @@ func (s *Server) requireDevice(next http.Handler) http.Handler {
 		}
 		dev, _, err := s.Devices.Authenticate(r.Context(), token)
 		if err != nil {
+			if errors.Is(err, device.ErrAccountDisabled) {
+				// 403, not 401: the credential is real and stays valid, the
+				// account behind it is switched off. The extension must not
+				// read this as "re-pair me".
+				s.writeError(w, r, http.StatusForbidden, "ACCOUNT_DISABLED", "this account is disabled")
+				return
+			}
 			s.writeError(w, r, http.StatusUnauthorized, "DEVICE_CREDENTIAL_INVALID", "invalid device credential")
 			return
 		}

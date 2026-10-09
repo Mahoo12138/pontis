@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"pontis/internal/auth"
 	"pontis/internal/canonical"
 	"pontis/internal/device"
 )
@@ -82,15 +83,24 @@ func (s *DeviceStore) GetDevice(ctx context.Context, id string) (device.Device, 
 	return scanDevice(s.db.QueryRowContext(ctx, deviceColumns+` FROM devices d WHERE d.id = ?`, id))
 }
 
-// GetCredentialByTokenHash loads a credential with its device.
+// GetCredentialByTokenHash loads a credential with its device. The owning
+// account is loaded in the same query because disabling it must stop the
+// device too: a disabled or missing owner is reported as
+// device.ErrAccountDisabled, so no route can trust a credential of an
+// account that the admin has switched off.
 func (s *DeviceStore) GetCredentialByTokenHash(ctx context.Context, tokenHash string) (device.Credential, device.Device, error) {
 	var cred device.Credential
 	var createdAt string
 	var lastUsed, revoked sql.NullString
+	var ownerStatus string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT c.id, c.device_id, c.token_prefix, c.token_hash, c.created_at, c.last_used_at, c.revoked_at
-		FROM device_credentials c WHERE c.token_hash = ?`, tokenHash).
-		Scan(&cred.ID, &cred.DeviceID, &cred.TokenPrefix, &cred.TokenHash, &createdAt, &lastUsed, &revoked)
+		SELECT c.id, c.device_id, c.token_prefix, c.token_hash, c.created_at, c.last_used_at, c.revoked_at,
+		       COALESCE(u.status, '')
+		FROM device_credentials c
+		JOIN devices d ON d.id = c.device_id
+		LEFT JOIN users u ON u.id = d.owner_user_id
+		WHERE c.token_hash = ?`, tokenHash).
+		Scan(&cred.ID, &cred.DeviceID, &cred.TokenPrefix, &cred.TokenHash, &createdAt, &lastUsed, &revoked, &ownerStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return device.Credential{}, device.Device{}, device.ErrCredentialInvalid
 	}
@@ -108,6 +118,9 @@ func (s *DeviceStore) GetCredentialByTokenHash(ctx context.Context, tokenHash st
 	dev, err := s.GetDevice(ctx, cred.DeviceID)
 	if err != nil {
 		return device.Credential{}, device.Device{}, err
+	}
+	if ownerStatus != string(auth.StatusActive) {
+		return device.Credential{}, device.Device{}, device.ErrAccountDisabled
 	}
 	return cred, dev, nil
 }

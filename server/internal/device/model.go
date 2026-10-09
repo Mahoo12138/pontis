@@ -21,6 +21,11 @@ var (
 	// ErrCredentialInvalid is returned for unknown or revoked credentials.
 	ErrCredentialInvalid = errors.New("device: credential invalid")
 
+	// ErrAccountDisabled is returned while the owner account of an otherwise
+	// valid credential is disabled. The secret itself stays usable: the
+	// account gate, not the device, is what refuses.
+	ErrAccountDisabled = errors.New("device: owner account disabled")
+
 	// ErrSpaceNotFound is returned when the binding target space is missing.
 	ErrSpaceNotFound = errors.New("device: sync space not found")
 

@@ -76,6 +76,57 @@ func TestRegisterAndAuthenticateDevice(t *testing.T) {
 	}
 }
 
+func TestAuthenticateGatesOnOwnerAccountStatus(t *testing.T) {
+	svc, h := setupDeviceTest(t)
+	ctx := context.Background()
+
+	dev, secret, err := svc.RegisterDevice(ctx, "u1", "Edge@Home", "extension", "edge", "windows")
+	if err != nil {
+		t.Fatalf("RegisterDevice: %v", err)
+	}
+	if _, _, err := svc.Authenticate(ctx, secret); err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	usedAt := func() string {
+		t.Helper()
+		var lastUsed sql.NullString
+		if err := h.db.QueryRowContext(ctx,
+			`SELECT c.last_used_at FROM device_credentials c WHERE c.device_id = ?`, dev.ID).Scan(&lastUsed); err != nil {
+			t.Fatal(err)
+		}
+		return lastUsed.String
+	}
+	before := usedAt()
+	if before == "" {
+		t.Fatalf("the accepted attempt should have stamped last_used_at")
+	}
+
+	// Disabling an account rewrites users.status and drops web sessions;
+	// the device credential of that account has to be refused as well.
+	if _, err := h.db.ExecContext(ctx,
+		`UPDATE users SET status = 'disabled' WHERE id = 'u1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Authenticate(ctx, secret); !errors.Is(err, device.ErrAccountDisabled) {
+		t.Fatalf("disabled owner: err = %v, want ErrAccountDisabled", err)
+	}
+
+	// A refused credential is not activity.
+	if after := usedAt(); after != before {
+		t.Errorf("disabled owner moved last_used_at from %q to %q", before, after)
+	}
+
+	// Policy: disable gates credentials, revoke kills them. The same secret
+	// works again as soon as the account is active.
+	if _, err := h.db.ExecContext(ctx,
+		`UPDATE users SET status = 'active' WHERE id = 'u1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Authenticate(ctx, secret); err != nil {
+		t.Fatalf("re-enabled owner: Authenticate = %v", err)
+	}
+}
+
 func TestBindSpaceLifecycle(t *testing.T) {
 	svc, h := setupDeviceTest(t)
 	ctx := context.Background()

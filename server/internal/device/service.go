@@ -2,6 +2,7 @@ package device
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,7 +18,9 @@ type Store interface {
 	// GetDevice loads a device by id.
 	GetDevice(ctx context.Context, id string) (Device, error)
 
-	// GetCredentialByTokenHash loads a credential with its device.
+	// GetCredentialByTokenHash loads a credential with its device. The
+	// owning account is part of the lookup: implementations return
+	// ErrAccountDisabled when that account may not be used right now.
 	GetCredentialByTokenHash(ctx context.Context, tokenHash string) (Credential, Device, error)
 
 	// TouchCredential updates credential last_used_at.
@@ -119,11 +122,18 @@ func (s *Service) RegisterDevice(ctx context.Context, ownerUserID canonical.User
 	return d, token, nil
 }
 
-// Authenticate resolves a device token to its device. Revoked devices and
-// revoked credentials are rejected.
+// Authenticate resolves a device token to its device. Revoked devices,
+// revoked credentials and credentials of a disabled account are rejected:
+// disabling an account is meant to stop every credential it owns, including
+// the ones the extension holds.
 func (s *Service) Authenticate(ctx context.Context, token string) (Device, Credential, error) {
 	cred, dev, err := s.store.GetCredentialByTokenHash(ctx, hashToken(token))
 	if err != nil {
+		if errors.Is(err, ErrAccountDisabled) {
+			// Reported distinctly from a bad secret: the credential is
+			// intact, its holder has no right to use it at the moment.
+			return Device{}, Credential{}, err
+		}
 		return Device{}, Credential{}, ErrCredentialInvalid
 	}
 	if !cred.RevokedAt.IsZero() {

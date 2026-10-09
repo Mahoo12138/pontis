@@ -113,3 +113,93 @@ func TestAdminUserManagement(t *testing.T) {
 		t.Fatalf("login with new password = %d %v", code, body)
 	}
 }
+
+// deviceRoute is one device-credential endpoint plus the status it returns
+// while the account is usable. The transfer case sends an empty body on
+// purpose: it must reach the handler and be refused for its contents, which
+// proves the gate is not what produced that code.
+type deviceRoute struct {
+	method     string
+	path       string
+	body       any
+	wantActive int
+}
+
+func TestAdminDisableStopsDeviceCredentials(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	admin := map[string]string{"Authorization": "Bearer " + f.sessionToken}
+	bob := map[string]string{"Authorization": "Bearer " + f.bobToken}
+
+	// Bob ends up with a space, a registered device and an active binding.
+	code, body := doJSON(t, "POST", f.ts.URL+"/api/v1/spaces", bob, map[string]string{"name": "Bobs"})
+	if code != http.StatusCreated {
+		t.Fatalf("bob space = %d %v", code, body)
+	}
+	bobSpace, _ := body["id"].(string)
+
+	code, body = doJSON(t, "POST", f.ts.URL+"/api/v1/devices", bob,
+		map[string]string{"name": "Edge@Bob", "browser": "edge", "platform": "macos"})
+	if code != http.StatusCreated {
+		t.Fatalf("bob device = %d %v", code, body)
+	}
+	deviceAuth := map[string]string{"Authorization": "Bearer " + body["token"].(string)}
+
+	code, body = doJSON(t, "POST", f.ts.URL+"/api/v1/device/bindings", deviceAuth,
+		map[string]string{"space_id": bobSpace})
+	if code != http.StatusCreated {
+		t.Fatalf("bob binding = %d %v", code, body)
+	}
+	bindingID, _ := body["id"].(string)
+	if err := f.srv.Devices.ActivateBinding(t.Context(), bindingID); err != nil {
+		t.Fatalf("activate binding: %v", err)
+	}
+
+	routes := []deviceRoute{
+		{"GET", "/api/v1/device/spaces", nil, http.StatusOK},
+		{"GET", "/api/v1/device/bindings", nil, http.StatusOK},
+		{"POST", "/api/v1/sync/bindings/" + bindingID, map[string]any{
+			"protocol_version": 1, "epoch": 1, "applied_revision": 0, "received_revision": 0,
+		}, http.StatusOK},
+		{"GET", "/api/v1/sync/bindings/" + bindingID + "/snapshot", nil, http.StatusOK},
+		{"POST", "/api/v1/sync/transfers", map[string]any{}, http.StatusBadRequest},
+	}
+
+	for _, rt := range routes {
+		status, out := doJSON(t, rt.method, f.ts.URL+rt.path, deviceAuth, rt.body)
+		if status != rt.wantActive {
+			t.Fatalf("while active %s %s = %d %v, want %d", rt.method, rt.path, status, out, rt.wantActive)
+		}
+	}
+
+	_, me := doJSON(t, "GET", f.ts.URL+"/api/v1/auth/me", bob, nil)
+	bobID := me["id"].(string)
+	if status, _ := doJSON(t, "PATCH", f.ts.URL+"/api/v1/admin/users/"+bobID, admin,
+		map[string]any{"status": "disabled"}); status != http.StatusOK {
+		t.Fatalf("disable bob = %d", status)
+	}
+
+	// Logging the user out only killed the web session. The extension keeps
+	// a secret that still has to be refused everywhere.
+	for _, rt := range routes {
+		status, out := doJSON(t, rt.method, f.ts.URL+rt.path, deviceAuth, rt.body)
+		if status != http.StatusForbidden || errCode(t, out) != "ACCOUNT_DISABLED" {
+			t.Fatalf("after disable %s %s = %d %v, want 403 ACCOUNT_DISABLED", rt.method, rt.path, status, out)
+		}
+	}
+
+	// A disabled account cannot widen its footprint either.
+	if status, _ := doJSON(t, "POST", f.ts.URL+"/api/v1/devices", bob,
+		map[string]string{"name": "Firefox@Bob"}); status != http.StatusUnauthorized {
+		t.Fatalf("register device while disabled = %d, want 401", status)
+	}
+
+	// Policy: disabling gates credentials instead of revoking them, so the
+	// re-enabled account resumes with the same secret and binding.
+	if status, _ := doJSON(t, "PATCH", f.ts.URL+"/api/v1/admin/users/"+bobID, admin,
+		map[string]any{"status": "active"}); status != http.StatusOK {
+		t.Fatalf("re-enable bob = %d", status)
+	}
+	if status, out := doJSON(t, "GET", f.ts.URL+routes[3].path, deviceAuth, nil); status != http.StatusOK {
+		t.Fatalf("snapshot after re-enable = %d %v", status, out)
+	}
+}
