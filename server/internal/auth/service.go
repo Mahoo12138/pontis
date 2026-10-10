@@ -205,7 +205,15 @@ const resetTokenTTL = 30 * time.Minute
 // by the sqlite account store.
 type ResetStore interface {
 	InsertResetToken(ctx context.Context, userID, hash string, expiresAt, at time.Time) error
-	ConsumeResetToken(ctx context.Context, hash string) (string, error)
+}
+
+// ResetCommitter consumes a reset token, sets the new password and drops the
+// user's sessions as one unit. It is one method on purpose: split into
+// "check the token", "mark it used", "change the password", the middle step can
+// burn a single-use link without changing anything, and two requests can each
+// clear the check before either writes.
+type ResetCommitter interface {
+	ResetPasswordTx(ctx context.Context, tokenHash, passwordHash string, at time.Time) (string, error)
 }
 
 // CreateResetLink mints a single-use reset token for the user and returns
@@ -237,31 +245,17 @@ func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword strin
 	if !ValidatePassword(newPassword) {
 		return ErrInvalidPassword
 	}
-	resetStore, ok := s.store.(ResetStore)
+	committer, ok := s.store.(ResetCommitter)
 	if !ok {
 		return errors.New("auth: reset flow unavailable")
-	}
-	userID, err := resetStore.ConsumeResetToken(ctx, hashToken(rawToken))
-	if err != nil {
-		return err
 	}
 	hash, err := HashPassword(newPassword)
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC()
-	passwordStore, ok := s.store.(PasswordChanger)
-	if !ok {
-		return errors.New("auth: reset flow unavailable")
-	}
-	if err := passwordStore.UpdatePassword(ctx, userID, hash, now); err != nil {
+	if _, err := committer.ResetPasswordTx(ctx, hashToken(rawToken), hash, now); err != nil {
 		return err
 	}
-	return s.store.DeleteUserSessions(ctx, userID)
-}
-
-// PasswordChanger is implemented by stores that can rewrite a password.
-type PasswordChanger interface {
-	UpdatePassword(ctx context.Context, userID, hash string, at time.Time) error
-	DeleteUserSessions(ctx context.Context, userID string) error
+	return nil
 }

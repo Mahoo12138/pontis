@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { login, logout, getMe } from '@pontis/api/endpoints/auth';
+import { login, logout, getMe, resetPassword } from '@pontis/api/endpoints/auth';
 import type { LoginRequest, LoginResponse, User } from '@pontis/api';
 import type { SetupRequest } from '@pontis/api';
 import { setup } from '@pontis/api/endpoints/auth';
@@ -40,6 +40,20 @@ export function useSetup() {
     mutationFn: (params: SetupRequest) => setup(params),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['auth', 'me'] });
+    },
+  });
+}
+
+export function useResetPassword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (params: { token: string; new_password: string }) => resetPassword(params),
+    onSuccess: () => {
+      // The server dropped every session of that user when it took the new
+      // password, so any cached identity is stale — and the token has been
+      // spent either way, so a retry must not look available.
+      qc.setQueryData(['auth', 'me'], null);
+      qc.invalidateQueries({ queryKey: ['auth'] });
     },
   });
 }

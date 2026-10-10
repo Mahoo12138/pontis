@@ -132,9 +132,6 @@ Alpha 阶段的范围与未完成项记在
 
 - 服务端与扩展曾各有一套合并算法；对账生命周期已统一到服务端，扩展那套已删除
   （`extension/src/core/sync/verifyReplica.ts` 只剩客户端的校验与修复）。
-- **密码重置走不通**：管理员的"生成重置链接"返回 `/reset?token=…`
-  （`server/internal/httpapi/admin.go:143`），但前端没有 `/reset` 路由，点开只会落到
-  "没有这个页面"。服务端侧 token 消费也不在一个事务里，重复使用之间有窗口。
 - **CSRF / Origin 服务端不校验**：`@pontis/api` 会去读一个服务端从未输出的
   `meta[name="csrf-token"]` 并回传 `X-CSRF-Token`，而 Go 侧没有任何地方检查它，
   状态变更请求也不验 Origin。会话 Cookie 是 HttpOnly + Lax，跨站表单提交因此被挡住

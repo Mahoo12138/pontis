@@ -1,8 +1,11 @@
 package httpapi
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -226,5 +229,107 @@ func TestAdminDisableStopsDeviceCredentials(t *testing.T) {
 	}
 	if status, out := doJSON(t, "GET", f.ts.URL+routes[3].path, deviceAuth, nil); status != http.StatusOK {
 		t.Fatalf("snapshot after re-enable = %d %v", status, out)
+	}
+}
+
+// postReset fires one reset request without touching *testing.T: it runs from
+// goroutines, where t.Fatalf would abort the whole test binary instead of the
+// one case.
+func postResetStatus(url, token, password string) int {
+	body, err := json.Marshal(map[string]string{"token": token, "new_password": password})
+	if err != nil {
+		return -1
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return -1
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return -1
+	}
+	defer res.Body.Close()
+	return res.StatusCode
+}
+
+// resetLinkFor mints a reset link for a user through the admin API and pulls
+// the raw token back out of it — the same token an admin would hand over out of
+// band.
+func resetLinkFor(t *testing.T, f *libraryFlow, adminHeader map[string]string, userID string) string {
+	t.Helper()
+	code, body := doJSON(t, "POST", f.ts.URL+"/api/v1/admin/users/"+userID+"/reset-link", adminHeader, nil)
+	if code != http.StatusCreated {
+		t.Fatalf("reset link = %d %v", code, body)
+	}
+	link, _ := body["reset_link"].(string)
+	i := strings.Index(link, "token=")
+	if i < 0 {
+		t.Fatalf("reset link carries no token: %q", link)
+	}
+	return link[i+len("token="):]
+}
+
+// TestResetTokenRaceHasOneWinner is the regression for the window that existed
+// when consuming a token was "read it, check used_at, write it" plus two more
+// statements: several requests carrying the same link could all pass the check
+// before any of them wrote, and a request that could not change the password
+// still burned the link.
+func TestResetTokenRaceHasOneWinner(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	adminHeader := map[string]string{"Authorization": "Bearer " + f.sessionToken}
+
+	var bobID string
+	_, listed := doJSON(t, "GET", f.ts.URL+"/api/v1/admin/users", adminHeader, nil)
+	for _, raw := range listed["users"].([]any) {
+		if u := raw.(map[string]any); u["username"] == "bob" {
+			bobID, _ = u["id"].(string)
+		}
+	}
+	if bobID == "" {
+		t.Fatal("bob missing from the admin user list")
+	}
+	raw := resetLinkFor(t, f, adminHeader, bobID)
+
+	// A password that cannot be used must not spend the single-use link: the
+	// caller has to be able to try again with a real one.
+	code, body := doJSON(t, "POST", f.ts.URL+"/api/v1/auth/reset", nil,
+		map[string]string{"token": raw, "new_password": "short"})
+	if code != http.StatusBadRequest || errCode(t, body) != "INVALID_PASSWORD" {
+		t.Fatalf("weak password = %d %v, want 400 INVALID_PASSWORD", code, body)
+	}
+
+	const racers = 8
+	const newPassword = "bob-raced-password"
+	var wg sync.WaitGroup
+	codes := make([]int, racers)
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(slot int) {
+			defer wg.Done()
+			codes[slot] = postResetStatus(f.ts.URL+"/api/v1/auth/reset", raw, newPassword)
+		}(i)
+	}
+	wg.Wait()
+
+	won, refused := 0, 0
+	for _, c := range codes {
+		switch c {
+		case http.StatusOK:
+			won++
+		case http.StatusForbidden:
+			refused++
+		}
+	}
+	// Exactly one request won the token; every other one was told the link was
+	// already used, not silently accepted.
+	if won != 1 || refused != racers-1 {
+		t.Fatalf("reset race: %d succeeded and %d refused as used, want 1 and %d (codes %v)",
+			won, refused, racers-1, codes)
+	}
+
+	if code, body := doJSON(t, "POST", f.ts.URL+"/api/v1/auth/login", nil,
+		map[string]string{"username": "bob", "password": newPassword}); code != http.StatusOK {
+		t.Fatalf("login after the winning reset = %d %v", code, body)
 	}
 }

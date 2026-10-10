@@ -3,6 +3,7 @@ import AppShell from './components/app-shell/AppShell';
 import UnknownRoute from './components/common/UnknownRoute';
 import LoginPage from './routes/login';
 import SetupPage from './routes/setup';
+import ResetPasswordPage from './routes/reset';
 import SpaceExplorerPage from './routes/space-explorer';
 import SpaceActivityPage from './routes/space-activity';
 import SpaceOrganizerPage from './routes/space-organizer';
@@ -41,6 +42,16 @@ export default function App() {
           element={
             <RequirePublic>
               <SetupPage />
+            </RequirePublic>
+          }
+        />
+        {/* The admin's reset link points here; no session exists at this point,
+            so it belongs with the public routes, not behind RequireAuth. */}
+        <Route
+          path="/reset"
+          element={
+            <RequirePublic>
+              <ResetPasswordPage />
             </RequirePublic>
           }
         />

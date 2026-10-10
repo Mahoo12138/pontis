@@ -14,6 +14,14 @@ export function logout() {
   return client.post<{ status: string }>('/auth/logout');
 }
 
+/**
+ * Exchange a single-use reset token for a new password. Public endpoint: the
+ * caller is by definition not logged in, and the token is the credential.
+ */
+export function resetPassword(params: { token: string; new_password: string }) {
+  return client.post<{ status: string }>('/auth/reset', params);
+}
+
 export function getMe() {
   return client.get<User>('/auth/me', checkUser);
 }
