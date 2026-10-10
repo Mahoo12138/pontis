@@ -107,12 +107,20 @@ Path=/
 Cookie Session 的 mutation API 使用：
 
 ```text
-SameSite
-+ Origin/Referer validation
-+ CSRF token/header
+SameSite=Lax
++ Origin validation（缺失 Origin 视为非浏览器发起，允许）
 ```
 
-Bearer API Token / Device Token 不使用 Cookie，因此不走相同 CSRF 机制。
+**没有 CSRF token/header，这是有意的偏离**：Web 应用与 API 同源，Lax 挡掉跨站表单
+带 cookie，Origin 再挡掉同站不同子域——两者都不需要额外机密。设计里第三层
+（双提交 token）在这套拓扑下不提供多余保护，而 `@pontis/api` 曾发送的
+`X-CSRF-Token` 服务端从来没读过、也没有任何页面输出过那个 meta 标签，属于假装有防护，
+已删除。什么时候必须补上 token：API 与应用不再同源、或出现允许第三方上下文携带
+session cookie 的路由（例如公开分享页做写操作）。
+
+Bearer API Token / Device Token 不使用 Cookie，因此不走相同 CSRF 机制：外部页面
+无法让浏览器自行附带它，扩展那个 `chrome-extension://…` 的 Origin 也就不该被
+拦——有测试钉住这一点。
 
 ## 9. API Token
 

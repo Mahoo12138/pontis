@@ -3,28 +3,20 @@ import type { Checker } from './validate';
 
 const BASE_URL = '/api/v1';
 
-/** CSRF token source — read from meta tag set by the server, or cookie. */
-function getCsrfToken(): string | undefined {
-  const meta = document.querySelector('meta[name="csrf-token"]');
-  if (meta) return meta.getAttribute('content') ?? undefined;
-  return undefined;
-}
-
 /** Thin fetch wrapper for the Pontis REST API. */
 export async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  options?: { csrf?: boolean; check?: Checker<T> },
+  options?: { check?: Checker<T> },
 ): Promise<T> {
+  // No CSRF token is sent or needed here: the session cookie is SameSite=Lax
+  // and the server rejects a state-changing cookie request whose Origin is not
+  // the instance's own (docs/09 §8). Nothing on the server ever read an
+  // X-CSRF-Token, and no page emitted the meta tag this code used to look for.
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-
-  if (options?.csrf !== false) {
-    const csrf = getCsrfToken();
-    if (csrf) headers['X-CSRF-Token'] = csrf;
-  }
 
   const res = await fetch(`${BASE_URL}${path}`, {
     method,

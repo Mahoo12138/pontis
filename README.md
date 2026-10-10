@@ -132,11 +132,11 @@ Alpha 阶段的范围与未完成项记在
 
 - 服务端与扩展曾各有一套合并算法；对账生命周期已统一到服务端，扩展那套已删除
   （`extension/src/core/sync/verifyReplica.ts` 只剩客户端的校验与修复）。
-- **CSRF / Origin 服务端不校验**：`@pontis/api` 会去读一个服务端从未输出的
-  `meta[name="csrf-token"]` 并回传 `X-CSRF-Token`，而 Go 侧没有任何地方检查它，
-  状态变更请求也不验 Origin。会话 Cookie 是 HttpOnly + Lax，跨站表单提交因此被挡住
-  大半，但同站（任意子域）页面不受 Lax 保护，且没有 `Secure` 属性由部署模式决定。
-- `public_url` 与 `trusted_proxies` 只是被读进配置，服务端没有任何地方消费它们。
+- **没有 CSRF token**：会话 Cookie 是 HttpOnly + Lax，且带 cookie 的写请求必须与
+  实例自身同源（`public_url` 或请求 Host；开发模式两端都是回环地址时允许不同端口）。
+  在这套同源拓扑下这比双提交 token 更强，所以那层没做——触发条件记在 docs/09 §8。
+  `trusted_proxies` 目前只用于判断"能否相信 `X-Forwarded-Proto`"，
+  `X-Forwarded-For` 仍无人消费。
 - 真实浏览器（unpacked 扩展 + 真服务端）的双端收敛目前是**手工**流程，
   见 docs/21 §10；没有自动化 E2E。
 - 没有 lint 命令：`eslint` 既不是任何包的依赖，也没有配置文件。

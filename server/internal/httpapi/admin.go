@@ -134,13 +134,20 @@ func (s *Server) handleCreateResetLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The link points at the web UI's reset route; the raw token is the
-	// single-use secret delivered out of band.
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
+	// single-use secret delivered out of band. Behind a reverse proxy r.Host is
+	// the internal name and r.TLS is nil, which would hand out a link that
+	// only opens from inside the network — public_url is what fixes that, and
+	// this is its first consumer.
+	origin := s.Deploy.Origin()
+	if origin == "" {
+		scheme := "http"
+		if s.Deploy.IsHTTPS(r) {
+			scheme = "https"
+		}
+		origin = scheme + "://" + r.Host
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"reset_link": scheme + "://" + r.Host + "/reset?token=" + raw,
+		"reset_link": origin + "/reset?token=" + raw,
 	})
 }
 

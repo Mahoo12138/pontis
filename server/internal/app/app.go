@@ -92,10 +92,20 @@ func Run(ctx context.Context, cfg config.Config) error {
 	scheduleStore := sqlite.NewScheduleStore(db)
 	scheduleSvc := schedule.NewService(scheduleStore, jobSvc)
 	scheduleSvc.Log = logger
+	proxies, err := httpapi.ParseProxies(cfg.TrustedProxies)
+	if err != nil {
+		return err
+	}
+	deploy := httpapi.Deployment{PublicURL: cfg.PublicURL, Proxies: proxies}
+	if err := deploy.Validate(); err != nil {
+		return err
+	}
+
 	api := &httpapi.Server{
 		// Paths the API does not claim are served from the Web dist embedded
 		// in this binary (doc 21 §12: one artifact, no Node on the target).
 		Web:           webui.Assets(),
+		Deploy:        deploy,
 		Auth:          auth.NewService(sqlite.NewAuthStore(db), sessionTTL),
 		Devices:       device.NewService(sqlite.NewDeviceStore(db)),
 		Spaces:        space.NewService(sqlite.NewSpaceStore(db)),

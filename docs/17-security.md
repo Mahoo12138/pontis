@@ -50,10 +50,11 @@ Login 成功创建全新 Session，避免 fixation。
 Session-authenticated mutation API：
 
 ```text
-SameSite
-+ Origin/Referer validation
-+ CSRF token
+SameSite=Lax
++ Origin validation
 ```
+
+CSRF token 这一层未实现，理由与补上的触发条件见 doc 09 §8。
 
 Bearer Device/API tokens 不依赖 Cookie。
 

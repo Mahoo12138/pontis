@@ -65,6 +65,11 @@ type Server struct {
 	// answers with a hint instead of an empty page.
 	Web fs.FS
 
+	// Deploy is the deployment mode: external origin, TLS behind a proxy, and
+	// which peers may report it. It gates the session cookie's Secure
+	// attribute and the origin check on cookie-authenticated writes.
+	Deploy Deployment
+
 	// InstanceID identifies this server installation across URL changes.
 	InstanceID string
 
@@ -398,13 +403,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookie,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, s.sessionCookie(r, token))
 	writeJSON(w, http.StatusOK, loginResponse{
 		Token:     token,
 		ExpiresAt: sess.ExpiresAt,
@@ -487,6 +486,14 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 		if token == "" {
 			if c, err := r.Cookie(SessionCookie); err == nil {
 				token = c.Value
+			}
+			// Only the cookie path needs this. A request carrying a bearer
+			// secret (web API token, device credential) cannot be produced by
+			// a foreign page, so it is left to requireScope.
+			if token != "" && !isSafeMethod(r.Method) && !s.Deploy.sameOrigin(r) {
+				s.writeError(w, r, http.StatusForbidden, "ORIGIN_MISMATCH",
+					"this request did not come from the instance's own origin")
+				return
 			}
 		}
 		if token == "" {
