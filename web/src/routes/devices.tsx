@@ -265,8 +265,9 @@ export default function DevicesPage() {
         styles={{ header: { fontSize: 15, fontWeight: 600 } }}
       >
         <Text fz={13}>
-          此设备将立即失去同步权限,设备上的本地书签不会被删除。
-          如需恢复同步,需要在该设备上重新注册。
+          {revokeTarget?.name} 现在同步 {revokeTarget?.bindings.length ?? 0} 个空间
+          ，撤销后这些空间立即停止同步；其它设备不受影响。
+          设备上的本地书签不会被删除，但它要重新注册才能再拿回同步权限。
         </Text>
         <Group justify="flex-end" mt="lg">
           <Button variant="subtle" color="coolGray" onClick={() => setRevokeTarget(null)}>

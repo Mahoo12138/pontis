@@ -256,7 +256,8 @@ export default function SpaceExplorerPage() {
 
       <ConfirmDeleteDialog
         opened={deleteOpen}
-        count={deleteIds.length}
+        selectedCount={selectedIds.length}
+        nodeCount={deleteIds.length}
         pending={crud.remove.isPending}
         onClose={() => setDeleteOpen(false)}
         onConfirm={handleDeleteConfirm}

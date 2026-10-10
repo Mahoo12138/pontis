@@ -106,7 +106,10 @@ export function NewNodeModal({
 
 interface ConfirmDeleteDialogProps {
   opened: boolean;
-  count: number;
+  /** Rows the user actually picked. */
+  selectedCount: number;
+  /** Nodes that disappear, subtree included — always >= selectedCount. */
+  nodeCount: number;
   pending?: boolean;
   onClose: () => void;
   onConfirm: () => void;
@@ -115,16 +118,22 @@ interface ConfirmDeleteDialogProps {
 /** Batch delete confirmation; warns that folders delete with contents. */
 export function ConfirmDeleteDialog({
   opened,
-  count,
+  selectedCount,
+  nodeCount,
   pending,
   onClose,
   onConfirm,
 }: ConfirmDeleteDialogProps) {
+  const dragged = nodeCount - selectedCount;
   return (
     <Modal opened={opened} onClose={onClose} title="删除确认" size="xs">
       <Stack gap="md">
         <Text fz="sm">
-          确定删除选中的 {count} 个项目吗？文件夹会连同其中的书签一起删除。
+          选中 {selectedCount} 项，将删除 {nodeCount} 个节点：文件夹连同其中的全部内容一起消失
+          {dragged > 0 ? `（多出的 ${dragged} 个来自文件夹内部）` : ''}。
+        </Text>
+        <Text fz="xs" c="dimmed">
+          这一步会记进活动日志，30 天内可以在活动页撤销。
         </Text>
         <Group justify="flex-end">
           <Button variant="subtle" onClick={onClose}>

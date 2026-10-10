@@ -76,6 +76,8 @@ export function App() {
   const [bindings, setBindings] = useState<BindingRecord[]>([]);
   const [sessions, setSessions] = useState<ReconSessionRecord[]>([]);
   const [remountFolders, setRemountFolders] = useState<Record<string, string>>({});
+  /** Binding the user has asked to unbind and is now confirming, in place. */
+  const [confirmUnbind, setConfirmUnbind] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticEvent[]>([]);
   const [intents, setIntents] = useState<PendingOpRecord[]>([]);
   const [intentChoices, setIntentChoices] = useState<Record<string, IntentDecision['decision']>>({});
@@ -423,15 +425,43 @@ export function App() {
                           >
                             完整性检查
                           </Button>
-                          <Button
-                            size="compact-xs"
-                            variant="subtle"
-                            color="errorRed"
-                            loading={busy === `unbind:${b.id}`}
-                            onClick={() => void doUnbind(b.id)}
-                          >
-                            解绑
-                          </Button>
+                          {confirmUnbind === b.id ? (
+                            <Group gap="xs" wrap="nowrap">
+                              <Text size="xs" c="errorRed">
+                                {st.pending > 0
+                                  ? `未同步的 ${st.pending} 项会被丢弃`
+                                  : '本机副本会被清空'}
+                                ，浏览器书签不动
+                              </Text>
+                              <Button
+                                size="compact-xs"
+                                color="errorRed"
+                                loading={busy === `unbind:${b.id}`}
+                                onClick={() =>
+                                  void doUnbind(b.id).then(() => setConfirmUnbind(null))
+                                }
+                              >
+                                确认解绑
+                              </Button>
+                              <Button
+                                size="compact-xs"
+                                variant="subtle"
+                                color="coolGray"
+                                onClick={() => setConfirmUnbind(null)}
+                              >
+                                取消
+                              </Button>
+                            </Group>
+                          ) : (
+                            <Button
+                              size="compact-xs"
+                              variant="subtle"
+                              color="errorRed"
+                              onClick={() => setConfirmUnbind(b.id)}
+                            >
+                              解绑
+                            </Button>
+                          )}
                         </Group>
                       </Group>
                       <Group gap="md" wrap="nowrap">

@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Group,
+  List,
   Menu,
   Modal,
   Skeleton,
@@ -28,6 +29,8 @@ import {
 import type { Backup } from '@pontis/api';
 import Header from '../components/app-shell/Header';
 import ErrorState from '../components/common/ErrorState';
+import { useNodes } from '../hooks/use-nodes';
+import { useDeviceOverview } from '../hooks/use-devices';
 import { contentRegion } from '../styles/app-shell.css';
 import { pagePad, mono } from '../styles/management.css';
 import { tokens } from '../styles/semantic-tokens.css';
@@ -64,6 +67,15 @@ export default function SpaceBackupsPage() {
   const restore = useRestoreBackup(spaceId);
   const remove = useDeleteBackup(spaceId);
   const toggleProtect = useToggleBackupProtected(spaceId);
+
+  // How much a restore actually moves, so the confirmation can name a number
+  // instead of "everything": the tree it overwrites and the devices it detaches.
+  const { data: nodesData } = useNodes(spaceId);
+  const { data: devicesData } = useDeviceOverview();
+  const currentNodes = nodesData?.nodes.length;
+  const boundDevices = (devicesData?.devices ?? []).filter((d) =>
+    d.bindings.some((b) => b.space_id === spaceId),
+  ).length;
 
   const [restoreTarget, setRestoreTarget] = useState<Backup | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Backup | null>(null);
@@ -198,9 +210,20 @@ export default function SpaceBackupsPage() {
         styles={{ header: { fontSize: 15, fontWeight: 600 } }}
       >
         <Text fz={13}>
-          空间的书签树将被整体替换为该备份的内容。恢复前服务器会自动创建一份安全备份;
-          恢复后空间进入新的 Epoch,所有设备需要重新同步。
+          {currentNodes === undefined
+            ? '空间的书签树将被整体替换为该备份的内容。'
+            : `当前空间的 ${currentNodes} 个节点将被整体替换为备份里的 ${restoreTarget?.node_count ?? 0} 个（其中书签 ${restoreTarget?.bookmark_count ?? 0} 个）。`}
         </Text>
+        <List fz={13} mt="xs" spacing={4}>
+          <List.Item>替换之前服务器先自动留一份安全备份，退回它就是最坏的退路。</List.Item>
+          <List.Item>
+            {boundDevices > 0
+              ? `空间进入新的 Epoch，现有的 ${boundDevices} 台已绑定设备全部退回「待初始化」`
+              : '空间进入新的 Epoch，已绑定设备全部退回「待初始化」'}
+            ：每台都要各自完成一次对账才会恢复同步，不是点一下同步就回来。
+          </List.Item>
+          <List.Item>这些设备在离线期间的改动不会直接盖掉新基线，而是作为待确认的恢复意图交回给你。</List.Item>
+        </List>
         <Group justify="flex-end" mt="lg">
           <Button variant="subtle" color="coolGray" onClick={() => setRestoreTarget(null)}>
             取消
@@ -220,7 +243,9 @@ export default function SpaceBackupsPage() {
         styles={{ header: { fontSize: 15, fontWeight: 600 } }}
       >
         <Text fz={13}>
-          空间已恢复到所选备份,并进入 Epoch {restored?.epoch}。已绑定的设备会在下次同步时自动执行重新同步。
+          空间已恢复到所选备份,并进入 Epoch {restored?.epoch}。
+          每台已绑定设备现在都停在「待初始化」，要各自跑一次对账才会回到 active——
+          扩展会在下一次同步触发时自动开始，也可以在扩展设置里手动推进。
         </Text>
         <Group justify="flex-end" mt="lg">
           <Button onClick={() => setRestored(null)}>知道了</Button>
