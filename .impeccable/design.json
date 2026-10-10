@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-10T08:16:00Z",
+  "title": "Design System: Pontis",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Muted Cool Blue",
+        "canonical": "#3f62c0",
+        "tonalRamp": ["#0d2b71", "#1e3d8b", "#2e4fa5", "#3f62c0", "#4f72c8", "#6889d0", "#8ea8de", "#dce4f7"]
+      },
+      "accent-hover": { "role": "primary", "displayName": "Deep Cool Blue", "canonical": "#2e4fa5" },
+      "accent-quiet": { "role": "primary", "displayName": "Whisper Blue", "canonical": "#f0f4ff" },
+      "accent-focus": { "role": "primary", "displayName": "Cool Blue Tint", "canonical": "#dce4f7" },
+      "text-primary": { "role": "neutral", "displayName": "Graphite Ink", "canonical": "#111315" },
+      "text-secondary": { "role": "neutral", "displayName": "Slate Gray", "canonical": "#6b717a" },
+      "text-disabled": { "role": "neutral", "displayName": "Ash Gray", "canonical": "#9ca3af" },
+      "app-bg": { "role": "neutral", "displayName": "App Cool Gray", "canonical": "#f8f9fa" },
+      "workspace-bg": { "role": "neutral", "displayName": "Workspace White", "canonical": "#ffffff" },
+      "raised-bg": { "role": "neutral", "displayName": "Raised Cool Gray", "canonical": "#f1f3f5" },
+      "subtle-border": { "role": "neutral", "displayName": "Hairline Cool", "canonical": "#e7e9ec" },
+      "sync-healthy": { "role": "status", "displayName": "Signal Green", "canonical": "#2f932f", "tonalRamp": ["#0d420d", "#185d18", "#237823", "#2f932f", "#3da63d", "#4db84d", "#a3e0a3", "#f0faf0"] },
+      "sync-warning": { "role": "status", "displayName": "Soft Amber", "canonical": "#e5a510", "tonalRamp": ["#583b04", "#7f5706", "#a67408", "#cc8f0a", "#e5a510", "#f0b820", "#f9df8a", "#fef9ee"] },
+      "sync-recovery": { "role": "status", "displayName": "Recovery Orange", "canonical": "#cc5213", "tonalRamp": ["#531e0a", "#7a2f0d", "#a24010", "#cc5213", "#e56618", "#f57d2e", "#fbc599", "#fff4ee"] },
+      "sync-error": { "role": "status", "displayName": "Soft Red", "canonical": "#c42a24", "tonalRamp": ["#550d0c", "#7a1614", "#9f201c", "#c42a24", "#dc362e", "#e8544c", "#f8b0aa", "#fef1f0"] },
+      "graphite-app": { "role": "surface-dark", "displayName": "Graphite App", "canonical": "#111315" },
+      "graphite-workspace": { "role": "surface-dark", "displayName": "Graphite Workspace", "canonical": "#17191c" },
+      "graphite-raised": { "role": "surface-dark", "displayName": "Graphite Raised", "canonical": "#1d2024" },
+      "graphite-border": { "role": "surface-dark", "displayName": "Graphite Hairline", "canonical": "#2a2d31" },
+      "graphite-text": { "role": "surface-dark", "displayName": "Graphite Text", "canonical": "#e5e7eb" },
+      "accent-dark": { "role": "primary-dark", "displayName": "Lifted Cool Blue", "canonical": "#5e82d6" }
+    },
+    "typographyMeta": {
+      "page-title": { "displayName": "Page Title", "purpose": "One per screen, in the header band. Hard ceiling for the whole system." },
+      "section-label": { "displayName": "Section Label", "purpose": "Settings section and group headings; uppercase affects Latin only." },
+      "content-primary": { "displayName": "Content Primary", "purpose": "The name of the thing being worked on: bookmark, folder, space." },
+      "body": { "displayName": "Body", "purpose": "Descriptions and helper text; measure capped near 64ch." },
+      "metadata": { "displayName": "Metadata", "purpose": "Column headers, timestamps, epoch and revision lines. Never 700." },
+      "measure": { "displayName": "Measure / Mono", "purpose": "Identifiers and measurements only, with tabular-nums." }
+    },
+    "shadows": [
+      { "name": "none-main-surface", "value": "none", "purpose": "Cards, rows, sections, toolbars, headers. The default, and the rule." },
+      { "name": "xs", "value": "0 1px 2px rgba(0,0,0,0.06)", "purpose": "Optional softness on a small floating affordance." },
+      { "name": "sm", "value": "0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06)", "purpose": "Menu, Popover, Tooltip." },
+      { "name": "md", "value": "0 4px 6px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.06)", "purpose": "Command Palette, Drawer." },
+      { "name": "lg", "value": "0 8px 16px rgba(0,0,0,0.1), 0 4px 8px rgba(0,0,0,0.06)", "purpose": "Modal / Dialog." }
+    ],
+    "motion": [
+      { "name": "hover-bg", "value": "100ms ease-out", "purpose": "Background change on row, button and toolbar hover." },
+      { "name": "opacity", "value": "100-150ms ease-out", "purpose": "Appear/disappear of secondary content." },
+      { "name": "overlay", "value": "100-150ms ease-out", "purpose": "Menu, Popover, Modal entry. Nothing longer." }
+    ],
+    "breakpoints": [
+      { "name": "desktop-first", "value": "1024px", "purpose": "Primary target and above." },
+      { "name": "xs", "value": "767px", "purpose": "Sidebar collapses, Inspector becomes overlay." }
+    ],
+    "density": [
+      { "name": "sidebar-width", "value": "224px" },
+      { "name": "header-height", "value": "56px" },
+      { "name": "toolbar-height", "value": "44px" },
+      { "name": "explorer-row", "value": "38px", "purpose": "Spec in docs/23 §18; Explorer not yet implemented." },
+      { "name": "control-normal", "value": "34px", "purpose": "Spec target; Mantine sm default currently measures 36px in both surfaces." },
+      { "name": "control-small", "value": "30px" },
+      { "name": "icon", "value": "16-18px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single committed action on a view. One per screen.",
+      "html": "<button class=\"ds-btn-primary\">提交选择</button>",
+      "css": ".ds-btn-primary { background: #3f62c0; color: #fff; border: 1px solid transparent; border-radius: 6px; height: 36px; padding: 0 18px; font: 500 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; cursor: pointer; transition: background 100ms ease-out; } .ds-btn-primary:hover { background: #2e4fa5; } .ds-btn-primary:focus-visible { outline: 2px solid #3f62c0; outline-offset: 1px; } .ds-btn-primary:disabled { background: #f1f3f5; color: #adb5bd; cursor: not-allowed; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "A real alternative action, tinted rather than filled.",
+      "html": "<button class=\"ds-btn-secondary\">以服务器为准</button>",
+      "css": ".ds-btn-secondary { background: #f0f4ff; color: #3f62c0; border: 1px solid transparent; border-radius: 6px; height: 36px; padding: 0 18px; font: 500 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; cursor: pointer; transition: background 100ms ease-out; } .ds-btn-secondary:hover { background: #dce4f7; } .ds-btn-secondary:focus-visible { outline: 2px solid #3f62c0; outline-offset: 1px; }"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Toolbar and row actions. Invisible until hovered.",
+      "html": "<button class=\"ds-btn-quiet\">完整性检查</button>",
+      "css": ".ds-btn-quiet { background: transparent; color: #6b717a; border: 1px solid transparent; border-radius: 6px; height: 30px; padding: 0 12px; font: 500 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; cursor: pointer; transition: background 100ms ease-out, color 100ms ease-out; } .ds-btn-quiet:hover { background: #f1f3f5; color: #111315; } .ds-btn-quiet:focus-visible { outline: 2px solid #3f62c0; outline-offset: 1px; }"
+    },
+    {
+      "name": "Destructive Button",
+      "kind": "button",
+      "refersTo": "button-destructive",
+      "description": "Red as ink, never as a filled slab.",
+      "html": "<button class=\"ds-btn-danger\">解绑</button>",
+      "css": ".ds-btn-danger { background: transparent; color: #c42a24; border: 1px solid transparent; border-radius: 6px; height: 30px; padding: 0 12px; font: 500 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; cursor: pointer; transition: background 100ms ease-out; } .ds-btn-danger:hover { background: rgba(196, 42, 36, 0.08); } .ds-btn-danger:focus-visible { outline: 2px solid #c42a24; outline-offset: 1px; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Label above, helper below, 1px stroke, small radius.",
+      "html": "<label class=\"ds-field\"><span class=\"ds-field-label\">服务器地址</span><input class=\"ds-field-input\" placeholder=\"http://localhost:8080\"></label>",
+      "css": ".ds-field { display: flex; flex-direction: column; gap: 4px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; } .ds-field-label { font-size: 12px; font-weight: 500; color: #111315; } .ds-field-input { height: 36px; padding: 0 12px; background: #fff; color: #111315; border: 1px solid #ced4da; border-radius: 6px; font-size: 13px; transition: border-color 100ms ease-out; } .ds-field-input::placeholder { color: #6b717a; } .ds-field-input:hover { border-color: #adb5bd; } .ds-field-input:focus { outline: none; border-color: #3f62c0; box-shadow: 0 0 0 1px #3f62c0 inset; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "status-badge",
+      "description": "Sync state as a quiet pill. Healthy is nearly invisible by design.",
+      "html": "<span class=\"ds-badge ds-badge-healthy\">同步中</span><span class=\"ds-badge ds-badge-warning\">等待确认</span><span class=\"ds-badge ds-badge-recovery\">需要恢复</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; height: 18px; padding: 0 8px; border-radius: 1000px; font: 700 10px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; letter-spacing: 0.25px; } .ds-badge-healthy { background: rgba(47, 147, 47, 0.1); color: #2f932f; } .ds-badge-warning { background: rgba(229, 165, 16, 0.1); color: #cc8f0a; } .ds-badge-recovery { background: rgba(204, 82, 19, 0.1); color: #cc5213; }"
+    },
+    {
+      "name": "Section Card",
+      "kind": "card",
+      "refersTo": "section-card",
+      "description": "A settings section: bordered block, no shadow, label row plus content.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-head\"><span class=\"ds-card-title\">绑定列表</span><span class=\"ds-card-meta\">3 个绑定</span></div><div class=\"ds-card-body\">section content</div></div>",
+      "css": ".ds-card { background: #fff; border: 1px solid #e7e9ec; border-radius: 8px; padding: 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; } .ds-card-head { display: flex; justify-content: space-between; align-items: center; } .ds-card-title { font-size: 12px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; color: #4b5563; } .ds-card-meta { font-size: 12px; color: #6b717a; } .ds-card-body { margin-top: 12px; font-size: 13px; color: #111315; }"
+    },
+    {
+      "name": "List Row",
+      "kind": "custom",
+      "refersTo": "list-row",
+      "description": "A bound device or bookmark row: name, state, measurement, actions. Never a card.",
+      "html": "<div class=\"ds-list\"><div class=\"ds-row\"><div class=\"ds-row-main\"><span class=\"ds-row-name\">Convergence Space</span><span class=\"ds-badge ds-badge-healthy\">同步中</span></div><div class=\"ds-row-side\"><span class=\"ds-row-num\">4 / 4</span><span class=\"ds-row-time\">刚刚</span></div></div><div class=\"ds-row\"><div class=\"ds-row-main\"><span class=\"ds-row-name\">Design Review Space</span><span class=\"ds-badge ds-badge-warning\">等待确认</span></div><div class=\"ds-row-side\"><span class=\"ds-row-num\">118 / 118</span><span class=\"ds-row-time\">5 分钟前</span></div></div></div>",
+      "css": ".ds-list { background: #fff; border: 1px solid #e7e9ec; border-radius: 8px; padding: 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; } .ds-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; } .ds-row + .ds-row { margin-top: 0; border-top: 1px solid #e7e9ec; } .ds-row:first-child { padding-top: 0; } .ds-row:last-child { padding-bottom: 0; } .ds-row-main { display: flex; align-items: center; gap: 8px; } .ds-row-name { font-size: 14px; font-weight: 600; color: #111315; } .ds-row-side { display: flex; align-items: center; gap: 12px; } .ds-row-num { font: 400 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace; font-variant-numeric: tabular-nums; color: #111315; } .ds-row-time { font-size: 12px; color: #6b717a; } .ds-badge { display: inline-flex; align-items: center; height: 18px; padding: 0 8px; border-radius: 1000px; font: 700 10px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; letter-spacing: 0.25px; } .ds-badge-healthy { background: rgba(47, 147, 47, 0.1); color: #2f932f; } .ds-badge-warning { background: rgba(229, 165, 16, 0.1); color: #cc8f0a; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Cold Rational Workspace / 冷灰理性工作台",
+    "overview": "Pontis looks like a well-made desktop tool that happens to run in a browser, not like an admin panel and not like a content site. White and graphite gray carry the whole interface; a single low-saturation cool blue is reserved for interaction and state, never for decoration. Density is the point: small vertical rhythm, stable horizontal alignment, one consistent row height, low-contrast borders, and a restrained type ladder.\n\nThe system's most deliberate property is that it goes quiet when things are fine. Only warning, recovery, conflict, failure and a question that needs an answer may raise their visual weight. Emphasis is earned by state, never by layout. Structure comes from 1px dividers, tonal surface steps, spacing and typography; shadow appears only on layers that actually float.",
+    "keyCharacteristics": [
+      "White + graphite + one muted cool blue; status color is the only other ink.",
+      "Compact by default: 12-14px content type, 36px controls, 4-20px spacing ladder.",
+      "Borders and tonal surfaces do the structural work; shadows are for floating layers only.",
+      "Small radii (6px controls, 8px cards, 10px dialogs); no nested containers, no card grids.",
+      "Dark mode is a first-class palette (Graphite Dark), not an inversion.",
+      "Healthy state is deliberately unremarkable."
+    ],
+    "rules": [
+      { "name": "The One Voice Rule", "body": "Exactly one accent color per surface. If a second saturated hue appears, one of them is wrong.", "section": "colors" },
+      { "name": "The Quiet Green Rule", "body": "Healthy is a 10%-tint badge with 12px text, not a banner. A correctly syncing device should be almost boring to look at.", "section": "colors" },
+      { "name": "The No-Blue-Field Rule", "body": "Never invert to white-on-blue for selection, headers, sidebars or hero areas. Blue is ink and hairline, not wallpaper.", "section": "colors" },
+      { "name": "The 18px Ceiling", "body": "No type above 18px. A 32px page title is a marketing tell and is out of this world.", "section": "typography" },
+      { "name": "The Monospace Is Data, Not Mood", "body": "Mono is reserved for identifiers, measurements and codes. Never for emphasis or to look technical.", "section": "typography" },
+      { "name": "The Row Budget", "body": "A 1080p Explorer view should hold 15-20 rows. If a layout choice costs rows, it costs the product.", "section": "layout" },
+      { "name": "The Floating-Only Rule", "body": "If the element is not above another element, it has no shadow.", "section": "elevation" },
+      { "name": "The One-Box Rule", "body": "A section is a bordered block, not a card holding rows that are themselves cards. Nest a bordered block inside a card, never a card inside a card.", "section": "shapes" },
+      { "name": "The Single Primary Rule", "body": "One filled accent button per view. A second one means the screen has not decided what it is for.", "section": "components" }
+    ],
+    "dos": [
+      "Do keep the page flat and let 1px subtle-border rules, spacing and type carry the hierarchy.",
+      "Do use the compact ladder: 4/8/12/16/20 spacing, 6px controls, 8px cards, 10px dialogs, 12-14px content type.",
+      "Do render measurements in mono with tabular-nums - revision watermarks, epochs, ids, error codes.",
+      "Do let healthy states go quiet (sync-healthy as a 10% badge) and spend weight only on warning, recovery, error and questions.",
+      "Do use pale blue for selection and focus (#f0f4ff), with dark text.",
+      "Do treat dark mode as the same design: graphite surfaces, lifted accent #5e82d6, faint borders.",
+      "Do state the reason and the next step in every error, and the concrete impact in every destructive confirmation.",
+      "Do keep both surfaces reading one system; the extension imports the web theme rather than restyling itself."
+    ],
+    "donts": [
+      "Don't build a KPI dashboard, a hero metric, or a card grid of settings.",
+      "Don't lay down large areas of brand blue, gradient fills, glass or blur.",
+      "Don't shadow main surfaces, or use a zero-offset colored halo as decoration.",
+      "Don't use radii above 12px on containers, or wrap rows in cards inside section cards.",
+      "Don't set type above 18px or lean on 700 weight across a page.",
+      "Don't invert selection to white-on-blue, or make the sidebar a colored panel.",
+      "Don't ship marketing copy in empty states, or a Pinterest-style Plaza.",
+      "Don't animate for its own sake: 100-150ms for hover, opacity, menu and popover; no floating cards, no spring, no page slides, no blur transitions.",
+      "Don't invent a second token set, a second accent, or a per-page visual language.",
+      "Don't signal state with color alone."
+    ]
+  }
+}
