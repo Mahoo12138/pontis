@@ -162,6 +162,10 @@ func TestAdminDisableStopsDeviceCredentials(t *testing.T) {
 		}, http.StatusOK},
 		{"GET", "/api/v1/sync/bindings/" + bindingID + "/snapshot", nil, http.StatusOK},
 		{"POST", "/api/v1/sync/transfers", map[string]any{}, http.StatusBadRequest},
+		// The reconciliation lifecycle came after the credential gate was
+		// written, so it is asserted here rather than trusted by construction.
+		{"POST", "/api/v1/sync/bindings/" + bindingID + "/reconciliations",
+			map[string]string{"type": "recovery", "reason": "manual reconnection"}, http.StatusCreated},
 	}
 
 	for _, rt := range routes {
@@ -169,6 +173,15 @@ func TestAdminDisableStopsDeviceCredentials(t *testing.T) {
 		if status != rt.wantActive {
 			t.Fatalf("while active %s %s = %d %v, want %d", rt.method, rt.path, status, out, rt.wantActive)
 		}
+	}
+
+	// An API token is the same account wearing a different credential. Create
+	// one while Bob is enabled and prove it works, so a refusal below means
+	// "disabled", not "this token was never usable" (R08).
+	_, tokenSecret := createToken(t, f, f.bobToken, "ci-reader", []string{"bookmarks:read"}, "all")
+	apiAuth := map[string]string{"Authorization": "Bearer " + tokenSecret}
+	if status, out := doJSON(t, "GET", f.ts.URL+"/api/v1/spaces/"+bobSpace+"/nodes", apiAuth, nil); status != http.StatusOK {
+		t.Fatalf("api token while enabled = %d %v, want 200", status, out)
 	}
 
 	_, me := doJSON(t, "GET", f.ts.URL+"/api/v1/auth/me", bob, nil)
@@ -185,6 +198,18 @@ func TestAdminDisableStopsDeviceCredentials(t *testing.T) {
 		if status != http.StatusForbidden || errCode(t, out) != "ACCOUNT_DISABLED" {
 			t.Fatalf("after disable %s %s = %d %v, want 403 ACCOUNT_DISABLED", rt.method, rt.path, status, out)
 		}
+	}
+
+	// The API token is refused by the same policy: disabling a user must not
+	// leave scripted access reading their bookmarks. It answers 401
+	// TOKEN_INVALID rather than naming the cause, because that one message is
+	// shared by unknown / revoked / disabled — the endpoint deliberately does
+	// not become an oracle that tells a bearer which of the three happened.
+	// The device credential, a paired principal its own owner can inspect,
+	// does report ACCOUNT_DISABLED above.
+	if status, out := doJSON(t, "GET", f.ts.URL+"/api/v1/spaces/"+bobSpace+"/nodes", apiAuth, nil); status != http.StatusUnauthorized ||
+		errCode(t, out) != "TOKEN_INVALID" {
+		t.Fatalf("disabled account api token = %d %v, want 401 TOKEN_INVALID", status, out)
 	}
 
 	// A disabled account cannot widen its footprint either.
