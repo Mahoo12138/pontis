@@ -95,7 +95,7 @@ jobs:
           curl -sf http://127.0.0.1:8080/healthz > /dev/null || { cat server.log; exit 1; }
 
           # SPA 深链：直接刷新一个前端路由要拿到应用外壳，而不是 404。
-          curl -sf http://127.0.0.1:8080/spaces/0198c0de-7000-7000-8000-000000000020/explorer \
+          curl -sf http://127.0.0.1:8080/devices \
             | grep -q 'id="root"'
 
           # 未知 API 路由必须是 API 错误，不能回退成 index.html。

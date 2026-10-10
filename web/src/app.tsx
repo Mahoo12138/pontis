@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import AppShell from './components/app-shell/AppShell';
+import UnknownRoute from './components/common/UnknownRoute';
 import LoginPage from './routes/login';
 import SetupPage from './routes/setup';
 import SpaceExplorerPage from './routes/space-explorer';
@@ -78,6 +79,14 @@ export default function App() {
                     <Route path="jobs" element={<JobsPage />} />
                     <Route path="system" element={<AdminSystemPage />} />
                   </Route>
+                  {/*
+                    Without this the shell rendered around an empty content
+                    area: /spaces/<id>/explorer showed a sidebar and a header
+                    and nothing else, with no message, so a mistyped or stale
+                    link reads as "the page is broken" rather than "this route
+                    does not exist".
+                  */}
+                  <Route path="*" element={<UnknownRoute />} />
                 </Routes>
               </AppShell>
             </RequireAuth>
