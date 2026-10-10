@@ -130,8 +130,16 @@ Alpha 阶段的范围与未完成项记在
 [next-development-plan.md](next-development-plan.md)，逐条缺陷见
 [review.md](review.md)。已知值得注意的几点：
 
-- 服务端与扩展曾各有一套合并算法；对账生命周期已经统一到服务端，
-  扩展里那套（`initialSync.ts`）仍在被若干路径调用。
+- 服务端与扩展曾各有一套合并算法；对账生命周期已统一到服务端，扩展那套已删除
+  （`extension/src/core/sync/verifyReplica.ts` 只剩客户端的校验与修复）。
+- **密码重置走不通**：管理员的"生成重置链接"返回 `/reset?token=…`
+  （`server/internal/httpapi/admin.go:143`），但前端没有 `/reset` 路由，点开只会落到
+  "没有这个页面"。服务端侧 token 消费也不在一个事务里，重复使用之间有窗口。
+- **CSRF / Origin 服务端不校验**：`@pontis/api` 会去读一个服务端从未输出的
+  `meta[name="csrf-token"]` 并回传 `X-CSRF-Token`，而 Go 侧没有任何地方检查它，
+  状态变更请求也不验 Origin。会话 Cookie 是 HttpOnly + Lax，跨站表单提交因此被挡住
+  大半，但同站（任意子域）页面不受 Lax 保护，且没有 `Secure` 属性由部署模式决定。
+- `public_url` 与 `trusted_proxies` 只是被读进配置，服务端没有任何地方消费它们。
 - 真实浏览器（unpacked 扩展 + 真服务端）的双端收敛目前是**手工**流程，
   见 docs/21 §10；没有自动化 E2E。
 - 没有 lint 命令：`eslint` 既不是任何包的依赖，也没有配置文件。
