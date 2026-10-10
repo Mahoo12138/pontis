@@ -14,28 +14,28 @@ import (
 // --- handlers: device overview (session auth) ---
 
 type bindingOverviewDTO struct {
-	ID              string `json:"id"`
-	SpaceID         string `json:"space_id"`
-	SpaceName       string `json:"space_name"`
-	SyncMode        string `json:"sync_mode"`
-	State           string `json:"state"`
-	Health          string `json:"health"`
-	Epoch           int64  `json:"epoch"`
-	AppliedRevision int64  `json:"applied_revision"`
-	ServerRevision  int64  `json:"server_revision"`
+	ID              string  `json:"id"`
+	SpaceID         string  `json:"space_id"`
+	SpaceName       string  `json:"space_name"`
+	SyncMode        string  `json:"sync_mode"`
+	State           string  `json:"state"`
+	Health          string  `json:"health"`
+	Epoch           int64   `json:"epoch"`
+	AppliedRevision int64   `json:"applied_revision"`
+	ServerRevision  int64   `json:"server_revision"`
 	LastSyncAt      *string `json:"last_sync_at"`
 }
 
 type deviceOverviewDTO struct {
-	ID          string               `json:"id"`
-	Name        string               `json:"name"`
-	ClientType  string               `json:"client_type"`
-	Browser     string               `json:"browser"`
-	Platform    string               `json:"platform"`
-	SyncMode    string               `json:"sync_mode"`
-	CreatedAt   string               `json:"created_at"`
-	LastSeenAt  *string              `json:"last_seen_at"`
-	Bindings    []bindingOverviewDTO `json:"bindings"`
+	ID         string               `json:"id"`
+	Name       string               `json:"name"`
+	ClientType string               `json:"client_type"`
+	Browser    string               `json:"browser"`
+	Platform   string               `json:"platform"`
+	SyncMode   string               `json:"sync_mode"`
+	CreatedAt  string               `json:"created_at"`
+	LastSeenAt *string              `json:"last_seen_at"`
+	Bindings   []bindingOverviewDTO `json:"bindings"`
 }
 
 func (s *Server) handleDeviceOverview(w http.ResponseWriter, r *http.Request) {
@@ -234,6 +234,16 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 
 // --- handlers: system settings (admin) ---
 
+// These are stored instance policy values. As of now **nothing reads them**:
+// there is no registration endpoint, so registration_mode gates no path; the
+// session lifetime comes from a constant in internal/app; creating a Space
+// does not count against max_spaces_per_user; and new accounts take their
+// locale from the server default, not from default_locale.
+//
+// Keeping the storage is deliberate — the enforcement lands next to the key it
+// reads — but the Web UI disables these controls until then, because an
+// accepted PATCH that changes no behaviour is how an operator learns to
+// distrust the settings page.
 var settingDefaults = map[string]string{
 	"registration_mode":   "closed",
 	"default_locale":      "zh-CN",

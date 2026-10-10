@@ -56,7 +56,7 @@ SQLite Driver 若开发期 transaction/locking integration tests 暴露问题，
 TypeScript
 React 18
 Vite
-TanStack Router
+React Router (react-router-dom)
 TanStack Query
 Mantine
 Vanilla Extract
@@ -68,13 +68,17 @@ i18n: zh-CN / en baseline
 状态分工：
 
 ```text
-URL State       → TanStack Router
+URL State       → React Router
 Server State    → TanStack Query
 Form State      → Mantine Form
 Local UI State  → React state/reducer
 ```
 
 V1 不默认 Redux/Zustand。
+
+路由器最初设计为 TanStack Router，实现从一开始用 React Router，2026-10-10 已把
+这个选择记为决策并移除未使用的 TanStack Router 依赖（见
+[22-decisions-and-invariants.md](./22-decisions-and-invariants.md) 的「路由栈」）。
 
 TanStack Table / Virtual 视实际页面与性能需求引入，不因“全家桶”提前全部安装。
 

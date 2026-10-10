@@ -15,11 +15,15 @@ import (
 // Config holds deployment settings. Product settings editable from the Web UI
 // live in SQLite (system_settings), not here.
 type Config struct {
-	Listen          string        `toml:"listen"`
-	DataDir         string        `toml:"data_dir"`
+	Listen  string `toml:"listen"`
+	DataDir string `toml:"data_dir"`
+	// PublicURL and TrustedProxies are parsed and validated but have no
+	// consumer yet: nothing builds absolute links from PublicURL, and no
+	// middleware trusts X-Forwarded-For from these CIDRs. Deployments must not
+	// rely on either until the code that reads them exists.
 	PublicURL       string        `toml:"public_url"`
-	LogLevel        string        `toml:"log_level"`
 	TrustedProxies  []string      `toml:"trusted_proxies"`
+	LogLevel        string        `toml:"log_level"`
 	ShutdownTimeout time.Duration `toml:"shutdown_timeout"`
 
 	// LinkCheckAllow lists CIDR ranges the server may reach when checking a

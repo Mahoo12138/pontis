@@ -41,12 +41,28 @@
 | Telemetry | off by default |
 | Backend | Go + chi + SQLite + handwritten SQL |
 | ORM | None |
-| Frontend | TS + React18 + TanStack Router/Query + Mantine + Vanilla Extract |
+| Frontend | TS + React18 + React Router / TanStack Query + Mantine + Vanilla Extract |
+| Web Router | react-router-dom（见下方「路由栈」决策）；TanStack Router 不再并列 |
 | Extension | TS + WXT + Dexie |
 | Repository | monorepo server/web/extension/packages |
 | Web production | dist embedded into Go binary |
 | Settings IA | `设置` 仅承载当前用户个人设置；实例级能力进入独立 `管理` 区 |
 | Admin IA | 管理员主导航固定提供 `用户` / `后台任务` / `系统设置` 三个一等入口 |
+
+### 路由栈（2026-10-10）
+
+**决策：Web 使用 react-router-dom。TanStack Router 从依赖中移除，不再"两套并存"。**
+
+设计文档最初写的是 TanStack Router，实现从一开始就用 React Router：`web/src/app.tsx`
+用 `BrowserRouter`，17 个路由全在 `web/src/routes/`。`package.json` 里同时列着
+`@tanstack/react-router`，但源码没有任何一处 import 它——只是一个装了没用的包。
+
+并存的成本不是抽象的：文档与依赖各说一套，读代码的人要猜哪套是权威的，而这类
+"模块都有、调用链不通"正是本仓库上一轮的主要病因。
+
+迁移到 TanStack Router（类型化 search params 是它真正的价值）如果要做，条件是：
+作为独立分支，自带深链与 search params 的测试，且不夹带任何同步正确性修复。在
+内部 Alpha 里它排不到前面。
 
 ## B. Sync Invariants
 
