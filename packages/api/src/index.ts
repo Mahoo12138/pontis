@@ -1,5 +1,8 @@
 export { client, request } from './client';
 export { ApiError } from './errors';
+export type { ErrorEnvelope } from './errors';
+export * from './validate';
+export * from './contract';
 export type {
   MetaResponse,
   User,

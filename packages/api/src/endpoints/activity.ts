@@ -1,8 +1,9 @@
 import { client } from '../client';
+import { checkActivityList } from '../contract';
 import type { ActivityListResponse, UndoActivityResult } from '../types';
 
 export function listActivity(spaceId: string) {
-  return client.get<ActivityListResponse>(`/spaces/${spaceId}/activity`);
+  return client.get<ActivityListResponse>(`/spaces/${spaceId}/activity`, checkActivityList);
 }
 
 /**

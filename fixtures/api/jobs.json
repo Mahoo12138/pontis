@@ -1,0 +1,14 @@
+{
+  "jobs": [
+    {
+      "attempt": 0,
+      "id": "id-1",
+      "max_attempts": 3,
+      "owner": "alice",
+      "scheduled_at": "2026-01-01T00:00:00Z",
+      "space_name": "Personal",
+      "status": "queued",
+      "type": "organizer.link_check"
+    }
+  ]
+}

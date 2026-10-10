@@ -1,0 +1,14 @@
+{
+  "bindings": [
+    {
+      "applied_revision": 0,
+      "device_id": "id-1",
+      "epoch": 1,
+      "id": "id-2",
+      "max_client_seq": 0,
+      "received_revision": 0,
+      "space_id": "id-3",
+      "state": "pending_initial"
+    }
+  ]
+}

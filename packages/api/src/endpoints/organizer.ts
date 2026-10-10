@@ -1,4 +1,5 @@
 import { client } from '../client';
+import { checkDuplicates, checkLinkCheckResults } from '../contract';
 import type {
   DuplicatesResponse,
   LinkCheckResultsResponse,
@@ -10,9 +11,12 @@ export function runLinkCheck(spaceId: string) {
 }
 
 export function listLinkCheckResults(spaceId: string) {
-  return client.get<LinkCheckResultsResponse>(`/spaces/${spaceId}/organizer/link-check/results`);
+  return client.get<LinkCheckResultsResponse>(
+    `/spaces/${spaceId}/organizer/link-check/results`,
+    checkLinkCheckResults,
+  );
 }
 
 export function listDuplicates(spaceId: string) {
-  return client.get<DuplicatesResponse>(`/spaces/${spaceId}/organizer/duplicates`);
+  return client.get<DuplicatesResponse>(`/spaces/${spaceId}/organizer/duplicates`, checkDuplicates);
 }

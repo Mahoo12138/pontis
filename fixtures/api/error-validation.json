@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "INVALID_NAME",
+    "message": "name must not be empty",
+    "request_id": "req_unknown"
+  }
+}

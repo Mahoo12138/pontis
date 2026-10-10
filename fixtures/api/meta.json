@@ -1,0 +1,8 @@
+{
+  "api_version": "v1",
+  "instance_id": "id-1",
+  "product_version": "0.1.0",
+  "sync_protocol_versions": [
+    1
+  ]
+}

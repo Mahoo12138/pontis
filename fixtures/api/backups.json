@@ -1,0 +1,15 @@
+{
+  "backups": [
+    {
+      "bookmark_count": 1,
+      "created_at": "2026-01-01T00:00:00Z",
+      "filename": "Personal-20260101-000000-manual.json",
+      "id": "id-1",
+      "kind": "manual",
+      "node_count": 2,
+      "protected": false,
+      "size_bytes": 1024,
+      "space_id": "id-2"
+    }
+  ]
+}

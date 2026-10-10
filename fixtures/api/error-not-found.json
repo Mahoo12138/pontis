@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "SPACE_NOT_FOUND",
+    "message": "unknown space",
+    "request_id": "req_unknown"
+  }
+}

@@ -1,4 +1,5 @@
 import { client } from '../client';
+import { checkNode, checkNodeList, checkRootSlotList } from '../contract';
 import type {
   Node,
   NodeListResponse,
@@ -8,32 +9,27 @@ import type {
   MoveNodeRequest,
 } from '../types';
 
-/** List all nodes in a space (gap endpoint — mock only). */
 export function listNodes(spaceId: string) {
-  return client.get<NodeListResponse>(`/spaces/${spaceId}/nodes`);
+  return client.get<NodeListResponse>(`/spaces/${spaceId}/nodes`, checkNodeList);
 }
 
-/** List root slots for a space (gap endpoint — mock only). */
 export function listRootSlots(spaceId: string) {
-  return client.get<RootSlotListResponse>(`/spaces/${spaceId}/root-slots`);
+  return client.get<RootSlotListResponse>(`/spaces/${spaceId}/root-slots`, checkRootSlotList);
 }
 
-/** Create a node (gap endpoint — mock only). */
 export function createNode(spaceId: string, params: CreateNodeRequest) {
-  return client.post<Node>(`/spaces/${spaceId}/nodes`, params);
+  return client.post<Node>(`/spaces/${spaceId}/nodes`, params, checkNode);
 }
 
-/** Update a node's title or URL (gap endpoint — mock only). */
+/** Update a node's title or URL. */
 export function updateNode(spaceId: string, nodeId: string, params: UpdateNodeRequest) {
-  return client.patch<Node>(`/spaces/${spaceId}/nodes/${nodeId}`, params);
+  return client.patch<Node>(`/spaces/${spaceId}/nodes/${nodeId}`, params, checkNode);
 }
 
-/** Move a node (gap endpoint — mock only). */
 export function moveNode(spaceId: string, nodeId: string, params: MoveNodeRequest) {
-  return client.patch<Node>(`/spaces/${spaceId}/nodes/${nodeId}/move`, params);
+  return client.patch<Node>(`/spaces/${spaceId}/nodes/${nodeId}/move`, params, checkNode);
 }
 
-/** Delete a node (gap endpoint — mock only). */
 export function deleteNode(spaceId: string, nodeId: string) {
   return client.delete<void>(`/spaces/${spaceId}/nodes/${nodeId}`);
 }

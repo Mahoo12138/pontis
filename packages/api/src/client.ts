@@ -1,4 +1,5 @@
 import { ApiError } from './errors';
+import type { Checker } from './validate';
 
 const BASE_URL = '/api/v1';
 
@@ -14,7 +15,7 @@ export async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  options?: { csrf?: boolean },
+  options?: { csrf?: boolean; check?: Checker<T> },
 ): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -53,13 +54,21 @@ export async function request<T>(
     return undefined as T;
   }
 
-  return res.json() as Promise<T>;
+  const json = (await res.json()) as unknown;
+  // A declared checker is the difference between "the compiler was told" and
+  // "the server sent it": it throws a ContractViolation naming the field,
+  // which surfaces as a failed query instead of a blank list downstream.
+  return options?.check ? options.check(json, 'body') : (json as T);
 }
 
 export const client = {
-  get: <T>(path: string) => request<T>('GET', path),
-  post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
-  put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
-  patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
-  delete: <T>(path: string) => request<T>('DELETE', path),
+  get: <T>(path: string, check?: Checker<T>) => request<T>('GET', path, undefined, { check }),
+  post: <T>(path: string, body?: unknown, check?: Checker<T>) =>
+    request<T>('POST', path, body, { check }),
+  put: <T>(path: string, body?: unknown, check?: Checker<T>) =>
+    request<T>('PUT', path, body, { check }),
+  patch: <T>(path: string, body?: unknown, check?: Checker<T>) =>
+    request<T>('PATCH', path, body, { check }),
+  delete: <T>(path: string, check?: Checker<T>) =>
+    request<T>('DELETE', path, undefined, { check }),
 };

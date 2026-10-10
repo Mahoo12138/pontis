@@ -1,0 +1,12 @@
+{
+  "spaces": [
+    {
+      "created_at": "2026-01-01T00:00:00Z",
+      "epoch": 1,
+      "id": "id-1",
+      "journal_floor_revision": 0,
+      "name": "Personal",
+      "revision": 2
+    }
+  ]
+}

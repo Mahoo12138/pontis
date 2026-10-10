@@ -467,7 +467,11 @@ export interface LinkCheckRunResponse {
 
 export interface LinkCheckResultsResponse {
   job_id: string;
-  finished_at: string;
+  total: number;
+  /** Checked so far. A run that has not finished reports done < total. */
+  done: number;
+  /** Absent while the run is in progress, and for a space with no run. */
+  finished_at?: string;
   results: LinkCheckResult[];
 }
 
@@ -518,7 +522,11 @@ export interface ApiToken {
   id: string;
   name: string;
   scopes: string[];
-  space_scope: 'all' | string[];
+  /**
+   * "all", or a JSON array of space ids *encoded as a string* — that is what
+   * the server stores and re-emits, so it is not a string[] here.
+   */
+  space_scope: string;
   created_at: string;
   last_used_at: string | null;
 }
@@ -530,7 +538,8 @@ export interface ApiTokenListResponse {
 export interface CreateTokenRequest {
   name: string;
   scopes: string[];
-  space_scope: 'all' | string[];
+  /** "all" or a JSON array of space ids encoded as a string (see ApiToken). */
+  space_scope: string;
 }
 
 export interface CreateTokenResponse {

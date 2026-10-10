@@ -1,4 +1,5 @@
 import { client } from '../client';
+import { checkApiTokenList } from '../contract';
 import type {
   ApiToken,
   ApiTokenListResponse,
@@ -10,7 +11,7 @@ import type {
 } from '../types';
 
 export function listTokens() {
-  return client.get<ApiTokenListResponse>('/tokens');
+  return client.get<ApiTokenListResponse>('/tokens', checkApiTokenList);
 }
 
 export function createToken(params: CreateTokenRequest) {

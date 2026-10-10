@@ -1,0 +1,24 @@
+{
+  "activity": [
+    {
+      "action": "create",
+      "actor": "alice (网页)",
+      "expired": false,
+      "id": "id-1",
+      "summary": "新建了「Example」",
+      "timestamp": "2026-01-01T00:00:00Z",
+      "undoable": true,
+      "undone": false
+    },
+    {
+      "action": "create",
+      "actor": "alice (网页)",
+      "expired": false,
+      "id": "id-2",
+      "summary": "新建了「Reading」",
+      "timestamp": "2026-01-01T00:00:00Z",
+      "undoable": true,
+      "undone": false
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import { client } from '../client';
+import { checkScheduleList, checkScheduleView, checkTaskList } from '../contract';
 import type {
   ScheduleRequest,
   ScheduleView,
@@ -7,21 +8,21 @@ import type {
 
 /** User task view: own schedules plus recent own jobs (doc 13 §4.1). */
 export function listMyTasks() {
-  return client.get<TaskListResponse>('/tasks');
+  return client.get<TaskListResponse>('/tasks', checkTaskList);
 }
 
 // --- plan schedules ---
 
 export function listSchedules() {
-  return client.get<{ schedules: ScheduleView[] }>('/schedules');
+  return client.get<{ schedules: ScheduleView[] }>('/schedules', checkScheduleList);
 }
 
 export function createSchedule(req: ScheduleRequest) {
-  return client.post<ScheduleView>('/schedules', req);
+  return client.post<ScheduleView>('/schedules', req, checkScheduleView);
 }
 
 export function updateSchedule(scheduleId: string, req: ScheduleRequest) {
-  return client.patch<ScheduleView>(`/schedules/${scheduleId}`, req);
+  return client.patch<ScheduleView>(`/schedules/${scheduleId}`, req, checkScheduleView);
 }
 
 export function deleteSchedule(scheduleId: string) {

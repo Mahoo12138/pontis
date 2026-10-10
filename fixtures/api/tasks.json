@@ -1,0 +1,33 @@
+{
+  "jobs": [
+    {
+      "attempt": 0,
+      "id": "id-1",
+      "max_attempts": 3,
+      "phase": "",
+      "scheduled_at": "2026-01-01T00:00:00Z",
+      "space_id": "id-2",
+      "space_name": "Personal",
+      "status": "queued",
+      "title_key": "task.link_check",
+      "type": "organizer.link_check"
+    }
+  ],
+  "schedules": [
+    {
+      "created_at": "2026-01-01T00:00:00Z",
+      "day_of_month": 0,
+      "enabled": true,
+      "id": "id-3",
+      "kind": "daily",
+      "next_run_at": "2026-01-01T00:00:00Z",
+      "space_id": "id-2",
+      "space_name": "Personal",
+      "time_of_day": "02:00",
+      "timezone": "Asia/Shanghai",
+      "title_key": "task.link_check",
+      "type": "organizer.link_check",
+      "weekday": 0
+    }
+  ]
+}

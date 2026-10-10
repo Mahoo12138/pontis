@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-01-01T00:00:00Z",
+  "display_name": "alice",
+  "email": "alice@example.com",
+  "id": "id-1",
+  "locale": "zh-CN",
+  "role": "admin",
+  "status": "active",
+  "username": "alice"
+}

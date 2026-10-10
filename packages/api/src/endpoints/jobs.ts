@@ -1,8 +1,9 @@
 import { client } from '../client';
+import { checkJobList } from '../contract';
 import type { JobListResponse } from '../types';
 
 export function listJobs() {
-  return client.get<JobListResponse>('/admin/jobs');
+  return client.get<JobListResponse>('/admin/jobs', checkJobList);
 }
 
 export function cancelJob(jobId: string) {

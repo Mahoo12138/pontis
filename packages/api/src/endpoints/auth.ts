@@ -1,8 +1,9 @@
 import { client } from '../client';
+import { checkUser } from '../contract';
 import type { SetupRequest, LoginRequest, LoginResponse, User } from '../types';
 
 export function setup(params: SetupRequest) {
-  return client.post<User>('/auth/setup', params);
+  return client.post<User>('/auth/setup', params, checkUser);
 }
 
 export function login(params: LoginRequest) {
@@ -14,5 +15,5 @@ export function logout() {
 }
 
 export function getMe() {
-  return client.get<User>('/auth/me');
+  return client.get<User>('/auth/me', checkUser);
 }
