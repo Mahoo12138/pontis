@@ -83,7 +83,7 @@ export function flattenVisible(
       if (node.type === 'folder') {
         rows.push({ node, depth, childCount: kids.length });
         if (expanded.has(node.id)) walk(kids, depth + 1);
-      } else {
+      } else if (filter !== 'folders') {
         rows.push({ node, depth, childCount: 0 });
       }
     }
