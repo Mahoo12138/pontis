@@ -1,0 +1,1 @@
+Placeholder so `go build ./...` works before a release build stages the web dist here.

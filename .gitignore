@@ -20,6 +20,11 @@ node_modules/
 web/dist/
 web/test-results/
 
+# web dist staged for go:embed; the placeholder keeps `go build` working in a
+# fresh checkout, a release build fills the directory
+server/internal/webui/dist/*
+!server/internal/webui/dist/.gitkeep
+
 # extension build output / generated types
 extension/.output/
 extension/.wxt/

@@ -31,6 +31,7 @@ import (
 	"pontis/internal/sync"
 	"pontis/internal/token"
 	"pontis/internal/transfer"
+	"pontis/internal/webui"
 )
 
 // sessionTTL is the web session lifetime.
@@ -92,6 +93,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 	scheduleSvc := schedule.NewService(scheduleStore, jobSvc)
 	scheduleSvc.Log = logger
 	api := &httpapi.Server{
+		// Paths the API does not claim are served from the Web dist embedded
+		// in this binary (doc 21 §12: one artifact, no Node on the target).
+		Web:           webui.Assets(),
 		Auth:          auth.NewService(sqlite.NewAuthStore(db), sessionTTL),
 		Devices:       device.NewService(sqlite.NewDeviceStore(db)),
 		Spaces:        space.NewService(sqlite.NewSpaceStore(db)),

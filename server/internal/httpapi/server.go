@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -58,6 +59,11 @@ type Server struct {
 	Transfer      *transfer.Service
 	SpaceTransfer *spacetransfer.Service
 	Accounts      *sqlite.AccountStore
+
+	// Web serves the compiled Web app for any path the API routes do not
+	// claim. Nil in a checkout that never staged a build; the server then
+	// answers with a hint instead of an empty page.
+	Web fs.FS
 
 	// InstanceID identifies this server installation across URL changes.
 	InstanceID string
@@ -242,6 +248,11 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/v1/sync/reconciliations/{sessionID}/steps", s.handleReconciliationSteps)
 		r.Post("/api/v1/sync/reconciliations/{sessionID}/complete", s.handleCompleteReconciliation)
 	})
+
+	// Nothing matched. An unknown API route stays an API error; a path the
+	// Web app routes on the client falls through to the embedded dist.
+	r.NotFound(s.handleNotFound)
+	r.MethodNotAllowed(s.handleMethodNotAllowed)
 
 	return r
 }

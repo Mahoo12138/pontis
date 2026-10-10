@@ -3,11 +3,15 @@
   "private": true,
   "packageManager": "pnpm@9.15.4",
   "scripts": {
-    "dev": "pnpm --filter web dev",
-    "build": "pnpm --filter web build",
-    "lint": "pnpm -r lint",
+    "dev": "pnpm --filter @pontis/web dev",
+    "build": "pnpm build:web && pnpm build:server",
+    "build:web": "pnpm --filter @pontis/web build",
+    "build:server": "node scripts/stage-web-dist.mjs && cd server && go build -o pontis ./cmd/server",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r --no-bail test",
+    "test:go": "cd server && go test ./...",
+    "test:go:race": "cd server && go test -race ./...",
+    "test:fixtures": "cd server && go test -count=1 ./internal/httpapi -run 'TestGolden(Protocol|REST)Fixtures' && pnpm --filter @pontis/protocol test"
   },
   "devDependencies": {
     "typescript": "^5.7.3"
