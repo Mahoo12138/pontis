@@ -60,7 +60,7 @@ export function App() {
         </Title>
         {waiting.length > 0 && (
           <Badge color="warningAmber" variant="filled">
-            {`${waiting.length} 项待确认`}
+            {`${waiting.length} 个空间待确认`}
           </Badge>
         )}
       </Group>

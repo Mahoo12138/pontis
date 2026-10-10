@@ -57,6 +57,8 @@ export function App() {
 
   const [paired, setPaired] = useState(false);
   const [serverHost, setServerHost] = useState('');
+  /** The registered device name, read back from storage for the header. */
+  const [deviceLabel, setDeviceLabel] = useState('');
   const [serverUrl, setServerUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -88,6 +90,7 @@ export function App() {
     setDiagnostics((await db.diagnostics.orderBy('id').reverse().limit(30).toArray()).reverse());
     const b = await bootstrap.get();
     setPaired(Boolean(b.serverUrl && b.deviceToken));
+    setDeviceLabel(b.deviceName ?? '');
     if (b.serverUrl) {
       setServerUrl(b.serverUrl);
       setServerHost(hostOf(b.serverUrl));
@@ -246,7 +249,11 @@ export function App() {
     });
   };
 
-  const attention = bindings.filter((b) => b.state !== 'active' && b.state !== 'paused');
+  // Only states the user can act on count as waiting for them; pending_initial
+  // and initializing resolve on their own in the next lifecycle round.
+  const attention = bindings.filter((b) =>
+    ['waiting_user', 'mount_missing', 'needs_recovery'].includes(b.state),
+  );
   const showPairForm = !paired || editPairing;
 
   return (
@@ -259,20 +266,15 @@ export function App() {
                 Pontis 设置
               </Title>
               <Text size="sm" c="dimmed">
-                {paired ? `已配对到 ${serverHost}` : '尚未配对：先登录服务器并注册本设备'}
+                {paired
+                  ? `本机已配对到 ${serverHost}${deviceLabel ? ` · ${deviceLabel}` : ''}`
+                  : '尚未配对：先登录服务器并注册本设备'}
               </Text>
             </Stack>
             {paired && (
-              <Group gap="xs" wrap="nowrap">
-                {deviceName && (
-                  <Text size="xs" c="dimmed">
-                    {deviceName}
-                  </Text>
-                )}
-                <Button size="compact-xs" variant="subtle" color="gray" onClick={() => setEditPairing((v) => !v)}>
-                  {editPairing ? '收起' : '修改'}
-                </Button>
-              </Group>
+              <Button size="compact-xs" variant="subtle" color="gray" onClick={() => setEditPairing((v) => !v)}>
+                {editPairing ? '收起' : '修改'}
+              </Button>
             )}
           </Group>
 
@@ -334,7 +336,7 @@ export function App() {
             ) : (
               <Group justify="space-between" wrap="nowrap">
                 <Text size="sm">
-                  本机已以设备身份连接 <Code>{serverHost}</Code>
+                  本机以「{deviceLabel || '当前设备'}」身份连接 <Code>{serverHost}</Code>
                 </Text>
                 <Button size="compact-xs" variant="subtle" color="errorRed" onClick={() => void doUnpair()}>
                   解除配对
@@ -354,7 +356,7 @@ export function App() {
               ) : undefined
             }
           >
-            <Group grow align="flex-start" wrap="nowrap">
+            <Group grow align="flex-start" wrap="wrap">
               <Select
                 label="同步空间"
                 placeholder="选择空间"
@@ -362,6 +364,7 @@ export function App() {
                 value={selectedSpace}
                 onChange={setSelectedSpace}
                 disabled={!paired}
+                style={{ minWidth: 240 }}
               />
               <Select
                 label="挂载目录"
@@ -370,15 +373,23 @@ export function App() {
                 value={selectedFolder}
                 onChange={setSelectedFolder}
                 searchable
+                style={{ minWidth: 240 }}
               />
             </Group>
-            <Button
-              loading={busy === 'bind'}
-              disabled={!paired || !selectedSpace || !selectedFolder}
-              onClick={() => void doBind()}
-            >
-              创建绑定
-            </Button>
+            {paired && spaces.length === 0 && (
+              <Text size="xs" c="dimmed">
+                这个账号在服务器上还没有空间，请先在 Web 端创建一个。
+              </Text>
+            )}
+            <Group gap="xs">
+              <Button
+                loading={busy === 'bind'}
+                disabled={!paired || !selectedSpace || !selectedFolder}
+                onClick={() => void doBind()}
+              >
+                创建绑定
+              </Button>
+            </Group>
           </Section>
 
           <Section title="绑定列表" right={<Text size="xs" c="dimmed">{`${bindings.length} 个绑定`}</Text>}>
@@ -392,9 +403,11 @@ export function App() {
                   const st = bindingStatus(b);
                   return (
                     <Box key={b.id} className="pontis-block">
-                      <Group justify="space-between" wrap="nowrap">
+                      <Group justify="space-between" wrap="wrap">
                         <Group gap="xs" wrap="nowrap">
-                          <Text fw={600}>{b.spaceName}</Text>
+                          <Text fw={600} truncate maw={280}>
+                            {b.spaceName}
+                          </Text>
                           <Badge color={st.color} variant="light">
                             {st.label}
                           </Badge>
@@ -483,10 +496,15 @@ export function App() {
                   <Box key={b.id} className="pontis-block">
                     <Stack gap="sm">
                       <Group justify="space-between" wrap="nowrap">
-                        <Title order={3} size="md" fw={600}>
+                        <Title
+                          order={3}
+                          size="md"
+                          fw={600}
+                          style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        >
                           {b.spaceName}
                         </Title>
-                        <Badge color={st.color} variant="light">
+                        <Badge color={st.color} variant="light" style={{ flex: '0 0 auto' }}>
                           {st.label}
                         </Badge>
                       </Group>
@@ -524,8 +542,8 @@ export function App() {
                             服务端在提交合并前有几处身份要你确认:
                           </Text>
                           {session.issues!.map((issue) => (
-                            <Group key={issue.id} gap="xs" wrap="nowrap" justify="space-between">
-                              <Stack gap={0}>
+                            <Group key={issue.id} gap="xs" wrap="wrap" justify="space-between">
+                              <Stack gap={0} style={{ flex: '1 1 220px' }}>
                                 <Text size="sm" truncate maw={280}>
                                   {issue.payload.title || issue.payload.source_ref}
                                 </Text>
@@ -537,7 +555,8 @@ export function App() {
                               </Stack>
                               <Select
                                 size="xs"
-                                w={260}
+                                maw={260}
+                                style={{ flex: '1 1 180px' }}
                                 placeholder="沿用服务端默认"
                                 data={issue.payload.candidates.map((c) => ({ value: c, label: c }))}
                                 value={issueChoices[issue.id] || null}
@@ -679,7 +698,9 @@ export function App() {
                       </Table.Td>
                       <Table.Td>
                         <Tooltip label={JSON.stringify(d.data ?? {})} maw={420} withArrow>
-                          <Text size="xs" truncate>
+                          {/* Focusable so the payload is reachable without a mouse
+                              (docs/23 §34: keyboard paths and visible focus). */}
+                          <Text size="xs" truncate tabIndex={0}>
                             {d.message}
                           </Text>
                         </Tooltip>

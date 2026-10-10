@@ -38,5 +38,7 @@ export function relTime(ts: number | null | undefined): string {
   if (secs < 5) return '刚刚';
   if (secs < 60) return `${secs} 秒前`;
   if (secs < 3600) return `${Math.round(secs / 60)} 分钟前`;
-  return new Date(ts).toLocaleTimeString();
+  if (secs < 86400) return `${Math.round(secs / 3600)} 小时前`;
+  // A clock time alone would read as "today" for a sync from last month.
+  return new Date(ts).toLocaleDateString();
 }
