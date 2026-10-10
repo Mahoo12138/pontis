@@ -84,6 +84,10 @@ jobs:
           # env -i 之后进程没有 PATH，也就接触不到 Node：产物必须自己就能跑。
           env -i PONTIS_DATA_DIR="$PWD/run-data" PONTIS_LISTEN=127.0.0.1:8080 \
             PONTIS_LOG_LEVEL=warn ./server/pontis -config no-such-file.toml > server.log 2>&1 &
+          server_pid=$!
+          # 非交互式 bash 没有作业控制，`kill %1` 是不起眼的空操作（实测本地就是这样
+          # 留下了三个还在监听的冒烟进程），所以记 PID；失败路径也要收掉进程。
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           for _ in $(seq 1 40); do
             if curl -sf http://127.0.0.1:8080/healthz > /dev/null; then break; fi
             sleep 0.5
@@ -111,5 +115,4 @@ jobs:
           curl -sf -X POST http://127.0.0.1:8080/api/v1/spaces \
             -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
             -d '{"name":"CI"}' | grep -q '"name":"CI"'
-          kill %1
 
