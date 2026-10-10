@@ -22,6 +22,7 @@ import {
   type BindingRecord,
   type PontisDB,
   type ReconSessionRecord,
+  type ReconType,
 } from '../store/db';
 import type {
   ClientSnapshotWire,
@@ -178,27 +179,90 @@ export class InitialReconciler {
     }
   }
 
+  /**
+   * Mapping lost (doc 06 §12): the device no longer trusts its
+   * Canonical ↔ Browser mapping, so it re-declares the browser tree with fresh
+   * local refs and lets the server match it. The client plans nothing — a
+   * recovery re-maps, it does not re-create, and content the browser holds
+   * alone is protected through the op pipeline and the Recovery Intent review
+   * (doc 06 §11).
+   *
+   * The session is opened while the binding is still `active` because that is
+   * the state the server requires for a recovery; `initializing` comes after,
+   * and it is what pauses the incremental loop meanwhile.
+   */
+  async recoverMapping(bindingId: string): Promise<LifecycleOutcome | 'idle'> {
+    const binding = await this.mustGetBinding(bindingId);
+    if (binding.state !== 'active') {
+      throw new Error(`initialReconcile: mapping recovery needs an active binding, got ${binding.state}`);
+    }
+    const session = await this.openSession(binding, 'MAPPING_LOST');
+    await this.db.bindings.update(bindingId, { state: 'initializing' });
+    return this.run({ ...binding, state: 'initializing' }, session);
+  }
+
+  /**
+   * mount_missing recovery (doc 03 §5): re-point a partial binding at another
+   * browser folder. The mapping belonged to the folder that is gone, so the
+   * replica state goes with it and the tree is matched again from scratch.
+   */
+  async remount(bindingId: string, folderBrowserId: string): Promise<LifecycleOutcome | 'idle'> {
+    const binding = await this.mustGetBinding(bindingId);
+    if (binding.mount.mode !== 'partial') {
+      throw new Error('initialReconcile: remount only supported for partial bindings');
+    }
+    if (!folderBrowserId) throw new Error('initialReconcile: remount needs a mount folder');
+
+    await this.db.transaction(
+      'rw',
+      [this.db.bindings, this.db.localNodes, this.db.pendingOps, this.db.expectedMutations, this.db.remoteChanges],
+      async () => {
+        const b = await this.db.bindings.get(bindingId);
+        if (!b) return;
+        b.mount = { ...b.mount, folderBrowserId };
+        b.recovery = null;
+        await this.db.bindings.put(b);
+        await this.db.localNodes.where('bindingId').equals(bindingId).delete();
+        await this.db.pendingOps.where('bindingId').equals(bindingId).delete();
+        await this.db.expectedMutations.where('bindingId').equals(bindingId).delete();
+        await this.db.remoteChanges.where('bindingId').equals(bindingId).delete();
+      },
+    );
+    await logDiagnostic(this.db, 'info', 'initial-reconcile', 'mount remounted, mapping recovered', {
+      bindingId,
+      folderBrowserId,
+    });
+    return this.recoverMapping(bindingId);
+  }
+
   private async driveBinding(bindingId: string): Promise<LifecycleOutcome | 'idle'> {
     const binding = await this.mustGetBinding(bindingId);
     // A waiting_user session is driven by `answer`, not by a sync trigger: the
     // server will not move until the user picks a candidate.
     if (binding.state !== 'pending_initial' && binding.state !== 'initializing') return 'idle';
     const found = await activeReconSession(this.db, bindingId);
-    // 'initializing' is shared with the client-side engines. A session that
-    // this lifecycle did not open stays theirs — but one it opened stays ours
-    // even when the first server call failed before an id came back.
+    // A session this lifecycle did not open stays someone else's — but one it
+    // opened stays ours even when the first server call failed before an id
+    // came back.
     if (found && found.driver !== 'server' && !found.serverSessionId) return 'idle';
     const session = found ?? (await this.openSession(binding));
     await this.db.bindings.update(binding.id, { state: 'initializing' });
     return this.run(binding, session);
   }
 
-  private async openSession(binding: BindingRecord): Promise<ReconSessionRecord> {
+  private async openSession(binding: BindingRecord, type: ReconType = 'INITIAL'): Promise<ReconSessionRecord> {
+    const existing = await activeReconSession(this.db, binding.id);
+    if (existing) {
+      if (existing.driver === 'server') return existing;
+      throw new Error(
+        `initialReconcile: binding ${binding.id} already has a ${existing.type} session this lifecycle does not own`,
+      );
+    }
     const now = Date.now();
     const session: ReconSessionRecord = {
       id: uuidv7(),
       bindingId: binding.id,
-      type: 'INITIAL',
+      type,
       state: 'RUNNING',
       phase: 'prepare',
       driver: 'server',
@@ -256,8 +320,12 @@ export class InitialReconciler {
     session: ReconSessionRecord,
   ): Promise<ReconciliationEnvelopeWire> {
     if (session.serverSessionId) return this.transport.getReconciliation(session.serverSessionId);
+    // A pending binding can only be finished by an `initial` reconciliation;
+    // anything else is a recovery against a binding the server still calls
+    // active (doc 08 §11).
     const type: ReconciliationType = session.type === 'INITIAL' ? 'initial' : 'recovery';
-    const env = await this.transport.createReconciliation(binding.id, type, 'first synchronization');
+    const reason = type === 'initial' ? 'first synchronization' : 'mapping lost';
+    const env = await this.transport.createReconciliation(binding.id, type, reason);
     session.serverSessionId = env.session.id;
     await this.touch(session);
     return env;

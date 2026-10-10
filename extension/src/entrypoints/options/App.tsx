@@ -31,7 +31,6 @@ import {
   type BindingRecord,
   type DiagnosticEvent,
   type PendingOpRecord,
-  type ReconDecision,
   type ReconSessionRecord,
 } from '../../core/store/db';
 import type { IntentDecision } from '../../core/sync/resync';
@@ -180,14 +179,6 @@ export function App() {
     setEditPairing(true);
     await refresh();
   };
-
-  const decide = (bindingId: string, decision: ReconDecision) =>
-    run(`decide:${bindingId}:${decision}`, async () => {
-      const resp = (await chrome.runtime.sendMessage({ type: 'pontis/initial-decision', bindingId, decision })) as
-        | { ok: boolean; error?: string }
-        | undefined;
-      if (resp && !resp.ok) setError(resp.error ?? '决策执行失败');
-    });
 
   /**
    * Answer the server plan's open questions (doc 08 §11). An issue left out of
@@ -584,44 +575,9 @@ export function App() {
                       {session?.state === 'WAITING_USER' &&
                         session.type !== 'FULL_RESYNC' &&
                         (session.issues?.length ?? 0) === 0 && (
-                          <Stack gap="xs">
-                            <Text size="sm" fw={600}>
-                              浏览器与服务器均有内容,请选择初始化策略:
-                            </Text>
-                            <Group gap="md" wrap="nowrap">
-                              <Stat label="已匹配" value={session.progress.matched} />
-                              <Stat label="仅本地" value={session.progress.localOnly} />
-                              <Stat label="仅服务器" value={session.progress.serverOnly} />
-                              <Stat label="歧义" value={session.progress.ambiguous} tone="warningAmber" />
-                            </Group>
-                            <Group gap="xs" wrap="nowrap">
-                              <Button loading={busy === `decide:${b.id}:merge`} onClick={() => void decide(b.id, 'merge')}>
-                                合并(推荐)
-                              </Button>
-                              <Button
-                                variant="light"
-                                loading={busy === `decide:${b.id}:use_server`}
-                                onClick={() => void decide(b.id, 'use_server')}
-                              >
-                                以服务器为准
-                              </Button>
-                              <Button
-                                variant="light"
-                                loading={busy === `decide:${b.id}:use_browser`}
-                                onClick={() => void decide(b.id, 'use_browser')}
-                              >
-                                以浏览器为准
-                              </Button>
-                              <Button
-                                variant="subtle"
-                                color="gray"
-                                loading={busy === `decide:${b.id}:import`}
-                                onClick={() => void decide(b.id, 'import')}
-                              >
-                                导入到独立文件夹
-                              </Button>
-                            </Group>
-                          </Stack>
+                          <Text size="sm" c="dimmed">
+                            服务端正在等待这台设备完成上一次选择。
+                          </Text>
                         )}
 
                       {b.state === 'mount_missing' && (

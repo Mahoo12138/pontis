@@ -4,8 +4,14 @@
 //   - minor (missing mirrors ≤30% of the managed scope) → targeted
 //     repair ops via verifyAndRepair (PROCESS_DEFERRED_LOCAL_CHANGES,
 //     doc 06 §13)
-//   - major (>30%)      → the mapping itself is untrustworthy; hand the
-//     binding to MAPPING_LOST reconciliation instead of mass-CREATEing.
+//   - major (>30%)      → the mapping itself is untrustworthy: report it and
+//     let the driver start a server-side recovery.
+//
+// This module detects; it no longer reconciles. Rewinding the watermarks by
+// hand so the client planner could replay the whole journal was the old way of
+// "finding the canonical state again"; under the server engine the recovery is
+// planned against a frozen snapshot and hands back the baseline it matched at,
+// so there is nothing to rewind (doc 06 §12).
 
 import { logDiagnostic, type PontisDB } from '../store/db';
 import { type InitialSyncEngine, type VerifyReport } from './initialSync';
@@ -37,14 +43,9 @@ export async function integrityCheck(
       db,
       'warn',
       'integrity',
-      'mapping loss exceeds threshold; entering MAPPING_LOST reconciliation',
+      'mapping loss exceeds threshold; a recovery reconciliation is needed',
       { bindingId, missing, scope, ratio },
     );
-    // Rewind the watermarks so the reconciliation sees the FULL canonical
-    // state (journal replay from zero, or the server snapshot when the
-    // journal was pruned) — not just the post-watermark increment.
-    await db.bindings.update(bindingId, { appliedRevision: 0, receivedRevision: 0 });
-    await engine.start(bindingId, 'MAPPING_LOST');
     return 'mapping_lost';
   }
 

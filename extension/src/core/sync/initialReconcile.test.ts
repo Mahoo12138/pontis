@@ -25,6 +25,7 @@ import type {
   ReconciliationPhase,
   ReconciliationState,
   ServerSnapshotPageWire,
+  ReconciliationType,
   ServerSnapshotWire,
   StepsWire,
 } from '../protocol/types';
@@ -70,6 +71,9 @@ class FakeLifecycle implements ReconciliationTransport {
   state: ReconciliationState = 'running';
   commitRevision = 121;
   issues: ReconciliationIssueWire[] = [];
+  /** What the client asked this session to be: the recovery path must not open an `initial`. */
+  requestedType: ReconciliationType | null = null;
+  requestedReason = '';
   steps: ApplyStepWire[] = [];
   submitted: ClientSnapshotWire | null = null;
   decisions: Array<Record<string, string>> = [];
@@ -83,8 +87,8 @@ class FakeLifecycle implements ReconciliationTransport {
         id: 'srv-1',
         binding_id: bindingId,
         space_id: 'space-1',
-        type: 'initial',
-        reason: 'first synchronization',
+        type: this.requestedType ?? 'initial',
+        reason: this.requestedReason || 'first synchronization',
         state: this.state,
         phase: this.state === 'completed' ? undefined : this.phase,
         source_epoch: 1,
@@ -114,8 +118,10 @@ class FakeLifecycle implements ReconciliationTransport {
     };
   }
 
-  createReconciliation(): Promise<ReconciliationEnvelopeWire> {
+  createReconciliation(_bindingId: string, type: ReconciliationType, reason: string): Promise<ReconciliationEnvelopeWire> {
     this.calls.push('create');
+    this.requestedType = type;
+    this.requestedReason = reason;
     return Promise.resolve(this.envelope());
   }
 
@@ -500,5 +506,77 @@ describe('client snapshot build', () => {
     await adapter.removeSubtree('f1');
 
     await expect(buildClientSnapshot(adapter, binding, 1, 0)).rejects.toThrow('mount root f1 not found');
+  });
+});
+
+describe('mapping-lost recovery over the server engine (doc 06 §12)', () => {
+  it('opens a recovery session, re-maps the browser tree and restores the baseline', async () => {
+    await seedBinding({ state: 'active', appliedRevision: 121, receivedRevision: 121 });
+    // The mapping table is gone: the replica holds nothing for these bookmarks.
+    lifecycle.steps = [
+      { kind: 'assign_identity', local_ref: 'l_2', canonical_id: 'n1' },
+      { kind: 'assign_identity', local_ref: 'l_3', canonical_id: 'n2' },
+    ];
+
+    expect(await reconciler.recoverMapping(bindingId)).toBe('completed');
+
+    // A pending binding can only be finished by `initial`; this is a recovery
+    // on a binding the server still calls active (doc 08 §11).
+    expect(lifecycle.requestedType).toBe('recovery');
+    expect(lifecycle.requestedReason).toBe('mapping lost');
+    const fresh = await db.bindings.get(bindingId);
+    expect(fresh?.state).toBe('active');
+    // The baseline comes back from the server answer, not from a hand-rewound
+    // watermark: that rewind was the client planner's way of seeing the whole
+    // canonical state again.
+    expect(fresh?.appliedRevision).toBe(121);
+    expect((await db.localNodes.toArray()).map((m) => m.canonicalId).sort()).toEqual(['n1', 'n2']);
+  });
+
+  it('refuses to recover a binding the server would reject a recovery for', async () => {
+    await seedBinding({ state: 'needs_recovery' });
+
+    await expect(reconciler.recoverMapping(bindingId)).rejects.toThrow(/needs an active binding/);
+    expect(lifecycle.calls).toEqual([]);
+  });
+
+  it('remount re-points the mount and drops the mapping that belonged to the lost folder', async () => {
+    await seedBinding({ state: 'active', appliedRevision: 121, receivedRevision: 121 });
+    await db.localNodes.put({
+      bindingId,
+      browserId: 'b1',
+      canonicalId: 'n1',
+      type: 'bookmark',
+      title: 'Home',
+      url: 'https://home.example.com',
+      parentBrowserId: 'f1',
+      position: 0,
+    } as never);
+    await db.pendingOps.put({
+      opId: 'op-stale',
+      bindingId,
+      clientSeq: 1,
+      baseRevision: 121,
+      status: 'QUEUED',
+      type: 'update_title',
+      nodeId: 'n1',
+      title: 'renamed by the lost folder',
+    } as never);
+
+    // A different folder is mounted now, holding one bookmark.
+    adapter.seed({ id: 'f2', parentId: '0', title: 'Sync 2' });
+    adapter.seed({ id: 'c1', parentId: 'f2', title: 'Only', url: 'https://only.example.com' });
+    lifecycle.steps = [{ kind: 'assign_identity', local_ref: 'l_2', canonical_id: 'n9' }];
+
+    expect(await reconciler.remount(bindingId, 'f2')).toBe('completed');
+
+    const fresh = await db.bindings.get(bindingId);
+    expect(fresh?.mount).toEqual({ mode: 'partial', folderBrowserId: 'f2', rootKey: 'main' });
+    // Nothing survives from the folder that went missing, and the stale op is
+    // not carried into the new mount to be replayed against it.
+    expect(await db.pendingOps.count()).toBe(0);
+    expect((await db.localNodes.toArray()).map((m) => m.browserId)).toEqual(['c1']);
+    // The snapshot the server matched came from the new folder.
+    expect(lifecycle.submitted?.nodes.map((n) => n.title)).toEqual(['Only']);
   });
 });

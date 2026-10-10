@@ -129,7 +129,7 @@ describe('periodic integrity (doc 05 §14)', () => {
     expect(server.journal).toHaveLength(5);
   });
 
-  it('hands major mapping loss to MAPPING_LOST reconciliation instead of mass-CREATEing', async () => {
+  it('reports major mapping loss instead of mass-CREATEing', async () => {
     await seedBinding();
     await seedMappedNode('n1', 'b1', 'Docs', '');
     await alignWatermarks();
@@ -141,9 +141,10 @@ describe('periodic integrity (doc 05 §14)', () => {
     adapter.seed({ id: 'bx4', parentId: 'f1', title: 'X4', url: 'https://x4.example.com' });
 
     expect(await integrityCheck(db, engine, bindingId)).toBe('mapping_lost');
-    // The reconciliation session is running; nothing was mass-uploaded.
+    // Detect, then hand off: the recovery itself is a server session (doc 06
+    // §12), so the scan must create nothing while it decides.
     expect(server.journal).toHaveLength(1);
-    const sessions = await db.reconSessions.toArray();
-    expect(sessions.some((s) => s.type === 'MAPPING_LOST')).toBe(true);
+    await expect(db.reconSessions.count()).resolves.toBe(0);
+    expect((await db.bindings.get(bindingId))?.state).toBe('active');
   });
 });

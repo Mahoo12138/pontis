@@ -7,7 +7,7 @@ import { createChromiumAdapter } from '../core/browser/chromium';
 import type { BrowserEvent } from '../core/browser/types';
 import { ApiClient } from '../core/transport/client';
 import { BootstrapStore } from '../core/store/bootstrap';
-import { PontisDB, logDiagnostic, releaseAllRunLocks, type ReconDecision } from '../core/store/db';
+import { PontisDB, logDiagnostic, releaseAllRunLocks } from '../core/store/db';
 import { EventProcessor } from '../core/sync/eventProcessor';
 import { integrityCheck } from '../core/sync/integrity';
 import { InitialReconciler } from '../core/sync/initialReconcile';
@@ -87,7 +87,10 @@ export default defineBackground(() => {
     const actives = await db.bindings.where('state').equals('active').toArray();
     for (const b of actives) {
       try {
-        await integrityCheck(db, engine, b.id);
+        const result = await integrityCheck(db, engine, b.id);
+        // Mapping loss is not something a device may repair by guessing: the
+        // server re-matches the tree it is handed (doc 06 §12).
+        if (result === 'mapping_lost') await initialReconcile.recoverMapping(b.id);
       } catch (err) {
         await logDiagnostic(db, 'warn', 'background', `integrity check (${trigger}) failed`, {
           bindingId: b.id,
@@ -116,14 +119,6 @@ export default defineBackground(() => {
       );
       return true; // async response
     }
-    if (isMessage(msg, 'pontis/initial-decision')) {
-      const { bindingId, decision } = msg as { bindingId: string; decision: ReconDecision };
-      void engine
-        .resume(bindingId, decision)
-        .then((session) => sendResponse({ ok: true, state: session.state, error: session.error }))
-        .catch((err) => sendResponse({ ok: false, error: String(err) }));
-      return true;
-    }
     if (isMessage(msg, 'pontis/resolve-intents')) {
       const { bindingId, decisions } = msg as { bindingId: string; decisions: IntentDecision[] };
       void resync
@@ -135,7 +130,10 @@ export default defineBackground(() => {
     if (isMessage(msg, 'pontis/integrity-check')) {
       const { bindingId } = msg as { bindingId: string };
       void integrityCheck(db, engine, bindingId)
-        .then((result) => sendResponse({ ok: true, result }))
+        .then(async (result) => {
+          if (result === 'mapping_lost') await initialReconcile.recoverMapping(bindingId);
+          sendResponse({ ok: true, result });
+        })
         .catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }
@@ -149,9 +147,9 @@ export default defineBackground(() => {
     }
     if (isMessage(msg, 'pontis/remount')) {
       const { bindingId, folderBrowserId } = msg as { bindingId: string; folderBrowserId: string };
-      void engine
+      void initialReconcile
         .remount(bindingId, folderBrowserId)
-        .then((session) => sendResponse({ ok: true, state: session.state, error: session.error }))
+        .then((outcome) => sendResponse({ ok: true, outcome }))
         .catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }
