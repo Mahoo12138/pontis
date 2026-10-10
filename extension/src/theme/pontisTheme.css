@@ -1,0 +1,181 @@
+/* Pontis design system, applied to the extension's two surfaces.
+
+   Mantine resolves component colors from CSS variables, so the scheme-specific
+   half of the design system lives here: for dark mode every brand color is
+   remapped onto the Graphite Dark palettes registered in pontisTheme.ts. Same
+   technique as web/src/styles/semantic-tokens.css.ts, expressed at Mantine's
+   own variable layer so no second color system appears. */
+
+/* --- Surfaces ---------------------------------------------------------- */
+
+.pontis-page {
+  min-height: 100vh;
+  background: var(--mantine-color-coolGray-0);
+}
+
+.pontis-popup {
+  width: 320px;
+  background: var(--mantine-color-coolGray-0);
+}
+
+/* Rows inside a section card: separated by a rule, never boxed again. */
+.pontis-block + .pontis-block {
+  margin-top: var(--mantine-spacing-md);
+  padding-top: var(--mantine-spacing-md);
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+
+/* A scrollable log keeps its column headings in view. */
+.pontis-stick thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--mantine-color-body);
+}
+
+/* --- Placeholder and selection contrast ------------------------------- */
+
+:root {
+  --mantine-color-placeholder: var(--mantine-color-coolGray-5);
+}
+
+/* --- Browser defaults that belong to no design system ------------------ */
+
+::selection {
+  background: var(--mantine-color-accentBlue-1);
+  color: var(--mantine-color-coolGray-9);
+}
+
+input,
+textarea {
+  caret-color: var(--mantine-color-accentBlue-6);
+}
+
+/* Revision watermarks are measured values: they must align in a column, not
+   shift with proportional digit widths. */
+.pontis-numerals {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--mantine-color-coolGray-3) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--mantine-color-coolGray-3);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--mantine-color-coolGray-4);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+/* --- Graphite Dark ----------------------------------------------------- */
+
+html[data-mantine-color-scheme='dark'] {
+  /* Mantine's generic gray/dark palettes back borders, dimmed text and hover
+     fills; without this the shell stays on Mantine defaults. */
+  --mantine-color-gray-0: var(--mantine-color-graphite-1) !important;
+  --mantine-color-gray-1: var(--mantine-color-graphite-2) !important;
+  --mantine-color-gray-2: var(--mantine-color-graphite-3) !important;
+  --mantine-color-gray-3: var(--mantine-color-graphite-4) !important;
+  --mantine-color-gray-4: var(--mantine-color-graphite-5) !important;
+  --mantine-color-gray-5: var(--mantine-color-graphite-6) !important;
+  --mantine-color-gray-6: var(--mantine-color-graphite-7) !important;
+  --mantine-color-gray-7: var(--mantine-color-graphite-8) !important;
+  --mantine-color-gray-8: var(--mantine-color-graphite-9) !important;
+  --mantine-color-gray-9: var(--mantine-color-graphite-9) !important;
+  --mantine-color-dark-0: var(--mantine-color-graphite-9) !important;
+  --mantine-color-dark-1: var(--mantine-color-graphite-8) !important;
+  --mantine-color-dark-2: var(--mantine-color-graphite-7) !important;
+  --mantine-color-dark-3: var(--mantine-color-graphite-6) !important;
+  --mantine-color-dark-4: var(--mantine-color-graphite-5) !important;
+  --mantine-color-dark-5: var(--mantine-color-graphite-4) !important;
+  --mantine-color-dark-6: var(--mantine-color-graphite-3) !important;
+  --mantine-color-dark-7: var(--mantine-color-graphite-2) !important;
+  --mantine-color-dark-8: var(--mantine-color-graphite-1) !important;
+  --mantine-color-dark-9: var(--mantine-color-graphite-0) !important;
+
+  --mantine-color-body: var(--mantine-color-graphite-1) !important;
+  --mantine-color-text: var(--mantine-color-graphite-8) !important;
+  --mantine-color-placeholder: var(--mantine-color-graphite-6) !important;
+
+  --mantine-color-accentBlue-filled: var(--mantine-color-accentBlueDark-5) !important;
+  --mantine-color-accentBlue-filled-hover: var(--mantine-color-accentBlueDark-6) !important;
+  --mantine-color-accentBlue-light: var(--mantine-color-accentBlueDark-0) !important;
+  --mantine-color-accentBlue-light-hover: var(--mantine-color-accentBlueDark-1) !important;
+  --mantine-color-accentBlue-light-color: var(--mantine-color-accentBlueDark-7) !important;
+  --mantine-color-accentBlue-outline: var(--mantine-color-accentBlueDark-6) !important;
+  --mantine-color-accentBlue-text: var(--mantine-color-accentBlueDark-6) !important;
+
+  --mantine-color-healthyGreen-filled: var(--mantine-color-healthyGreenDark-5) !important;
+  --mantine-color-healthyGreen-light: var(--mantine-color-healthyGreenDark-0) !important;
+  --mantine-color-healthyGreen-light-hover: var(--mantine-color-healthyGreenDark-1) !important;
+  --mantine-color-healthyGreen-light-color: var(--mantine-color-healthyGreenDark-6) !important;
+  --mantine-color-healthyGreen-outline: var(--mantine-color-healthyGreenDark-6) !important;
+  --mantine-color-healthyGreen-text: var(--mantine-color-healthyGreenDark-6) !important;
+
+  --mantine-color-warningAmber-filled: var(--mantine-color-warningAmberDark-5) !important;
+  --mantine-color-warningAmber-light: var(--mantine-color-warningAmberDark-0) !important;
+  --mantine-color-warningAmber-light-hover: var(--mantine-color-warningAmberDark-1) !important;
+  --mantine-color-warningAmber-light-color: var(--mantine-color-warningAmberDark-6) !important;
+  --mantine-color-warningAmber-outline: var(--mantine-color-warningAmberDark-6) !important;
+  --mantine-color-warningAmber-text: var(--mantine-color-warningAmberDark-6) !important;
+
+  --mantine-color-recoveryOrange-filled: var(--mantine-color-recoveryOrangeDark-5) !important;
+  --mantine-color-recoveryOrange-light: var(--mantine-color-recoveryOrangeDark-0) !important;
+  --mantine-color-recoveryOrange-light-hover: var(--mantine-color-recoveryOrangeDark-1) !important;
+  --mantine-color-recoveryOrange-light-color: var(--mantine-color-recoveryOrangeDark-6) !important;
+  --mantine-color-recoveryOrange-outline: var(--mantine-color-recoveryOrangeDark-6) !important;
+  --mantine-color-recoveryOrange-text: var(--mantine-color-recoveryOrangeDark-6) !important;
+
+  --mantine-color-errorRed-filled: var(--mantine-color-errorRedDark-5) !important;
+  --mantine-color-errorRed-light: var(--mantine-color-errorRedDark-0) !important;
+  --mantine-color-errorRed-light-hover: var(--mantine-color-errorRedDark-1) !important;
+  --mantine-color-errorRed-light-color: var(--mantine-color-errorRedDark-6) !important;
+  --mantine-color-errorRed-outline: var(--mantine-color-errorRedDark-6) !important;
+  --mantine-color-errorRed-text: var(--mantine-color-errorRedDark-6) !important;
+
+  --mantine-color-coolGray-text: var(--mantine-color-graphite-7) !important;
+  --mantine-color-coolGray-light: var(--mantine-color-graphite-2) !important;
+  --mantine-color-coolGray-light-color: var(--mantine-color-graphite-7) !important;
+
+  ::selection {
+    background: var(--mantine-color-accentBlueDark-1);
+    color: var(--mantine-color-graphite-9);
+  }
+
+  input,
+  textarea {
+    caret-color: var(--mantine-color-accentBlueDark-6);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--mantine-color-graphite-4);
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--mantine-color-graphite-5);
+    background-clip: content-box;
+  }
+}
+
+html[data-mantine-color-scheme='dark'] .pontis-page {
+  background: var(--mantine-color-graphite-0);
+}
