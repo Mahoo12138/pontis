@@ -100,7 +100,7 @@ function LinkHealthPanel({ spaceId }: { spaceId: string | undefined }) {
   const run = useLinkCheckRun(spaceId);
   const crud = useNodeCrud(spaceId);
   const [hasRun, setHasRun] = useState(false);
-  const { data, isLoading, isError, refetch } = useLinkCheckResults(spaceId, hasRun);
+  const { data, isLoading, isError, error, refetch } = useLinkCheckResults(spaceId, hasRun);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -146,7 +146,7 @@ function LinkHealthPanel({ spaceId }: { spaceId: string | undefined }) {
   }
 
   if (isError) {
-    return <ErrorState onRetry={() => void refetch()} />;
+    return <ErrorState error={error} onRetry={() => void refetch()} />;
   }
 
   return (
@@ -328,7 +328,7 @@ function EmptyCheck({ onStart, starting }: { onStart: () => void; starting: bool
 // ─── Duplicates ──────────────────────────────────────────────
 
 function DuplicatesPanel({ spaceId }: { spaceId: string | undefined }) {
-  const { data, isLoading, isError, refetch } = useDuplicates(spaceId);
+  const { data, isLoading, isError, error, refetch } = useDuplicates(spaceId);
   const crud = useNodeCrud(spaceId);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [pendingDelete, setPendingDelete] = useState<string[] | null>(null);
@@ -359,7 +359,7 @@ function DuplicatesPanel({ spaceId }: { spaceId: string | undefined }) {
   };
 
   if (isError) {
-    return <ErrorState onRetry={() => void refetch()} />;
+    return <ErrorState error={error} onRetry={() => void refetch()} />;
   }
 
   if (isLoading) {

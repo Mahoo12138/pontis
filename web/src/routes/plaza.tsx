@@ -26,7 +26,7 @@ export default function PlazaPage() {
   const { data: spacesData } = useSpaces();
   const spaces = spacesData?.spaces ?? [];
 
-  const { data, isLoading, isError, refetch } = usePlazaPublications(q);
+  const { data, isLoading, isError, error, refetch } = usePlazaPublications(q);
   const publications = useMemo(() => {
     const list = data?.publications ?? [];
     return tab === 'mine' ? list.filter((p) => p.is_mine) : list;
@@ -61,7 +61,7 @@ export default function PlazaPage() {
         </Group>
 
         {isError ? (
-          <ErrorState onRetry={() => void refetch()} />
+          <ErrorState error={error} onRetry={() => void refetch()} />
         ) : isLoading ? (
           <div className={plazaGrid}>
             {Array.from({ length: 6 }, (_, i) => (

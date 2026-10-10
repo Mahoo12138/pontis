@@ -149,7 +149,7 @@ function DeviceName({ device }: { device: DeviceOverview }) {
 // ─── Page ─────────────────────────────────────────────────────
 
 export default function DevicesPage() {
-  const { data, isLoading, isError, refetch } = useDeviceOverview();
+  const { data, isLoading, isError, error, refetch } = useDeviceOverview();
   const register = useRegisterDevice();
   const revoke = useRevokeDevice();
 
@@ -197,7 +197,7 @@ export default function DevicesPage() {
         </Group>
 
         {isError ? (
-          <ErrorState onRetry={() => void refetch()} />
+          <ErrorState error={error} onRetry={() => void refetch()} />
         ) : isLoading ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {Array.from({ length: 4 }, (_, i) => (

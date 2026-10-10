@@ -50,7 +50,7 @@ const TYPE_LABEL: Record<JobView['type'], string> = {
 };
 
 export default function JobsPage() {
-  const { data, isLoading, isError, refetch } = useJobs();
+  const { data, isLoading, isError, error, refetch } = useJobs();
   const cancel = useCancelJob();
   const retry = useRetryJob();
   const [cancelTarget, setCancelTarget] = useState<JobView | null>(null);
@@ -65,7 +65,7 @@ export default function JobsPage() {
       </Text>
 
       {isError ? (
-        <ErrorState onRetry={() => void refetch()} />
+        <ErrorState error={error} onRetry={() => void refetch()} />
       ) : isLoading ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {Array.from({ length: 5 }, (_, i) => (

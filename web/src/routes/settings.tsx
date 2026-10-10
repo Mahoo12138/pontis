@@ -233,7 +233,7 @@ export function PreferencesPanel() {
 // ─── API Tokens ───────────────────────────────────────────────
 
 export function TokensPanel() {
-  const { data, isLoading, isError, refetch } = useTokens();
+  const { data, isLoading, isError, error, refetch } = useTokens();
   const revoke = useRevokeToken();
   const [createOpen, createOpenHandlers] = useDisclosure(false);
   const [revokeTarget, setRevokeTarget] = useState<ApiToken | null>(null);
@@ -252,7 +252,7 @@ export function TokensPanel() {
       </Group>
 
       {isError ? (
-        <ErrorState onRetry={() => void refetch()} />
+        <ErrorState error={error} onRetry={() => void refetch()} />
       ) : isLoading ? (
         <Skeleton height={140} />
       ) : (

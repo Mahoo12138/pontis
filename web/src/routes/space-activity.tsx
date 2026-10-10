@@ -36,7 +36,7 @@ const ACTION_META: Record<ActivityAction, { icon: typeof IconPlus; color: string
 
 export default function SpaceActivityPage() {
   const { spaceId } = useParams();
-  const { data, isLoading, isError, refetch } = useActivity(spaceId);
+  const { data, isLoading, isError, error, refetch } = useActivity(spaceId);
   const { data: spacesData } = useSpaces();
   const spaceName = spacesData?.spaces?.find((s) => s.id === spaceId)?.name ?? '空间';
   const undoMutation = useUndoActivity(spaceId);
@@ -74,7 +74,7 @@ export default function SpaceActivityPage() {
       <Header breadcrumb={`${spaceName} / 最近活动`} />
       <div className={contentRegion} style={{ overflowY: 'auto' }}>
         <div style={{ maxWidth: 720, margin: '0 auto', padding: '24px 16px' }}>
-          {isError && <ErrorState onRetry={() => void refetch()} />}
+          {isError && <ErrorState error={error} onRetry={() => void refetch()} />}
           {!isError && isLoading && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {Array.from({ length: 5 }, (_, i) => (

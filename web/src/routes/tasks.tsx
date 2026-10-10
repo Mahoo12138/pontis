@@ -79,7 +79,7 @@ function describeKind(s: ScheduleView): string {
 }
 
 export default function TasksPage() {
-  const { data, isLoading, isError, refetch } = useMyTasks();
+  const { data, isLoading, isError, error, refetch } = useMyTasks();
   const [createOpen, setCreateOpen] = useState(false);
 
   const schedules = data?.schedules ?? [];
@@ -103,7 +103,7 @@ export default function TasksPage() {
         </Group>
 
         {isError ? (
-          <ErrorState onRetry={() => void refetch()} />
+          <ErrorState error={error} onRetry={() => void refetch()} />
         ) : isLoading ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {Array.from({ length: 5 }, (_, i) => (

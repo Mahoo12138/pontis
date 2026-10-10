@@ -12,10 +12,10 @@ import { useSystemSettings, useUpdateSystemSettings } from '../hooks/use-setting
 // would look like it worked while behaviour stayed the same. They become
 // enabled together with the code that enforces them.
 export default function AdminSystemPage() {
-  const { data, isLoading, isError, refetch } = useSystemSettings();
+  const { data, isLoading, isError, error, refetch } = useSystemSettings();
   const update = useUpdateSystemSettings();
 
-  if (isError) return <ErrorState onRetry={() => void refetch()} />;
+  if (isError) return <ErrorState error={error} onRetry={() => void refetch()} />;
   if (isLoading) return <Skeleton height={200} />;
 
   const s = data?.settings;

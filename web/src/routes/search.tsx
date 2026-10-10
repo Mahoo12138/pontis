@@ -41,6 +41,9 @@ export default function SearchPage() {
   });
   const isLoading = nodeQueries.some((r) => r.isLoading);
   const isError = nodeQueries.some((r) => r.isError);
+  // Many spaces feed one list; naming the first failure is what tells a
+  // contract mismatch apart from a space that simply is not there.
+  const firstError = nodeQueries.find((r) => r.error)?.error;
 
   const hits = useMemo<Hit[]>(() => {
     if (!q) return [];
@@ -92,7 +95,7 @@ export default function SearchPage() {
         </Group>
 
         {isError ? (
-          <ErrorState onRetry={() => void Promise.all(nodeQueries.map((r) => r.refetch()))} />
+          <ErrorState error={firstError} onRetry={() => void Promise.all(nodeQueries.map((r) => r.refetch()))} />
         ) : isLoading ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {Array.from({ length: 6 }, (_, i) => (

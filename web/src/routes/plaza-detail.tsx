@@ -32,7 +32,7 @@ import { formatRelativeTime } from '../lib/format';
 export default function PlazaDetailPage() {
   const { publicationId } = useParams();
   const navigate = useNavigate();
-  const { data: pub, isLoading, isError, refetch } = usePublication(publicationId);
+  const { data: pub, isLoading, isError, error, refetch } = usePublication(publicationId);
   const unpublish = useUnpublish();
   const [importOpen, setImportOpen] = useState(false);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
@@ -42,7 +42,7 @@ export default function PlazaDetailPage() {
       <>
         <Header breadcrumb="广场" />
         <div className={`${contentRegion} ${pagePad}`}>
-          <ErrorState message="无法加载该发布" onRetry={() => void refetch()} />
+          <ErrorState message="无法加载该发布" error={error} onRetry={() => void refetch()} />
         </div>
       </>
     );

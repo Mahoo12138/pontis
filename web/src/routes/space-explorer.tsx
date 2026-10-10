@@ -33,7 +33,7 @@ export default function SpaceExplorerPage() {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<ExplorerFilter>('all');
 
-  const { data: nodesData, isLoading, isError, refetch } = useNodes(spaceId);
+  const { data: nodesData, isLoading, isError, error, refetch } = useNodes(spaceId);
   const { data: slotsData } = useRootSlots(spaceId);
   const { data: spacesData } = useSpaces();
 
@@ -196,7 +196,7 @@ export default function SpaceExplorerPage() {
       <div className={contentRegion} style={{ display: 'flex' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           {isError ? (
-            <ErrorState onRetry={() => void refetch()} />
+            <ErrorState error={error} onRetry={() => void refetch()} />
           ) : (
           <BookmarkExplorer
             isLoading={isLoading}

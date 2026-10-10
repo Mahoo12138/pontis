@@ -59,7 +59,7 @@ export default function SpaceBackupsPage() {
   const { data: spacesData } = useSpaces();
   const spaceName = spacesData?.spaces?.find((s) => s.id === spaceId)?.name ?? '空间';
 
-  const { data, isLoading, isError, refetch } = useBackups(spaceId);
+  const { data, isLoading, isError, error, refetch } = useBackups(spaceId);
   const create = useCreateBackup(spaceId);
   const restore = useRestoreBackup(spaceId);
   const remove = useDeleteBackup(spaceId);
@@ -132,7 +132,7 @@ export default function SpaceBackupsPage() {
         </Text>
 
         {isError ? (
-          <ErrorState onRetry={() => void refetch()} />
+          <ErrorState error={error} onRetry={() => void refetch()} />
         ) : isLoading ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {Array.from({ length: 4 }, (_, i) => (

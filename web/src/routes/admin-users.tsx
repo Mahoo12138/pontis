@@ -32,7 +32,7 @@ import { formatRelativeTime } from '../lib/format';
 
 export default function AdminUsersPage() {
   const { data: me } = useMe();
-  const { data, isLoading, isError, refetch } = useAdminUsers();
+  const { data, isLoading, isError, error, refetch } = useAdminUsers();
   const setStatus = useSetUserStatus();
   const setRole = useSetUserRole();
   const [confirmTarget, setConfirmTarget] = useState<{ user: AdminUserView; action: 'disable' | 'enable' | 'promote' } | null>(null);
@@ -66,7 +66,7 @@ export default function AdminUsersPage() {
       </Text>
 
       {isError ? (
-        <ErrorState onRetry={() => void refetch()} />
+        <ErrorState error={error} onRetry={() => void refetch()} />
       ) : isLoading ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {Array.from({ length: 4 }, (_, i) => (
