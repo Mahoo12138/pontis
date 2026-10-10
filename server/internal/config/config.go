@@ -17,10 +17,14 @@ import (
 type Config struct {
 	Listen  string `toml:"listen"`
 	DataDir string `toml:"data_dir"`
-	// PublicURL and TrustedProxies are parsed and validated but have no
-	// consumer yet: nothing builds absolute links from PublicURL, and no
-	// middleware trusts X-Forwarded-For from these CIDRs. Deployments must not
-	// rely on either until the code that reads them exists.
+	// PublicURL is the externally visible base URL. It decides the Origin a
+	// cookie request must carry, whether the session cookie is Secure, and the
+	// host baked into a generated password-reset link. Empty means "use the
+	// Host header of each request", which is right for a same-origin install.
+	//
+	// TrustedProxies lists the peers allowed to report the client's scheme via
+	// X-Forwarded-Proto. X-Forwarded-For is not consumed anywhere yet: nothing
+	// logs or rate-limits by client address.
 	PublicURL       string        `toml:"public_url"`
 	TrustedProxies  []string      `toml:"trusted_proxies"`
 	LogLevel        string        `toml:"log_level"`
