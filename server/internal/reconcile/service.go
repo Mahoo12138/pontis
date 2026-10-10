@@ -588,14 +588,20 @@ func (s *Service) computeAndStorePlan(ctx context.Context, sess Session, decisio
 	}
 
 	// Server-side plan: only the initial merge mutates the canonical tree.
+	// A resync or recovery commits no canonical change — content the browser
+	// holds alone is protected through the Recovery Intent review (doc 06 §11),
+	// not by creating nodes here — so its plan is empty by construction.
+	// Diffing the desired tree against the server tree instead produced a
+	// preview of mass creates and deletes that the commit then did not
+	// perform, and that preview is the thing the user is asked to approve.
 	var plan *Plan
 	if sess.Type == TypeInitial {
 		plan, err = BuildPlan(serverTree, desired, policy, newCanonicalIdentity(serverTree))
+		if err != nil {
+			return Session{}, nil, Artifact{}, err
+		}
 	} else {
-		plan, err = BuildPlan(serverTree, desired, policy, noopIdentity{})
-	}
-	if err != nil {
-		return Session{}, nil, Artifact{}, err
+		plan = &Plan{Strategy: policy.Strategy, Placement: policy.Placement, Operations: []Primitive{}}
 	}
 	if unaddressable > 0 {
 		// Say it out loud: the merge is not the whole tree, and silently
@@ -741,13 +747,6 @@ func (s *Service) computeAndStorePlan(ctx context.Context, sess Session, decisio
 	}
 	return updated, issues, planArt, nil
 }
-
-// noopIdentity treats every desired node as absent from the current
-// tree: the plan degenerates to an empty operation list, which is what
-// resync/recovery commit does server-side.
-type noopIdentity struct{}
-
-func (noopIdentity) currentRef(*DesiredNode) string { return "" }
 
 // loadSnapshotTree rebuilds the engine input tree from a frozen server
 // snapshot.
