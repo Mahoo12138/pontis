@@ -11,7 +11,7 @@ import { PontisDB, logDiagnostic, releaseAllRunLocks } from '../core/store/db';
 import { EventProcessor } from '../core/sync/eventProcessor';
 import { integrityCheck } from '../core/sync/integrity';
 import { InitialReconciler } from '../core/sync/initialReconcile';
-import { InitialSyncEngine } from '../core/sync/initialSync';
+import { ReplicaVerifier } from '../core/sync/verifyReplica';
 import { RemoteChangeApplier } from '../core/sync/remoteChangeApplier';
 import { ResyncService, type IntentDecision } from '../core/sync/resync';
 import { SyncCoordinator } from '../core/sync/syncCoordinator';
@@ -28,8 +28,8 @@ export default defineBackground(() => {
   });
   const applier = new RemoteChangeApplier(db, adapter);
   const coordinator = new SyncCoordinator(db, applier, client, client);
-  const engine = new InitialSyncEngine(db, adapter, client, coordinator);
-  const resync = new ResyncService(db, client, bootstrap, coordinator, engine);
+  const verifier = new ReplicaVerifier(db, adapter, coordinator);
+  const resync = new ResyncService(db, client, bootstrap, coordinator, verifier);
   const initialReconcile = new InitialReconciler(db, adapter, client);
 
   // --- sync triggers (doc 05 §15) ---
@@ -87,7 +87,7 @@ export default defineBackground(() => {
     const actives = await db.bindings.where('state').equals('active').toArray();
     for (const b of actives) {
       try {
-        const result = await integrityCheck(db, engine, b.id);
+        const result = await integrityCheck(db, verifier, b.id);
         // Mapping loss is not something a device may repair by guessing: the
         // server re-matches the tree it is handed (doc 06 §12).
         if (result === 'mapping_lost') await initialReconcile.recoverMapping(b.id);
@@ -129,7 +129,7 @@ export default defineBackground(() => {
     }
     if (isMessage(msg, 'pontis/integrity-check')) {
       const { bindingId } = msg as { bindingId: string };
-      void integrityCheck(db, engine, bindingId)
+      void integrityCheck(db, verifier, bindingId)
         .then(async (result) => {
           if (result === 'mapping_lost') await initialReconcile.recoverMapping(bindingId);
           sendResponse({ ok: true, result });

@@ -22,7 +22,7 @@ import {
   type PontisDB,
   type ReconSessionRecord,
 } from '../store/db';
-import { isQuiescent, type InitialSyncEngine } from './initialSync';
+import { isQuiescent, type ReplicaVerifier } from './verifyReplica';
 import type { SyncCoordinator } from './syncCoordinator';
 
 const MAX_QUIESCE_ROUNDS = 64;
@@ -41,7 +41,7 @@ export class ResyncService {
     private client: ApiClient,
     private bootstrap: BootstrapStore,
     private coordinator: SyncCoordinator,
-    private engine: InitialSyncEngine,
+    private verifier: ReplicaVerifier,
   ) {}
 
   /** Idempotent: safe to call on every alarm for every stuck binding. */
@@ -222,7 +222,7 @@ export class ResyncService {
     }
 
     // Verify is mandatory before returning to ACTIVE (doc 06 §14).
-    const report = await this.engine.verifyAndRepair(bindingId);
+    const report = await this.verifier.verifyAndRepair(bindingId);
     if (!report.ok) {
       session.state = 'FAILED';
       session.error = `verify failed: ${report.problems.map((p) => p.kind).join(',')}`;

@@ -165,8 +165,6 @@ export type ReconPhase =
   | 'done';
 
 /** One binding allows at most one active reconciliation (doc 06 §3). */
-export type ReconDecision = 'merge' | 'use_server' | 'use_browser' | 'import';
-
 export interface ReconProgress {
   matched: number;
   localOnly: number;
@@ -182,25 +180,20 @@ export interface ReconSessionRecord {
   type: ReconType;
   state: ReconState;
   phase: ReconPhase;
-  /** Decision for the both-non-empty case; persisted so MV3 can resume. */
-  decision?: ReconDecision;
   journalFloor: number;
   serverRevision: number;
   progress: ReconProgress;
-  /** Import mode: pending create ops → their source browser nodes. */
-  importQueue?: Array<{ opId: string; sourceBrowserId: string }>;
-  /** Canonical tree came from a server snapshot, not journal replay. */
-  snapshotApplied?: boolean;
   /** Recovery intents already reviewed; resync may replay the re-created ops. */
   intentReviewed?: boolean;
   // --- server-driven lifecycle (doc 08 §11-§13) ---
   /** The server reconciliation session this client session mirrors. */
   serverSessionId?: string;
   /**
-   * Marks a session opened by the server-driven lifecycle. The binding is
-   * 'initializing' for both engines, so without this a lifecycle round that
-   * failed before the server session id was stored leaves the binding with a
-   * session neither engine will pick up again.
+   * Marks a session opened by the server-driven reconciliation. The binding
+   * sits in 'initializing' there, while a client-side resync opens sessions of
+   * its own — without this, a lifecycle round that failed before the server
+   * session id was stored would leave the binding holding a session neither
+   * path will pick up again.
    */
   driver?: 'server';
   /** Last phase the server reported; the resume anchor after an MV3 kill. */

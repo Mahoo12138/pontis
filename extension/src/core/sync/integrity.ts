@@ -14,7 +14,7 @@
 // so there is nothing to rewind (doc 06 §12).
 
 import { logDiagnostic, type PontisDB } from '../store/db';
-import { type InitialSyncEngine, type VerifyReport } from './initialSync';
+import { type ReplicaVerifier, type VerifyReport } from './verifyReplica';
 
 export type IntegrityResult = 'ok' | 'repaired' | 'mapping_lost' | 'failed';
 
@@ -25,10 +25,10 @@ const serious = (r: VerifyReport) => r.problems.filter((p) => p.kind !== 'order_
 
 export async function integrityCheck(
   db: PontisDB,
-  engine: InitialSyncEngine,
+  verifier: ReplicaVerifier,
   bindingId: string,
 ): Promise<IntegrityResult> {
-  const pre = await engine.verifyScan(bindingId);
+  const pre = await verifier.verifyScan(bindingId);
   const missing = pre.problems.filter((p) => p.kind === 'missing_mirror').length;
   const scope = await db.localNodes.where('bindingId').equals(bindingId).count();
   const ratio = scope > 0 ? missing / scope : missing > 0 ? 1 : 0;
@@ -50,7 +50,7 @@ export async function integrityCheck(
   }
 
   // Minor drift: targeted repair ops, then re-verify (doc 06 §13).
-  const post = await engine.verifyAndRepair(bindingId);
+  const post = await verifier.verifyAndRepair(bindingId);
   const repaired = serious(post).length === 0;
   await logDiagnostic(
     db,

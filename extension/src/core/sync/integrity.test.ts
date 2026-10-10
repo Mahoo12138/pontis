@@ -8,7 +8,7 @@ import { PontisDB, type BindingRecord } from '../store/db';
 import { FakeBrowserAdapter } from '../browser/fakeAdapter';
 import { RemoteChangeApplier } from './remoteChangeApplier';
 import { SyncCoordinator } from './syncCoordinator';
-import { InitialSyncEngine } from './initialSync';
+import { ReplicaVerifier } from './verifyReplica';
 import { integrityCheck } from './integrity';
 import { FakeServerTransport } from '../../testing/fakeServer';
 import type { ParentRefWire } from '../protocol/types';
@@ -17,7 +17,7 @@ let db: PontisDB;
 let adapter: FakeBrowserAdapter;
 let server: FakeServerTransport;
 let coordinator: SyncCoordinator;
-let engine: InitialSyncEngine;
+let verifier: ReplicaVerifier;
 
 const bindingId = 'binding-1';
 const ROOT: ParentRefWire = { type: 'root', key: 'main' };
@@ -83,7 +83,7 @@ beforeEach(() => {
   server = new FakeServerTransport();
   const applier = new RemoteChangeApplier(db, adapter);
   coordinator = new SyncCoordinator(db, applier, server);
-  engine = new InitialSyncEngine(db, adapter, server, coordinator);
+  verifier = new ReplicaVerifier(db, adapter, coordinator);
   adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
 });
 
@@ -94,7 +94,7 @@ describe('periodic integrity (doc 05 §14)', () => {
     await seedMappedNode('n2', 'b2', 'Go', 'https://go.dev');
     await alignWatermarks();
 
-    expect(await integrityCheck(db, engine, bindingId)).toBe('ok');
+    expect(await integrityCheck(db, verifier, bindingId)).toBe('ok');
     expect(server.journal).toHaveLength(2); // nothing uploaded
   });
 
@@ -107,7 +107,7 @@ describe('periodic integrity (doc 05 §14)', () => {
     // User rename that event capture missed: browser is ahead of the mirror.
     adapter.seed({ id: 'b2', parentId: 'b1', title: 'Go Lang', url: 'https://go.dev' });
 
-    expect(await integrityCheck(db, engine, bindingId)).toBe('repaired');
+    expect(await integrityCheck(db, verifier, bindingId)).toBe('repaired');
     expect(server.journal.some((c) => c.type === 'update_title' && c.node_id === 'n2')).toBe(true);
     expect((await db.localNodes.get([bindingId, 'b2']))?.title).toBe('Go Lang');
   });
@@ -123,7 +123,7 @@ describe('periodic integrity (doc 05 §14)', () => {
     // One unmapped browser node: 1/4 = 25% ≤ 30% threshold.
     adapter.seed({ id: 'b-extra', parentId: 'f1', title: 'Extra', url: 'https://extra.example.com' });
 
-    expect(await integrityCheck(db, engine, bindingId)).toBe('repaired');
+    expect(await integrityCheck(db, verifier, bindingId)).toBe('repaired');
     const mirror = await db.localNodes.get([bindingId, 'b-extra']);
     expect(mirror?.canonicalId).toBe('srv-5');
     expect(server.journal).toHaveLength(5);
@@ -140,7 +140,7 @@ describe('periodic integrity (doc 05 §14)', () => {
     adapter.seed({ id: 'bx3', parentId: 'f1', title: 'X3', url: 'https://x3.example.com' });
     adapter.seed({ id: 'bx4', parentId: 'f1', title: 'X4', url: 'https://x4.example.com' });
 
-    expect(await integrityCheck(db, engine, bindingId)).toBe('mapping_lost');
+    expect(await integrityCheck(db, verifier, bindingId)).toBe('mapping_lost');
     // Detect, then hand off: the recovery itself is a server session (doc 06
     // §12), so the scan must create nothing while it decides.
     expect(server.journal).toHaveLength(1);

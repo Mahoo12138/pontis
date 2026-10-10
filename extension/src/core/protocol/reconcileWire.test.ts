@@ -2,7 +2,7 @@
 // fixtures/protocol/ are generated from the Go DTOs, so feeding them through
 // the extension's own boundary validators is what keeps the two encodings
 // from drifting apart. The lifecycle answers below are the shapes
-// InitialSyncEngine resumes on after an MV3 worker kill.
+// the server-driven lifecycle resumes on after an MV3 worker kill.
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

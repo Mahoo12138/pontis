@@ -9,7 +9,7 @@ import { PontisDB, type BindingRecord, type PendingOpRecord } from '../store/db'
 import { FakeBrowserAdapter } from '../browser/fakeAdapter';
 import { RemoteChangeApplier } from './remoteChangeApplier';
 import { SyncCoordinator } from './syncCoordinator';
-import { InitialSyncEngine } from './initialSync';
+import { ReplicaVerifier } from './verifyReplica';
 import { ResyncService } from './resync';
 import { FakeServerTransport } from '../../testing/fakeServer';
 import type { ApiClient } from '../transport/client';
@@ -20,7 +20,7 @@ let db: PontisDB;
 let adapter: FakeBrowserAdapter;
 let server: FakeServerTransport;
 let coordinator: SyncCoordinator;
-let engine: InitialSyncEngine;
+let verifier: ReplicaVerifier;
 
 const bindingId = 'binding-1';
 const ROOT: ParentRefWire = { type: 'root', key: 'main' };
@@ -97,7 +97,7 @@ const parkAtReview = async (epoch = 2): Promise<ResyncService> => {
     recovery: { code: 'EPOCH_MISMATCH', message: 'epoch changed' },
   });
   server.epoch = epoch;
-  const resync = new ResyncService(db, deviceSpaces(epoch), memoryKV(), coordinator, engine);
+  const resync = new ResyncService(db, deviceSpaces(epoch), memoryKV(), coordinator, verifier);
   expect(await resync.attemptRecovery(bindingId)).toBe('waiting');
   expect((await db.bindings.get(bindingId))?.state).toBe('waiting_user');
   return resync;
@@ -109,7 +109,7 @@ beforeEach(() => {
   server = new FakeServerTransport();
   const applier = new RemoteChangeApplier(db, adapter);
   coordinator = new SyncCoordinator(db, applier, server);
-  engine = new InitialSyncEngine(db, adapter, server, coordinator);
+  verifier = new ReplicaVerifier(db, adapter, coordinator);
   adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
   seedServerNode('n1', 'Docs', ''); // revision 1
 });
@@ -125,7 +125,7 @@ describe('recovery intent review (doc 06 §10/§11)', () => {
       { deviceSpaces: async () => ({ spaces: [] }) } as unknown as ApiClient,
       memoryKV(),
       coordinator,
-      engine,
+      verifier,
     );
     await blocked.resolveIntents(bindingId, [{ opId: op.opId, decision: 'apply' }]);
 
@@ -143,7 +143,7 @@ describe('recovery intent review (doc 06 §10/§11)', () => {
 
   it('rejects resolveIntents outside the intent review state', async () => {
     await seedBinding();
-    const resync = new ResyncService(db, deviceSpaces(1), memoryKV(), coordinator, engine);
+    const resync = new ResyncService(db, deviceSpaces(1), memoryKV(), coordinator, verifier);
     await expect(resync.resolveIntents(bindingId, [])).rejects.toThrow();
   });
 
@@ -188,7 +188,7 @@ describe('recovery intent review (doc 06 §10/§11)', () => {
       position: 0,
     });
     const op = await seedIntent({ type: 'delete', nodeId: 'n1', title: undefined, url: undefined });
-    const resync = new ResyncService(db, deviceSpaces(2), memoryKV(), coordinator, engine);
+    const resync = new ResyncService(db, deviceSpaces(2), memoryKV(), coordinator, verifier);
     expect(await resync.attemptRecovery(bindingId)).toBe('waiting');
 
     const outcome = await resync.resolveIntents(bindingId, [{ opId: op.opId, decision: 'discard' }]);
@@ -211,5 +211,52 @@ describe('recovery intent review (doc 06 §10/§11)', () => {
     expect(server.journal).toHaveLength(1);
     expect((await db.bindings.get(bindingId))?.state).toBe('active');
     expect(await db.emergencySnapshots.count()).toBe(0);
+  });
+});
+
+// Ported from the removed client-side planner's test file: these two pin what
+// ResyncService does to the *binding*, which the intent-review cases above do
+// not cover.
+describe('full resync (doc 06 §7)', () => {
+  it('re-anchors epoch and watermarks, then replays without duplicates', async () => {
+    await seedBinding({ appliedRevision: 1, receivedRevision: 1 });
+    // 'Docs' is already mapped and already in the browser: a resync must
+    // neither re-create it nor lose it.
+    adapter.seed({ id: 'fd', parentId: 'f1', title: 'Docs' });
+    await db.localNodes.put({
+      bindingId,
+      browserId: 'fd',
+      canonicalId: 'n1',
+      type: 'folder',
+      title: 'Docs',
+      url: null,
+      parentBrowserId: 'f1',
+      position: 0,
+    } as never);
+
+    // Epoch bump behind our back, plus a new canonical node.
+    server.epoch = 2;
+    seedServerNode('n3', 'New', 'https://new.example.com');
+    await db.bindings.update(bindingId, {
+      state: 'needs_recovery',
+      recovery: { code: 'EPOCH_MISMATCH', message: 'epoch changed' },
+    });
+
+    const resync = new ResyncService(db, deviceSpaces(2), memoryKV(), coordinator, verifier);
+    expect(await resync.attemptRecovery(bindingId)).toBe('resynced');
+
+    const binding = await db.bindings.get(bindingId);
+    expect(binding?.state).toBe('active');
+    expect(binding?.epoch).toBe(2);
+    expect(binding?.appliedRevision).toBe(2);
+    expect(await adapter.getChildren('f1')).toHaveLength(2);
+    // The emergency snapshot has served its purpose (doc 06 §9).
+    expect(await db.emergencySnapshots.count()).toBe(0);
+  });
+
+  it('is a noop for a healthy binding', async () => {
+    await seedBinding();
+    const resync = new ResyncService(db, deviceSpaces(1), memoryKV(), coordinator, verifier);
+    expect(await resync.attemptRecovery(bindingId)).toBe('noop');
   });
 });
