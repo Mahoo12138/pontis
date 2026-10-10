@@ -1,20 +1,22 @@
 // MV3 service worker: wires the sync core to the browser. Keep thin —
 // all logic lives in the core modules. The worker may be killed at any
 // await; every durable fact is in IndexedDB / storage.local.
+//
+// Everything below is chrome.* plumbing and message routing. The trigger
+// orchestration an alarm, a manual click, a wake and a recovery all share is
+// core/sync/workerLoop, where it can be tested.
 
 import { defineBackground } from 'wxt/utils/define-background';
 import { createChromiumAdapter } from '../core/browser/chromium';
-import type { BrowserEvent } from '../core/browser/types';
 import { ApiClient } from '../core/transport/client';
 import { BootstrapStore } from '../core/store/bootstrap';
 import { PontisDB, logDiagnostic, releaseAllRunLocks } from '../core/store/db';
-import { EventProcessor } from '../core/sync/eventProcessor';
-import { integrityCheck } from '../core/sync/integrity';
 import { InitialReconciler } from '../core/sync/initialReconcile';
 import { ReplicaVerifier } from '../core/sync/verifyReplica';
 import { RemoteChangeApplier } from '../core/sync/remoteChangeApplier';
 import { ResyncService, type IntentDecision } from '../core/sync/resync';
 import { SyncCoordinator } from '../core/sync/syncCoordinator';
+import { WorkerLoop } from '../core/sync/workerLoop';
 import { chromeApi, kvArea } from '../runtime/chromeApi';
 
 export default defineBackground(() => {
@@ -26,94 +28,26 @@ export default defineBackground(() => {
     const b = await bootstrap.get();
     return { serverUrl: b.serverUrl ?? '', token: b.deviceToken };
   });
-  const applier = new RemoteChangeApplier(db, adapter);
-  const coordinator = new SyncCoordinator(db, applier, client, client);
+  const coordinator = new SyncCoordinator(db, new RemoteChangeApplier(db, adapter), client, client);
   const verifier = new ReplicaVerifier(db, adapter, coordinator);
   const resync = new ResyncService(db, client, bootstrap, coordinator, verifier);
-  const initialReconcile = new InitialReconciler(db, adapter, client);
-
-  // --- sync triggers (doc 05 §15) ---
-
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const scheduleSync = (delayMs = 1500): void => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = null;
-      void runSync('debounce');
-    }, delayMs);
-  };
-
-  async function runSync(trigger: string): Promise<void> {
-    try {
-      // A pending binding has no mapping yet, so incremental sync must not
-      // touch it: the server-driven initial reconciliation is the only thing
-      // that turns it active (doc 08 §11).
-      const pending = await db.bindings
-        .where('state')
-        .anyOf(['pending_initial', 'initializing'])
-        .toArray();
-      for (const b of pending) {
-        try {
-          await initialReconcile.runBinding(b.id);
-        } catch (err) {
-          await logDiagnostic(db, 'warn', 'background', 'initial reconciliation round failed', {
-            bindingId: b.id,
-            error: String(err),
-          });
-        }
-      }
-      await coordinator.syncAll();
-      // Recovery is idempotent (doc 06 §7): attempt it on every trigger
-      // for bindings stuck in needs_recovery.
-      const stuck = await db.bindings.where('state').equals('needs_recovery').toArray();
-      for (const b of stuck) {
-        try {
-          await resync.attemptRecovery(b.id);
-        } catch (err) {
-          await logDiagnostic(db, 'warn', 'background', 'recovery attempt failed', {
-            bindingId: b.id,
-            error: String(err),
-          });
-        }
-      }
-    } catch (err) {
-      await logDiagnostic(db, 'error', 'background', `sync (${trigger}) crashed`, { error: String(err) });
-    }
-  }
-
-  // --- periodic integrity (doc 05 §14) ---
-
-  async function runIntegrity(trigger: string): Promise<void> {
-    const actives = await db.bindings.where('state').equals('active').toArray();
-    for (const b of actives) {
-      try {
-        const result = await integrityCheck(db, verifier, b.id);
-        // Mapping loss is not something a device may repair by guessing: the
-        // server re-matches the tree it is handed (doc 06 §12).
-        if (result === 'mapping_lost') await initialReconcile.recoverMapping(b.id);
-      } catch (err) {
-        await logDiagnostic(db, 'warn', 'background', `integrity check (${trigger}) failed`, {
-          bindingId: b.id,
-          error: String(err),
-        });
-      }
-    }
-  }
+  const reconciler = new InitialReconciler(db, adapter, client);
+  const loop = new WorkerLoop({ db, adapter, coordinator, reconciler, resync, verifier });
 
   chrome.alarms.create('pontis-sync', { periodInMinutes: 5 });
   chrome.alarms.create('pontis-integrity', { periodInMinutes: 24 * 60 });
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === 'pontis-sync') void runSync('alarm');
-    if (alarm.name === 'pontis-integrity') void runIntegrity('daily');
+    if (alarm.name === 'pontis-sync') void loop.runSync('alarm');
+    if (alarm.name === 'pontis-integrity') void loop.runIntegrity('daily');
   });
   chrome.runtime.onStartup.addListener(() => {
-    void runSync('startup');
-    void runIntegrity('startup');
+    void loop.runSync('startup');
+    void loop.runIntegrity('startup');
   });
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (isMessage(msg, 'pontis/manual-sync')) {
-      void runSync('manual').then(
+      void loop.runSync('manual').then(
         () => sendResponse({ ok: true }),
         (err) => sendResponse({ ok: false, error: String(err) }),
       );
@@ -129,17 +63,15 @@ export default defineBackground(() => {
     }
     if (isMessage(msg, 'pontis/integrity-check')) {
       const { bindingId } = msg as { bindingId: string };
-      void integrityCheck(db, verifier, bindingId)
-        .then(async (result) => {
-          if (result === 'mapping_lost') await initialReconcile.recoverMapping(bindingId);
-          sendResponse({ ok: true, result });
-        })
+      void loop
+        .integrityFor(bindingId)
+        .then((result) => sendResponse({ ok: true, result }))
         .catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }
     if (isMessage(msg, 'pontis/initial-reconcile-answer')) {
       const { bindingId, decisions } = msg as { bindingId: string; decisions: Record<string, string> };
-      void initialReconcile
+      void reconciler
         .answer(bindingId, decisions)
         .then((outcome) => sendResponse({ ok: true, outcome }))
         .catch((err) => sendResponse({ ok: false, error: String(err) }));
@@ -147,7 +79,7 @@ export default defineBackground(() => {
     }
     if (isMessage(msg, 'pontis/remount')) {
       const { bindingId, folderBrowserId } = msg as { bindingId: string; folderBrowserId: string };
-      void initialReconcile
+      void reconciler
         .remount(bindingId, folderBrowserId)
         .then((outcome) => sendResponse({ ok: true, outcome }))
         .catch((err) => sendResponse({ ok: false, error: String(err) }));
@@ -158,31 +90,10 @@ export default defineBackground(() => {
 
   // --- event capture: never pauses (doc 05 §13) ---
 
-  // Serialize event handling so per-binding transactions stay ordered.
-  let eventChain: Promise<void> = Promise.resolve();
-
-  const dispatch = (event: BrowserEvent): void => {
-    eventChain = eventChain
-      .then(async () => {
-        // 'initializing' keeps processing so reconciliation-time user
-        // intent is captured (doc 05 §13).
-        const bindings = await db.bindings.where('state').anyOf(['active', 'initializing']).toArray();
-        let producedLocalOp = false;
-        for (const b of bindings) {
-          const disposition = await new EventProcessor(db, adapter).handleEvent(b.id, event);
-          if (disposition === 'local-op') producedLocalOp = true;
-        }
-        if (producedLocalOp) scheduleSync();
-      })
-      .catch(async (err) => {
-        await logDiagnostic(db, 'error', 'background', 'event dispatch failed', { error: String(err), event });
-      });
-  };
-
-  adapter.onCreated((node) => dispatch({ kind: 'created', node }));
-  adapter.onChanged((node) => dispatch({ kind: 'changed', node }));
-  adapter.onMoved((node, oldParentId) => dispatch({ kind: 'moved', node, oldParentId }));
-  adapter.onRemoved((node) => dispatch({ kind: 'removed', node }));
+  adapter.onCreated((node) => void loop.dispatch({ kind: 'created', node }));
+  adapter.onChanged((node) => void loop.dispatch({ kind: 'changed', node }));
+  adapter.onMoved((node, oldParentId) => void loop.dispatch({ kind: 'moved', node, oldParentId }));
+  adapter.onRemoved((node) => void loop.dispatch({ kind: 'removed', node }));
 
   // A lock left behind belongs to the worker this one replaced: MV3 runs a
   // single service worker, so anything still held was abandoned by a kill.
@@ -193,7 +104,7 @@ export default defineBackground(() => {
       }
       return undefined;
     })
-    .then(() => runSync('wake'));
+    .then(() => loop.runSync('wake'));
 });
 
 function isMessage(msg: unknown, type: string): boolean {
