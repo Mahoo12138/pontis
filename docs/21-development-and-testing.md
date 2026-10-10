@@ -227,6 +227,14 @@ reconcile-session-completed-v1.json
 器（`parseReconciliationEnvelope`/`parseSteps`/`parseServerSnapshotPage`）。
 只有后者通过，才说明扩展实际会收到的那份 JSON 是可用的。
 
+Web 消费的 REST 响应另有一批 golden 文件，在 `fixtures/api/`：它们由真实
+router + 干净 SQLite 走完 setup → 建 Space → 建节点 → 注册设备 → 绑定 →
+建备份/计划/任务之后**从 HTTP 响应里抓下来**，不是拿 wire DTO 现场 marshal，
+所以 handler 忘了初始化一个 slice 也会被抓到。TypeScript 一侧由
+`packages/api/src/contract.ts` 的运行时校验器读取同一批文件（见该目录
+README）。`@pontis/api` 此前只做 `res.json() as T`——断言不改变运行时的值，
+这类形状差异只会变成浏览器里的一片空白。
+
 ## 10. Web / Extension Tests
 
 Web：
@@ -312,3 +320,26 @@ Release 前至少：
 - duplicate request / lost response；
 - epoch restore + recovery；
 - backup restore validation。
+
+## 12. 根命令与 CI
+
+CI（`.github/workflows/ci.yml`）不另立一套命令，跑的就是根命令，所以本地绿
+等于 CI 绿。工具版本以 `server/go.mod` 与 `packageManager` 字段为准。
+
+| 命令 | 内容 |
+| --- | --- |
+| `pnpm typecheck` | 5 个 workspace 包 `tsc --noEmit` |
+| `pnpm test` | `pnpm -r --no-bail test`：protocol/扩展的 Vitest、`packages/api` 的 REST 契约、web 的 tree/safe-url |
+| `pnpm test:go` | `go test ./...` |
+| `pnpm test:go:race` | `go test -race ./...`，并发与任务队列的边界只在带 race 时才算测过 |
+| `pnpm test:fixtures` | 两组 golden 协议/REST fixture 的漂移检查 |
+| `pnpm build` | web 的 `tsc --noEmit && vite build`（**不等于**可部署产物，见 PR-F1） |
+| `pnpm --filter @pontis/extension build` | `wxt build` → `extension/.output/chrome-mv3` |
+
+`-r --no-bail` 是刻意的：默认的 `-r` 在第一个失败包停下，后面的包根本没跑到，
+聚合命令的退出码因而会替人撒谎。曾经有两个包声明了 `test` 脚本却没有任何测试
+文件，`vitest` 以 1 退出——这类"脚本存在但永远失败"和"没脚本"是两种不同的
+问题，前者会被读成红灯，后者会被读成绿灯。
+
+没有 lint 命令。`eslint` 既不是任何包的依赖，仓库里也没有配置文件，那条脚本
+从来跑不起来；要么按原设计把它装齐并写完配置，要么就别留一个必然失败的入口。
