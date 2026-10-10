@@ -126,6 +126,18 @@ describe('the contract checks are not decorative', () => {
     expect(() => checkNodeList(body, 'body')).toThrow(/one of folder \| bookmark/);
   });
 
+  it('says whether a wrong value was a string or a number', () => {
+    // `received 0` would describe both "0" and 0, and telling those apart is
+    // the entire content of this class of error.
+    const asText = nodesBody();
+    (asText.nodes[0] as unknown as Record<string, unknown>).position = '0';
+    expect(() => checkNodeList(asText, 'body')).toThrow(/received "0"/);
+
+    const asStringTypedNumber = nodesBody();
+    (asStringTypedNumber.nodes[0] as unknown as Record<string, unknown>).title = 7;
+    expect(() => checkNodeList(asStringTypedNumber, 'body')).toThrow(/received 7$/);
+  });
+
   it('treats a missing required field as a violation, not undefined', () => {
     const body: Record<string, unknown> = load('spaces') as Record<string, unknown>;
     delete body.spaces;

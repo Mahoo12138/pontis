@@ -24,8 +24,9 @@ export class ContractViolation extends Error {
 }
 
 function preview(value: unknown): string {
-  const text = typeof value === 'string' ? value : JSON.stringify(value);
-  if (text === undefined) return String(value);
+  // Quoted for strings on purpose: `received 0` cannot tell a number zero from
+  // the string "0", and that distinction is the whole content of the error.
+  const text = JSON.stringify(value) ?? String(value);
   return text.length > 120 ? `${text.slice(0, 117)}...` : text;
 }
 
