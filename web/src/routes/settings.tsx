@@ -191,12 +191,20 @@ function PasswordForm() {
   };
 
   return (
-    <div style={{ maxWidth: 360 }}>
+    // A real <form>: without it Enter in a password field does nothing, which
+    // is the keyboard user's only way to submit this.
+    <form
+      style={{ maxWidth: 360 }}
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
       <PasswordInput label="当前密码" value={current} onChange={(e) => setCurrent(e.currentTarget.value)} mb="sm" />
       <PasswordInput label="新密码" value={next} onChange={(e) => setNext(e.currentTarget.value)} error={error ?? undefined} mb="sm" />
       <PasswordInput label="确认新密码" value={confirm} onChange={(e) => setConfirm(e.currentTarget.value)} mb="sm" />
-      <Button size="xs" onClick={() => void submit()} loading={pending}>修改密码</Button>
-    </div>
+      <Button size="xs" type="submit" loading={pending}>修改密码</Button>
+    </form>
   );
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { ReactNode } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import {
   IconExternalLink,
   IconCopy,
@@ -11,6 +11,7 @@ import {
 } from '@tabler/icons-react';
 import type { Node } from '@pontis/api';
 import { openUrlSafely } from '../../lib/safe-url';
+import { contextMenuItem } from '../../styles/explorer.css';
 import { tokens } from '../../styles/semantic-tokens.css';
 
 export interface ContextMenuPos {
@@ -44,6 +45,21 @@ export default function NodeContextMenu({
   onTransfer,
 }: NodeContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+
+  // Take the keyboard when opening, and hand it back when closing: a menu the
+  // user reached with the Menu key must not drop them on the floor. If the
+  // chosen item moved focus somewhere of its own (the rename field), leave it.
+  useEffect(() => {
+    if (!pos) return;
+    openerRef.current = document.activeElement as HTMLElement | null;
+    ref.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    return () => {
+      const active = document.activeElement as HTMLElement | null;
+      const stillOurs = !active || active === document.body || ref.current?.contains(active);
+      if (stillOurs) openerRef.current?.focus?.();
+    };
+  }, [pos]);
 
   // Close on outside press, Escape, or scroll.
   useEffect(() => {
@@ -64,6 +80,22 @@ export default function NodeContextMenu({
       window.removeEventListener('scroll', scroll, true);
     };
   }, [pos, onClose]);
+
+  const onKeyDown = (e: ReactKeyboardEvent) => {
+    const items = [...(ref.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])];
+    if (items.length === 0) return;
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    const move = (delta: number) => {
+      const next = items[(at + delta + items.length) % items.length];
+      next?.focus();
+    };
+    if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
+    else if (e.key === 'Home') { e.preventDefault(); items[0]?.focus(); }
+    else if (e.key === 'End') { e.preventDefault(); items[items.length - 1]?.focus(); }
+    // A menu is one stop on the tab ring, not a list to walk past.
+    else if (e.key === 'Tab') { e.preventDefault(); }
+  };
 
   if (!pos || !node) return null;
 
@@ -92,6 +124,9 @@ export default function NodeContextMenu({
     <div
       ref={ref}
       role="menu"
+      aria-orientation="vertical"
+      aria-label={`${node.title} 的操作`}
+      onKeyDown={onKeyDown}
       style={{
         position: 'fixed',
         left: x,
@@ -109,6 +144,7 @@ export default function NodeContextMenu({
         <button
           key={item.label}
           role="menuitem"
+          className={contextMenuItem}
           onClick={() => {
             onClose();
             item.run();
@@ -128,8 +164,6 @@ export default function NodeContextMenu({
             borderRadius: 6,
             cursor: 'pointer',
           }}
-          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = tokens.hoverBg; }}
-          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
         >
           {item.icon}
           {item.label}

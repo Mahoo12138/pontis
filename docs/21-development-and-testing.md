@@ -297,6 +297,13 @@ pnpm build && pnpm e2e:dual-profile        # 需要能开窗口，CI 不跑
   服务端和浏览器都在同一个临时目录下时，一条 `pkill -f pontis-alpha` 会顺手把 Playwright
   的浏览器干掉，MCP 连接就此卡死，只能重启。
 
+键盘可达性（真机过一遍，非断言脚本）：从文档开头 Tab 8 次到达书签树（一个 tab 停靠点，
+行与行之间用方向键走，行本身不进 Tab 环——一个 Space 几百个书签时逐行 Tab 不可用）；
+↑↓ 移动、← 折叠/回父、→ 展开、Home/End、空格切换选择、Delete 打开删除确认；
+`ContextMenu` 键或 Shift+F10 在光标行上打开行菜单，菜单内 ↑↓/Home/End 走位、Enter 执行、
+Esc 关闭并把焦点交回树；删除确认对话框锁住 Tab 环并在关闭后把焦点还回树。
+行菜单的 ⋯ 按钮 `tabIndex={-1}`：它是鼠标可见性，键盘走菜单键这条路。
+
 事件回环要有测试覆盖：任何"同步自己写进浏览器"的路径，测试必须把 adapter 的监听器接到
 EventProcessor 上（见 `expectedMutationEcho.test.ts`）。否则 provisional expectation
 被谁消费、echo 晚到会不会把同步自己的改动当成用户编辑，mock 全都测不出来——真实浏览器

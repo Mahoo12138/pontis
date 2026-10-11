@@ -84,11 +84,25 @@ export default function BookmarkExplorer({
     );
   }
 
+  // The menu key has no cursor position to answer from, so it opens the menu
+  // under the row the keyboard is on.
+  const openMenuForRow = (id: string) => {
+    const el = rowRefs.current.get(id);
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    onContextMenu(r.left + 16, r.bottom, id);
+  };
+
   return (
     <div
       className={explorerContainer}
       tabIndex={0}
       onKeyDown={(e) => {
+        if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+          e.preventDefault();
+          if (focusId) openMenuForRow(focusId);
+          return;
+        }
         handleKeyDown(e);
         if ((e.key === 'Delete' || e.key === 'Backspace') && selected.size > 0) {
           e.preventDefault();
@@ -98,7 +112,6 @@ export default function BookmarkExplorer({
       role="listbox"
       aria-multiselectable
       aria-label="书签列表"
-      style={{ outline: 'none' }}
     >
       {/* Column header */}
       <div className={explorerColumnHeader}>
@@ -123,6 +136,8 @@ export default function BookmarkExplorer({
             }}
             role="option"
             aria-selected={isSelected}
+            aria-level={depth + 1}
+            {...(node.type === 'folder' ? { 'aria-expanded': isExpanded } : {})}
             className={[
               explorerRow,
               isSelected ? explorerRowSelected : '',
@@ -186,9 +201,23 @@ export default function BookmarkExplorer({
               </>
             )}
 
-            {/* Hover actions (menu wired in a later module) */}
+            {/* Row menu. Out of the tab ring on purpose: the tree is one stop
+                and its rows are moved between with the arrows — a stop per row
+                would make reaching the bottom of a space 500 presses. The
+                keyboard gets the same menu from the Menu key / Shift+F10. */}
             <span className={explorerRowActions}>
-              <ActionIcon variant="subtle" size="xs" color="coolGray">
+              <ActionIcon
+                variant="subtle"
+                size="xs"
+                color="coolGray"
+                tabIndex={-1}
+                aria-label={`更多操作：${node.title}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const r = e.currentTarget.getBoundingClientRect();
+                  onContextMenu(r.left, r.bottom, node.id);
+                }}
+              >
                 <IconDots size={14} stroke={1.5} />
               </ActionIcon>
             </span>

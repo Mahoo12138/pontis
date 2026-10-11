@@ -7,6 +7,14 @@ export const explorerContainer = style({
   display: 'flex',
   flexDirection: 'column',
   height: '100%',
+  selectors: {
+    // The tree is one tab stop (rows are moved between with the arrows), so
+    // landing on it has to be visible.
+    '&:focus-visible': {
+      outline: `2px solid ${tokens.accent}`,
+      outlineOffset: '-2px',
+    },
+  },
 });
 
 export const explorerColumnHeader = style({
@@ -94,6 +102,27 @@ export const explorerRowActions = style({
   selectors: {
     [`${explorerRow}:hover &`]: {
       opacity: 1,
+    },
+    // A control that only appears for the mouse is invisible to the keyboard.
+    [`${explorerRow}:focus-within &`]: {
+      opacity: 1,
+    },
+  },
+});
+
+/**
+ * Context-menu rows. The menu is a list of buttons the keyboard walks with the
+ * arrows, so the focused item needs the same affordance the hovered one has.
+ */
+export const contextMenuItem = style({
+  selectors: {
+    '&:hover': {
+      backgroundColor: tokens.hoverBg,
+    },
+    '&:focus-visible': {
+      backgroundColor: tokens.hoverBg,
+      outline: `1px solid ${tokens.accent}`,
+      outlineOffset: '-1px',
     },
   },
 });
