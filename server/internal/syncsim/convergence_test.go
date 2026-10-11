@@ -1,6 +1,7 @@
 package syncsim
 
 import (
+	"context"
 	"testing"
 
 	"pontis/internal/sync"
@@ -297,6 +298,48 @@ func TestDuplicateRequestDelivery(t *testing.T) {
 	}
 	if n := len(a.Rejections()); n != 0 {
 		t.Fatalf("duplicate delivery must replay receipts, not reject: %+v", a.Rejections())
+	}
+}
+
+// A replica that never heard back about an operation retries the same op_id. If
+// the bytes differ it is not the same intent, and applying either one would
+// make the receipt a record of something that never happened.
+func TestReplayWithADifferentBodyIsRefusedNotApplied(t *testing.T) {
+	w := NewWorld(t)
+	a := w.AddBrowser("Edge")
+	if err := a.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+
+	op := createOp(t, a, "main", "original")
+	if _, err := w.Sync.Sync(context.Background(), roundFor(a, op)); err != nil {
+		t.Fatalf("first round: %v", err)
+	}
+	_, head := w.ServerHead()
+
+	changed := op
+	changed.Title = "tampered"
+	_, err := w.Sync.Sync(context.Background(), roundFor(a, changed))
+	wantProtocolCode(t, err, sync.CodeOpIDReused)
+
+	if _, now := w.ServerHead(); now != head {
+		t.Fatalf("a refused replay consumed a revision: %d -> %d", head, now)
+	}
+	node, found := w.ServerTree().Nodes[string(op.NodeID)]
+	if !found {
+		t.Fatal("the settled node disappeared")
+	}
+	if node.Title != "original" {
+		t.Fatalf("title = %q, want the original: the replay overwrote it", node.Title)
+	}
+
+	// The honest retry — same op_id, same bytes — still replays the settled
+	// answer instead of failing forever.
+	if _, err := w.Sync.Sync(context.Background(), roundFor(a, op)); err != nil {
+		t.Fatalf("faithful replay: %v", err)
+	}
+	if _, now := w.ServerHead(); now != head {
+		t.Fatalf("faithful replay consumed a revision: %d -> %d", head, now)
 	}
 }
 

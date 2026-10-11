@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"pontis/internal/canonical"
 )
@@ -240,5 +242,83 @@ func TestJournalRollbackOnFailure(t *testing.T) {
 	}
 	if _, ok := tombstoneRevision(t, store, space, "ok"); ok {
 		t.Error("no tombstones expected after rollback")
+	}
+}
+
+// Journal retention is deliberately conservative: a row is collectable only
+// when it violates BOTH windows — older than the age window AND further below
+// the head than the count window. This collector had never been exercised by a
+// test, and its first run failed on an argument-count mismatch, so every
+// instance had been carrying its journal and receipts forever while the job
+// reported an error nobody looked at.
+func TestJournalGCSpaceNeedsBothWindowsViolated(t *testing.T) {
+	e, store, space := setupCanonicalTest(t)
+	main := canonical.NewRootParent("main")
+	for i := 0; i < 6; i++ {
+		mustExec(t, e, store, canonical.CreateNode{
+			SpaceID: space, NodeID: canonical.NodeID(fmt.Sprintf("n%d", i)),
+			Type: canonical.NodeTypeBookmark, Title: fmt.Sprintf("N%d", i),
+			URL: "https://e.example", Parent: main,
+		})
+	}
+	library := NewLibraryStore(store.db)
+	ctx := context.Background()
+
+	// Nothing is old yet, so the age window keeps every row whatever the count.
+	floor, removed, err := library.JournalGCSpace(ctx, string(space), time.Now().UTC(), 0)
+	if err != nil {
+		t.Fatalf("gc of fresh history: %v", err)
+	}
+	if floor != 0 || removed != 0 {
+		t.Fatalf("fresh journal pruned to floor %d (%d rows), want nothing collected", floor, removed)
+	}
+	if got := len(loadJournal(t, store, space)); got != 6 {
+		t.Fatalf("%d rows after a no-op gc, want all 6", got)
+	}
+
+	// Age the first three past the window: now both are violated up to 3.
+	if _, err := store.db.ExecContext(ctx, `
+		UPDATE journal SET created_at = datetime('now', '-40 day') WHERE space_id = ? AND revision <= 3`,
+		string(space)); err != nil {
+		t.Fatalf("age rows: %v", err)
+	}
+	floor, removed, err = library.JournalGCSpace(ctx, string(space), time.Now().UTC(), 0)
+	if err != nil {
+		t.Fatalf("gc after aging: %v", err)
+	}
+	if floor != 3 || removed != 3 {
+		t.Fatalf("gc collected %d rows to floor %d, want 3 rows to floor 3", removed, floor)
+	}
+	rest := loadJournal(t, store, space)
+	if len(rest) != 3 || rest[0].Revision != 4 {
+		t.Fatalf("surviving journal = %+v, want revisions 4..6", rest)
+	}
+	var dbFloor int64
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT journal_floor_revision FROM sync_spaces WHERE id = ?`, string(space)).Scan(&dbFloor); err != nil {
+		t.Fatal(err)
+	}
+	if dbFloor != 3 {
+		t.Fatalf("space journal_floor_revision = %d, want 3", dbFloor)
+	}
+
+	// The count window alone must not drag the floor backwards: keeping the
+	// newest 5 of 6 means only revision 1 qualifies, and it is already gone.
+	if _, err := store.db.ExecContext(ctx, `
+		UPDATE journal SET created_at = datetime('now', '-40 day') WHERE space_id = ?`, string(space)); err != nil {
+		t.Fatalf("age the rest: %v", err)
+	}
+	floor, removed, err = library.JournalGCSpace(ctx, string(space), time.Now().UTC(), 5)
+	if err != nil {
+		t.Fatalf("gc with a count window: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("gc collected %d more rows, want the floor to hold at 3", removed)
+	}
+	if floor > 3 {
+		t.Fatalf("floor moved to %d while the count window only allowed 1", floor)
+	}
+	if got := len(loadJournal(t, store, space)); got != 3 {
+		t.Fatalf("%d rows left, want the 3 the windows allow", got)
 	}
 }

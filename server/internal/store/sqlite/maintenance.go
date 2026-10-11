@@ -71,14 +71,21 @@ func (s *LibraryStore) JournalGCSpace(ctx context.Context, spaceID string, now t
 		return 0, 0, tx.Commit()
 	}
 
-	for _, stmt := range []string{
-		`DELETE FROM journal WHERE space_id = ? AND revision <= ?`,
-		`DELETE FROM tombstones WHERE space_id = ? AND deleted_revision <= ?`,
-		`DELETE FROM client_operation_receipts WHERE binding_id IN
+	// Each statement carries its own arguments: the receipt delete has two
+	// placeholders while the other two also take two, and one shared argument
+	// list for all three made every run of this collector fail.
+	prunes := []struct {
+		query string
+		args  []any
+	}{
+		{`DELETE FROM journal WHERE space_id = ? AND revision <= ?`, []any{spaceID, floor}},
+		{`DELETE FROM tombstones WHERE space_id = ? AND deleted_revision <= ?`, []any{spaceID, floor}},
+		{`DELETE FROM client_operation_receipts WHERE binding_id IN
 			(SELECT id FROM device_space_bindings WHERE space_id = ?)
-		 AND COALESCE(processed_at_revision, 0) <= ?`,
-	} {
-		res, err := tx.ExecContext(ctx, stmt, spaceID, floor, spaceID, floor)
+		 AND COALESCE(processed_at_revision, 0) <= ?`, []any{spaceID, floor}},
+	}
+	for _, p := range prunes {
+		res, err := tx.ExecContext(ctx, p.query, p.args...)
 		if err != nil {
 			return 0, 0, err
 		}

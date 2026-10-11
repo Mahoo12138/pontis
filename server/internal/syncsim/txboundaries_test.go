@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,39 @@ type boundaryProbe struct {
 	live       *sql.DB
 	hooks      map[string]func()
 	failUpdate error
+	// wrapsTx is set when a test armed an in-transaction hook. Wrapping is not
+	// free: the store unwraps a transaction through an unexported method, which
+	// a wrapper around the interface cannot forward, so the probe only wraps
+	// when it actually has something to intercept.
+	wrapsTx bool
+}
+
+// BeginTx wraps the round's transaction so a test can cut in while the round is
+// inside it.
+func (p *boundaryProbe) BeginTx(ctx context.Context) (sync.Tx, error) {
+	tx, err := p.Store.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !p.wrapsTx {
+		return tx, nil
+	}
+	return &boundaryTxProbe{Tx: tx, p: p}, nil
+}
+
+// boundaryTxProbe intercepts the writes of one round transaction.
+type boundaryTxProbe struct {
+	sync.Tx
+	p *boundaryProbe
+}
+
+// LoadSpace is the round's first read inside the transaction: the head it
+// reports and the absence of a receipt are decided here, so a commit that lands
+// after this line is the overlap a lock has to survive.
+func (t *boundaryTxProbe) LoadSpace(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error) {
+	sp, err := t.Tx.LoadSpace(ctx, id)
+	t.p.fire("Tx.LoadSpace")
+	return sp, err
 }
 
 func (p *boundaryProbe) fire(key string) {
@@ -43,7 +77,12 @@ func (p *boundaryProbe) fire(key string) {
 // after arms a one-shot action to run once the round has observed the given
 // read: "Store.LoadSpace" is the advisory read of a round, "ReadTx.LoadSpace"
 // the head read inside a snapshot.
-func (p *boundaryProbe) after(key string, fn func()) { p.hooks[key] = fn }
+func (p *boundaryProbe) after(key string, fn func()) {
+	p.hooks[key] = fn
+	if strings.HasPrefix(key, "Tx.") {
+		p.wrapsTx = true
+	}
+}
 
 func (p *boundaryProbe) LoadSpace(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error) {
 	sp, err := p.Store.LoadSpace(ctx, id)
@@ -377,4 +416,189 @@ func commitRound(t *testing.T, w *World, b *FakeBrowser, op sync.Operation) int6
 		t.Fatal("concurrent round returned no operation result")
 	}
 	return resp.OperationResults[0].ResultRevision
+}
+
+// Two processes can be mid-round for one binding at the same moment. Inside one
+// process they cannot: sqlite.Open caps a handle at a single connection, so the
+// second round waits for the first. Across two handles the round under test has
+// already read the head and found no receipt when the other one commits the very
+// same intent — and the pair of them must still leave one node, one journal
+// revision and one receipt behind, not two.
+func TestOverlappingRoundsOfOneBindingApplyOneIntentOnce(t *testing.T) {
+	w := NewWorld(t)
+	a := w.AddBrowser("Edge")
+	if err := a.Initialize(); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+
+	op := createOp(t, a, "main", "raced-intent")
+	req := roundFor(a, op)
+	_, headBefore := w.ServerHead()
+
+	probe := newProbe(t, w)
+	committedElsewhere := false
+	probe.after("Tx.LoadSpace", func() {
+		if committedElsewhere {
+			return // the interleaving only has to happen once
+		}
+		committedElsewhere = true
+		commitRound(t, w, a, op)
+	})
+
+	_, err := w.Sync.Sync(context.Background(), req)
+	if !committedElsewhere {
+		t.Fatal("the other round never landed inside the transaction; the overlap was not staged")
+	}
+
+	// The loser of a write race is allowed to fail; what it is not allowed to do
+	// is report success for an intent that is already settled, having decided
+	// against numbers it read before the other commit.
+	var journalRows, receiptRows int
+	if err := probe.live.QueryRow(`SELECT COUNT(*) FROM journal WHERE space_id = ? AND node_id = ?`,
+		string(w.SpaceID), string(op.NodeID)).Scan(&journalRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := probe.live.QueryRow(`SELECT COUNT(*) FROM client_operation_receipts WHERE binding_id = ? AND op_id = ?`,
+		a.BindingID, op.OpID).Scan(&receiptRows); err != nil {
+		t.Fatal(err)
+	}
+	_, headAfter := w.ServerHead()
+	if journalRows != 1 {
+		t.Errorf("%d journal revisions for one intent, want 1 (round err = %v)", journalRows, err)
+	}
+	if receiptRows != 1 {
+		t.Errorf("%d receipts for one intent, want 1 (round err = %v)", receiptRows, err)
+	}
+	if headAfter != headBefore+1 {
+		t.Errorf("space revision went %d → %d, want exactly one new revision", headBefore, headAfter)
+	}
+	if _, found := w.ServerTree().Nodes[string(op.NodeID)]; !found {
+		t.Error("the intent is missing from the tree")
+	}
+
+	// A retry after the dust settles is the ordinary client behaviour, and it
+	// has to converge on the settled answer.
+	if _, err := w.Sync.Sync(context.Background(), req); err != nil {
+		t.Fatalf("the losing round's retry failed: %v", err)
+	}
+	if _, head := w.ServerHead(); head != headBefore+1 {
+		t.Fatalf("replaying a settled operation advanced the head to %d", head)
+	}
+	if seq := bindingMaxSeq(t, w, a.BindingID); seq < op.ClientSeq {
+		t.Errorf("binding max_client_seq = %d, want at least the spent %d", seq, op.ClientSeq)
+	}
+}
+
+// One operation's tree write, journal row, receipt and spent sequence are one
+// transaction, so a round that dies partway through has to end up
+// indistinguishable from one that never ran. The collision below is what a lost
+// write race looks like to SQLite: the revision this round is about to append is
+// already taken, and the failure lands after the node insert, before the commit.
+func TestRoundThatFailedInsideItsTransactionLeftNoTrace(t *testing.T) {
+	w := NewWorld(t)
+	a := w.AddBrowser("Edge")
+	if err := a.Initialize(); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+
+	op := createOp(t, a, "main", "died-mid-transaction")
+	epoch, head := w.ServerHead()
+	probe := newProbe(t, w)
+	execOn(t, probe.live, `
+		INSERT INTO journal (space_id, epoch, revision, change_type, node_id, payload, origin_type, created_at)
+		VALUES (?, ?, ?, 'create', 'someone-elses-entry', '{}', 'system', ?)`,
+		string(w.SpaceID), epoch, head+1, time.Now().UTC().Format(time.RFC3339Nano))
+
+	if _, err := w.Sync.Sync(context.Background(), roundFor(a, op)); err == nil {
+		t.Fatal("the round reported success although its journal insert collided")
+	}
+	if _, found := w.ServerTree().Nodes[string(op.NodeID)]; found {
+		t.Error("the failed round left its node in the tree")
+	}
+	var receipts int
+	if err := probe.live.QueryRow(`SELECT COUNT(*) FROM client_operation_receipts WHERE binding_id = ?`,
+		a.BindingID).Scan(&receipts); err != nil {
+		t.Fatal(err)
+	}
+	if receipts != 0 {
+		t.Errorf("%d receipts from a round that never committed, want none", receipts)
+	}
+	if seq := bindingMaxSeq(t, w, a.BindingID); seq != 0 {
+		t.Errorf("binding max_client_seq = %d after an uncommitted round, want it unspent", seq)
+	}
+	if _, now := w.ServerHead(); now != head {
+		t.Errorf("space revision went to %d on a round that never committed, want %d", now, head)
+	}
+
+	// Clear the collision: the retry is exactly what a replica does after it
+	// reconnects, and it has to land rather than be refused by half a record.
+	execOn(t, probe.live, `DELETE FROM journal WHERE space_id = ? AND revision = ?`,
+		string(w.SpaceID), head+1)
+	if _, err := w.Sync.Sync(context.Background(), roundFor(a, op)); err != nil {
+		t.Fatalf("retry of the failed operation: %v", err)
+	}
+	if _, found := w.ServerTree().Nodes[string(op.NodeID)]; !found {
+		t.Error("the retried operation never landed")
+	}
+	if _, now := w.ServerHead(); now != head+1 {
+		t.Fatalf("space revision = %d after one applied operation, want %d", now, head+1)
+	}
+}
+
+// Journal GC against a pull that is already inside the server, driven by the
+// real collector rather than a hand-written UPDATE: GC deletes journal rows,
+// tombstones and receipts and only then raises the floor. A page read across
+// that boundary would either skip revisions the replica never saw or serve rows
+// the collector meant to remove.
+func TestRealJournalGCUnderAFlyingPull(t *testing.T) {
+	w := NewWorld(t)
+	a := w.AddBrowser("Edge")
+	side := w.AddBrowser("Side")
+	for _, b := range []*FakeBrowser{a, side} {
+		if err := b.Initialize(); err != nil {
+			t.Fatalf("%s initialize: %v", b.Name, err)
+		}
+	}
+
+	// History the lagging replica has not received yet, then age it past the
+	// 30-day window so the real collector considers it collectable.
+	for _, title := range []string{"one", "two", "three"} {
+		commitRound(t, w, side, createOp(t, side, "main", title))
+	}
+	_, head := w.ServerHead()
+	probe := newProbe(t, w)
+	probe.after("Store.LoadSpace", func() {
+		if _, err := probe.live.Exec(`UPDATE journal SET created_at = datetime('now', '-40 day') WHERE space_id = ?`,
+			string(w.SpaceID)); err != nil {
+			t.Fatalf("age the journal: %v", err)
+		}
+		// The real writer, on the other handle: it prunes and moves the floor
+		// in one transaction of its own.
+		gc := sqlite.NewLibraryStore(probe.live)
+		floor, removed, err := gc.JournalGCSpace(context.Background(), string(w.SpaceID), time.Now().UTC(), 1)
+		if err != nil {
+			t.Fatalf("journal gc: %v", err)
+		}
+		if removed == 0 {
+			t.Fatalf("gc collected nothing (floor %d), so the race this test stages never happened", floor)
+		}
+		if floor >= head {
+			t.Fatalf("gc floor %d reached the head %d; keep at least one row so a hole cannot be hidden", floor, head)
+		}
+	})
+
+	// The replica asks from revision 0, which the collector has just pruned.
+	_, err := w.Sync.Sync(context.Background(), roundFor(a))
+	wantProtocolCode(t, err, sync.CodeHistoryExpired)
+
+	// And the rows really are gone: the refusal has to be the only answer a
+	// reader can get, not a page that happens to start above from_revision.
+	var survivors int
+	if err := probe.live.QueryRow(`SELECT COUNT(*) FROM journal WHERE space_id = ? AND revision <= ?`,
+		string(w.SpaceID), head-1).Scan(&survivors); err != nil {
+		t.Fatal(err)
+	}
+	if survivors != 0 {
+		t.Errorf("%d pruned journal rows still readable below the floor", survivors)
+	}
 }
