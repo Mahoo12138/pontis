@@ -36,7 +36,7 @@ import {
 import type { IntentDecision } from '../../core/sync/resync';
 import { PairingService, originPatternFor } from '../../core/pairing/pairing';
 import { chromeApi, kvArea } from '../../runtime/chromeApi';
-import { bindingStatus, relTime } from '../../ui/bindingStatus';
+import { bindingStatus, relTime, syncProgress } from '../../ui/bindingStatus';
 
 interface FolderOption {
   value: string;
@@ -469,17 +469,9 @@ export function App() {
                         </Group>
                       </Group>
                       <Group gap="md" wrap="nowrap">
-                        <Text size="xs" c="dimmed">
-                          已应用 / 已收到
-                        </Text>
                         <Text size="xs" className="pontis-numerals">
-                          {b.appliedRevision} / {b.receivedRevision}
+                          {syncProgress(b)}
                         </Text>
-                        {st.catchingUp && (
-                          <Text size="xs" c="recoveryOrange">
-                            尚有 {st.pending} 项未落地
-                          </Text>
-                        )}
                         <Text size="xs" c="dimmed">
                           epoch {b.epoch}
                         </Text>

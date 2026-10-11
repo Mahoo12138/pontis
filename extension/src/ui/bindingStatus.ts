@@ -22,14 +22,27 @@ export interface BindingStatus {
   color: string;
   /** Revisions received but not yet applied to the browser. */
   pending: number;
-  /** A healthy binding still has work queued: say so instead of hiding it. */
-  catchingUp: boolean;
+}
+
+/**
+ * The watermarks are journal revisions, not a count of bookmarks: deleting one
+ * bookmark advances the revision exactly like adding one does. Two bare numbers
+ * separated by a slash read as "1402 of 1402 things", so the surfaces phrase the
+ * same pair as the position this device has reached, and only mention the gap
+ * when there is one.
+ */
+export function syncProgress(binding: BindingRecord): string {
+  if (binding.appliedRevision === 0 && binding.receivedRevision === 0) return '还没有同步过';
+  if (binding.appliedRevision < binding.receivedRevision) {
+    return `已同步到修订 ${binding.appliedRevision}，还有 ${binding.receivedRevision - binding.appliedRevision} 项待应用`;
+  }
+  return `已同步到修订 ${binding.appliedRevision}`;
 }
 
 export function bindingStatus(binding: BindingRecord): BindingStatus {
   const s = STATE[binding.state] ?? { label: binding.state, color: 'coolGray' };
   const pending = Math.max(0, binding.receivedRevision - binding.appliedRevision);
-  return { ...s, pending, catchingUp: binding.state === 'active' && pending > 0 };
+  return { ...s, pending };
 }
 
 export function relTime(ts: number | null | undefined): string {

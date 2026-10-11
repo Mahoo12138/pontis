@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { Badge, Button, Card, Divider, Group, Stack, Text, Title } from '@mantine/core';
 import { PontisDB, type BindingRecord } from '../../core/store/db';
 import { chromeApi } from '../../runtime/chromeApi';
-import { bindingStatus, relTime } from '../../ui/bindingStatus';
+import { bindingStatus, relTime, syncProgress } from '../../ui/bindingStatus';
 
 export function App() {
   const [bindings, setBindings] = useState<BindingRecord[]>([]);
@@ -81,17 +81,12 @@ export function App() {
               </Group>
               <Group gap="xs" wrap="nowrap" justify="space-between">
                 <Text size="xs" c="dimmed" className="pontis-numerals">
-                  {b.appliedRevision} / {b.receivedRevision} · epoch {b.epoch}
+                  {syncProgress(b)}
                 </Text>
                 <Text size="xs" c="dimmed">
                   {relTime(b.lastSyncAt)}
                 </Text>
               </Group>
-              {st.catchingUp && (
-                <Text size="xs" c="recoveryOrange">
-                  尚有 {st.pending} 项未落地
-                </Text>
-              )}
               {b.recovery && (
                 <Text size="xs" c="errorRed">
                   需要恢复: {b.recovery.code}
