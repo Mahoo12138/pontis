@@ -431,6 +431,56 @@ describe('initial reconciliation lifecycle', () => {
     expect((await db.bindings.get(bindingId))?.state).toBe('active');
   });
 
+  it('settles a queued create the committed snapshot already adopted', async () => {
+    await seedBinding();
+    // What a restore leaves behind: the binding falls back to pending_initial
+    // while the outbox still holds creates made before it. The snapshot this
+    // reconciliation just committed already describes those bookmarks, so
+    // replaying the op hands the user a second copy of one they made once.
+    await db.pendingOps.add({
+      opId: 'op-adopted',
+      bindingId,
+      clientSeq: 1,
+      baseRevision: 0,
+      status: 'QUEUED',
+      type: 'create',
+      nodeId: 'client-chosen-id',
+      nodeType: 'bookmark',
+      title: 'Home',
+      url: 'https://home.example.com',
+      parent: { type: 'root', key: 'main' },
+      beforeId: null,
+      browserId: 'b1',
+      createdAt: Date.now(),
+    } as never);
+    await db.pendingOps.add({
+      opId: 'op-unadopted',
+      bindingId,
+      clientSeq: 2,
+      baseRevision: 0,
+      status: 'QUEUED',
+      type: 'create',
+      nodeId: 'another-client-id',
+      nodeType: 'bookmark',
+      title: 'Docs',
+      url: 'https://docs.example.com',
+      parent: { type: 'root', key: 'main' },
+      beforeId: null,
+      browserId: 'b2',
+      createdAt: Date.now(),
+    } as never);
+    // The plan adopts b1 only.
+    lifecycle.steps = [{ kind: 'assign_identity', local_ref: 'l_2', canonical_id: 'n1' }];
+
+    expect(await reconciler.runBinding(bindingId)).toBe('completed');
+
+    expect(await db.pendingOps.get('op-adopted')).toBeUndefined();
+    expect((await db.pendingOps.get('op-unadopted'))?.status).toBe('QUEUED');
+    // And the next round really is the one that carries the surviving intent:
+    // the binding is active with both creates accounted for.
+    expect((await db.bindings.get(bindingId))?.state).toBe('active');
+  });
+
   it('refuses to activate while a planned node is not in the browser', async () => {
     await seedBinding();
     // A create the browser did not keep: the write must not be able to pass

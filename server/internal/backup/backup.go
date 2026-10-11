@@ -348,41 +348,47 @@ func (s *Service) SetProtected(ctx context.Context, id string, protected bool) e
 	return s.store.SetProtected(ctx, id, protected)
 }
 
+// ReadPayload locates one backup's file and decodes it under exactly the rules
+// a restore applies: the row must belong to the space asked about, an
+// unlocatable legacy row is refused rather than guessed at, and the bytes must
+// match the size the capture recorded. Asking what a backup holds has to be
+// able to fail for the same reasons restoring it would, or "readable" and
+// "restorable" drift apart and the check means nothing.
+func (s *Service) ReadPayload(ctx context.Context, spaceID canonical.SpaceID, id string) (Payload, error) {
+	b, err := s.store.Get(ctx, id)
+	if err != nil {
+		return Payload{}, err
+	}
+	if b.SpaceID != string(spaceID) {
+		return Payload{}, ErrSpaceMismatch
+	}
+	if b.StorageKey == "" {
+		return Payload{}, fmt.Errorf("%w: backup %s", ErrUnlocated, b.ID)
+	}
+	raw, err := s.files.Read(b.StorageKey)
+	if err != nil {
+		return Payload{}, err
+	}
+	if b.SizeBytes > 0 && int64(len(raw)) != b.SizeBytes {
+		return Payload{}, fmt.Errorf("%w: payload is %d bytes, the catalog recorded %d",
+			ErrInvalidPayload, len(raw), b.SizeBytes)
+	}
+	var payload Payload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return Payload{}, ErrInvalidPayload
+	}
+	return payload, nil
+}
+
 // Restore replaces the space's tree with the backup content. The payload is
 // validated and ordered first, then a pre-restore safety backup is captured
 // (doc 14 §12), and finally the baseline is replaced in one transaction that
 // allocates the new epoch itself. Bindings fall back to pending_initial so
 // devices resync against the new baseline.
 func (s *Service) Restore(ctx context.Context, spaceID canonical.SpaceID, id string) (newEpoch int64, safetyID string, err error) {
-	b, err := s.store.Get(ctx, id)
+	payload, err := s.ReadPayload(ctx, spaceID, id)
 	if err != nil {
 		return 0, "", err
-	}
-	if b.SpaceID != string(spaceID) {
-		return 0, "", ErrSpaceMismatch
-	}
-	if b.StorageKey == "" {
-		// Legacy row whose display name was shared: which physical file is
-		// its payload cannot be decided, so restoring would apply another
-		// backup's tree.
-		return 0, "", fmt.Errorf("%w: backup %s", ErrUnlocated, b.ID)
-	}
-
-	raw, err := s.files.Read(b.StorageKey)
-	if err != nil {
-		return 0, "", err
-	}
-	// The catalog row and the file are two objects, and a restore is the one
-	// moment their disagreement becomes someone else's problem. A truncated or
-	// swapped-in payload can still parse as JSON, so the byte count the capture
-	// recorded is checked here, before anything is written.
-	if b.SizeBytes > 0 && int64(len(raw)) != b.SizeBytes {
-		return 0, "", fmt.Errorf("%w: payload is %d bytes, the catalog recorded %d",
-			ErrInvalidPayload, len(raw), b.SizeBytes)
-	}
-	var payload Payload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return 0, "", ErrInvalidPayload
 	}
 	// Prove the whole tree is restorable before touching live data or
 	// spending a safety backup on a payload that cannot be applied.

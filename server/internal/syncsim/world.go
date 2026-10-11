@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"pontis/internal/backup"
 	"pontis/internal/canonical"
 	"pontis/internal/changeset"
 	"pontis/internal/device"
@@ -29,6 +30,10 @@ type World struct {
 	Devices   *device.Service
 	Sync      *sync.Service
 	Reconcile *reconcile.Service
+	// Backups is the real capture/restore service, not a hand-written UPDATE:
+	// a test that skips it never exercises the epoch and baseline the restore
+	// actually leaves behind.
+	Backups *backup.Service
 
 	changesets *changeset.Service
 
@@ -84,6 +89,12 @@ func (w *World) wireServices() {
 	w.changesets = changeset.NewService(sqlite.NewChangeSetStore(w.db))
 	w.Sync = sync.NewService(sqlite.NewSyncStore(w.db), w.changesets)
 	w.Reconcile = reconcile.NewService(sqlite.NewReconcileStore(w.db))
+	backups, err := backup.NewService(sqlite.NewBackupStore(w.db), sqlite.NewLibraryStore(w.db),
+		filepath.Join(filepath.Dir(w.dbPath), "backups"))
+	if err != nil {
+		w.t.Fatalf("wire backup service: %v", err)
+	}
+	w.Backups = backups
 }
 
 // SyncWith rebuilds the world's sync service over another store and returns

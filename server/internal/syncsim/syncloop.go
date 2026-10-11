@@ -495,6 +495,24 @@ func (b *FakeBrowser) Initialize() error {
 	b.epoch = done.TargetEpoch
 	b.appliedRevision = done.CommitRevision
 	b.receivedRevision = done.CommitRevision
+	// Settle the creates the committed snapshot already accounts for, which is
+	// what the real client does when an initial reconciliation adopts a node it
+	// had queued (extension/src/core/sync/initialReconcile.ts). A create whose
+	// browser node now answers to a *different* canonical id was adopted under
+	// the plan's identity; replaying it gives the user a second copy of a
+	// bookmark they made once — the exact shape of returning after a restore.
+	// Everything else in the outbox is still owed and stays.
+	kept := b.outbox[:0]
+	for _, p := range b.outbox {
+		if p.Op.Type == sync.OpCreate && p.State == pendingQueued {
+			if m, mapped := b.mirror[p.Op.NodeID.String()]; mapped &&
+				b.byBrowserID[m.BrowserID] != p.Op.NodeID.String() {
+				continue
+			}
+		}
+		kept = append(kept, p)
+	}
+	b.outbox = kept
 	return nil
 }
 

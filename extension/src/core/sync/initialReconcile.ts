@@ -424,14 +424,21 @@ export class InitialReconciler {
       throw new Error('initialReconcile: completed without a baseline revision to adopt');
     }
     const epoch = env.binding?.epoch ?? binding.epoch;
-    await this.db.bindings.update(binding.id, {
-      state: 'active',
-      epoch,
-      appliedRevision: revision,
-      receivedRevision: revision,
-      lastSyncAt: Date.now(),
-      recovery: null,
-    });
+    const settled = await this.db.transaction(
+      'rw',
+      [this.db.bindings, this.db.pendingOps, this.db.localNodes],
+      async () => {
+        await this.db.bindings.update(binding.id, {
+          state: 'active',
+          epoch,
+          appliedRevision: revision,
+          receivedRevision: revision,
+          lastSyncAt: Date.now(),
+          recovery: null,
+        });
+        return this.settleAdoptedCreates(binding.id);
+      },
+    );
     session.state = 'COMPLETED';
     session.phase = 'done';
     session.issues = undefined;
@@ -441,8 +448,40 @@ export class InitialReconciler {
       bindingId: binding.id,
       sessionId: env.session.id,
       baselineRevision: revision,
+      settledCreates: settled,
     });
     return 'completed';
+  }
+
+  /**
+   * Drop queued creates the committed snapshot already accounts for.
+   *
+   * The snapshot describes the whole mounted scope, and the steps that ran
+   * before this point mapped the browser nodes it carried. A create still
+   * sitting in the outbox for a node that now has a canonical id is therefore
+   * not pending work — it is one bookmark expressed twice, and replaying it
+   * gives the user a duplicate of something they made once. That is the shape
+   * of a restore: the binding falls back to pending_initial while the outbox
+   * still holds edits made before it.
+   */
+  private async settleAdoptedCreates(bindingId: string): Promise<number> {
+    const queued = await this.db.pendingOps
+      .where('[bindingId+status]')
+      .equals([bindingId, 'QUEUED'])
+      .filter((o) => o.type === 'create')
+      .toArray();
+    let settled = 0;
+    for (const op of queued) {
+      if (!op.browserId) continue;
+      const mirror = await this.db.localNodes.get([bindingId, op.browserId]);
+      // An ordinary ack deletes its own op, so a mapped mirror that still has
+      // one queued means the reconciliation adopted this node instead.
+      if (mirror?.canonicalId) {
+        await this.db.pendingOps.delete(op.opId);
+        settled += 1;
+      }
+    }
+    return settled;
   }
 
   private async touch(session: ReconSessionRecord): Promise<void> {
