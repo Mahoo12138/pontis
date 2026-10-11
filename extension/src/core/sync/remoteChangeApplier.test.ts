@@ -83,6 +83,10 @@ describe('RemoteChangeApplier', () => {
         expectationAtApiTime = await db.expectedMutations.toArray();
       },
     });
+    // The probe is a second browser: it needs the same mount folder, and the
+    // adapter now refuses a create into a parent it has never heard of — as
+    // chrome.bookmarks does.
+    probe.seed({ id: 'f1', parentId: '0', title: 'Sync' });
     const probed = new RemoteChangeApplier(db, probe);
 
     await probed.applyChange(bindingId, createChange(101, 'n-1'));

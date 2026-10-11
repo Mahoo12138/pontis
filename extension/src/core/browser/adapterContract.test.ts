@@ -8,12 +8,23 @@ import { describe, expect, it } from 'vitest';
 import { createChromiumAdapter } from './chromium';
 import { FakeBrowserAdapter } from './fakeAdapter';
 import { removeByType, type BrowserAdapter } from './types';
-import { createFakeChromeApi, type FakeChrome } from '../../testing/fakeChromeBookmarks';
+import { createFakeChromeApi } from '../../testing/fakeChromeBookmarks';
 
 interface AdapterImpl {
   name: string;
-  /** Return an adapter with a single empty root folder plus a handle on it. */
-  build(): { adapter: BrowserAdapter; rootId: string; chrome?: FakeChrome };
+  /**
+   * The tree a real profile starts with: a hidden root ('0') holding the two
+   * permanent containers — the bar, which a mount points at, and "other
+   * bookmarks", the second root a space can be placed in.
+   */
+  build(): {
+    adapter: BrowserAdapter;
+    rootId: string;
+    otherRootId: string;
+    hiddenRootId: string;
+    /** A folder the browser added and policy froze. Returns its id. */
+    seedManagedFolder(parentId: string, title: string): string;
+  };
 }
 
 const impls: AdapterImpl[] = [
@@ -21,16 +32,42 @@ const impls: AdapterImpl[] = [
     name: 'chromium',
     build: () => {
       const chrome = createFakeChromeApi();
-      chrome.seedNode({ id: '10', title: 'Bookmarks Bar' });
-      return { adapter: createChromiumAdapter(chrome), rootId: '10', chrome };
+      chrome.seedNode({ id: '0', title: '' });
+      chrome.seedNode({ id: '1', parentId: '0', title: 'Bookmarks Bar', folderType: 'bookmarks-bar' });
+      chrome.seedNode({ id: '2', parentId: '0', title: 'Other bookmarks', folderType: 'other' });
+      let seeded = 500;
+      return {
+        adapter: createChromiumAdapter(chrome),
+        rootId: '1',
+        otherRootId: '2',
+        hiddenRootId: '0',
+        seedManagedFolder: (parentId, title) => {
+          const id = String(seeded++);
+          chrome.seedNode({ id, parentId, title, folderType: 'managed', unmodifiable: true });
+          return id;
+        },
+      };
     },
   },
   {
     name: 'fake',
     build: () => {
       const adapter = new FakeBrowserAdapter();
-      adapter.seed({ id: 'root', parentId: null, title: 'Bookmarks Bar' });
-      return { adapter, rootId: 'root' };
+      adapter.seed({ id: '0', parentId: null, title: '' });
+      adapter.seed({ id: '1', parentId: '0', title: 'Bookmarks Bar', folderType: 'bookmarks-bar' });
+      adapter.seed({ id: '2', parentId: '0', title: 'Other bookmarks', folderType: 'other' });
+      let seeded = 500;
+      return {
+        adapter,
+        rootId: '1',
+        otherRootId: '2',
+        hiddenRootId: '0',
+        seedManagedFolder: (parentId, title) => {
+          const id = `m${seeded++}`;
+          adapter.seed({ id, parentId, title, folderType: 'managed', unmodifiable: true });
+          return id;
+        },
+      };
     },
   },
 ];
@@ -153,6 +190,103 @@ for (const impl of impls) {
       const second = await adapter.create(rootId, { title: 'Second', url: 'https://second.test' });
       expect(first.id).not.toBe(second.id);
       expect(await adapter.getNode(second.id)).toMatchObject({ title: 'Second' });
+    });
+
+    it('keeps two bookmarks of one URL as two nodes', async () => {
+      const { adapter, rootId } = impl.build();
+      // A user with the same site in the bar and in a folder is the normal
+      // case, not an edge one: the adapter may not collapse them, because the
+      // only thing that distinguishes them is the browser id.
+      const a = await adapter.create(rootId, { title: 'Same', url: 'https://same.test' });
+      const b = await adapter.create(rootId, { title: 'Same', url: 'https://same.test' });
+      expect(a.id).not.toBe(b.id);
+      expect(await adapter.getChildren(rootId)).toHaveLength(2);
+
+      await adapter.update(b.id, { title: 'Renamed' });
+      expect((await adapter.getNode(a.id))?.title).toBe('Same');
+
+      await adapter.removeBookmark(b.id);
+      expect(await adapter.getNode(a.id)).not.toBeNull();
+      expect(await adapter.getChildren(rootId)).toHaveLength(1);
+    });
+
+    it('keeps same-named folders addressable as separate subtrees', async () => {
+      const { adapter, rootId } = impl.build();
+      const one = await adapter.create(rootId, { title: 'Work' });
+      const two = await adapter.create(rootId, { title: 'Work' });
+      expect(one.id).not.toBe(two.id);
+
+      const inside = await adapter.create(one.id, { title: 'Inside', url: 'https://inside.test' });
+      expect((await adapter.getChildren(one.id)).map((n) => n.id)).toEqual([inside.id]);
+      expect(await adapter.getChildren(two.id)).toHaveLength(0);
+
+      await adapter.removeSubtree(two.id);
+      expect(await adapter.getNode(one.id)).not.toBeNull();
+      expect((await adapter.getChildren(one.id))[0]?.title).toBe('Inside');
+    });
+
+    it('carries an untitled folder as a node rather than dropping it', async () => {
+      const { adapter, rootId } = impl.build();
+      // A node with nothing to show for a title is how anything the API has no
+      // kind for would reach us (a separator being the case in point). The
+      // adapter has two classifications and no third: it must not swallow it.
+      const anon = await adapter.create(rootId, { title: '' });
+      expect(anon.type).toBe('folder');
+      expect((await adapter.getChildren(rootId)).map((n) => n.id)).toContain(anon.id);
+      expect(await adapter.getNode(anon.id)).toMatchObject({ title: '', type: 'folder' });
+    });
+
+    it('treats each browser container as its own parent', async () => {
+      const { adapter, rootId, otherRootId } = impl.build();
+      const inBar = await adapter.create(rootId, { title: 'Bar item', url: 'https://bar.test' });
+      expect(await adapter.getChildren(otherRootId)).toHaveLength(0);
+
+      await adapter.move(inBar.id, otherRootId, null);
+
+      expect(await adapter.getChildren(rootId)).toHaveLength(0);
+      expect((await adapter.getChildren(otherRootId)).map((n) => n.id)).toEqual([inBar.id]);
+      expect(await adapter.getNode(inBar.id)).toMatchObject({ parentId: otherRootId });
+    });
+
+    it('refuses to rename, move or delete a folder the browser added', async () => {
+      const { adapter, rootId, otherRootId } = impl.build();
+      const kept = await adapter.create(rootId, { title: 'Mine', url: 'https://mine.test' });
+
+      await expect(adapter.update(rootId, { title: 'My bar now' })).rejects.toThrow();
+      await expect(adapter.move(rootId, otherRootId, 0)).rejects.toThrow();
+      await expect(adapter.removeSubtree(rootId)).rejects.toThrow();
+      await expect(adapter.removeBookmark(rootId)).rejects.toThrow();
+
+      // Refusing is the whole point: the container and the user's item in it
+      // are exactly where they were.
+      expect(await adapter.getNode(rootId)).toMatchObject({ title: 'Bookmarks Bar' });
+      expect((await adapter.getChildren(rootId)).map((n) => n.id)).toEqual([kept.id]);
+    });
+
+    it('refuses to add or remove entries in the hidden root folder', async () => {
+      const { adapter, hiddenRootId, rootId } = impl.build();
+      await expect(adapter.create(hiddenRootId, { title: 'Third bar' })).rejects.toThrow();
+      await expect(adapter.removeSubtree(hiddenRootId)).rejects.toThrow();
+      // Writing into a permanent container is still allowed — that is how any
+      // sync at all happens.
+      await expect(adapter.create(rootId, { title: 'Fine', url: 'https://fine.test' })).resolves.toBeTruthy();
+    });
+
+    it('hides a policy-managed folder from the walk and refuses to touch it', async () => {
+      const { adapter, rootId, seedManagedFolder } = impl.build();
+      const managedId = seedManagedFolder(rootId, 'Company bookmarks');
+      const userItem = await adapter.create(rootId, { title: 'Ours', url: 'https://ours.test' });
+
+      // The tree the sync works on holds what sync can change. Chrome lists
+      // the folder, but every write into it is refused, so a walker that
+      // returned it would map it and then fail on the first remote change.
+      expect((await adapter.getChildren(rootId)).map((n) => n.id)).toEqual([userItem.id]);
+      expect(await adapter.getNode(managedId)).toMatchObject({ unmodifiable: true });
+
+      await expect(adapter.create(managedId, { title: 'Nope', url: 'https://nope.test' })).rejects.toThrow();
+      await expect(adapter.update(managedId, { title: 'Renamed by us' })).rejects.toThrow();
+      await expect(adapter.removeSubtree(managedId)).rejects.toThrow();
+      expect(await adapter.getNode(managedId)).not.toBeNull();
     });
   });
 }

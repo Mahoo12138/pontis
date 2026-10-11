@@ -11,6 +11,18 @@ export interface BrowserNode {
   type: NodeType;
   /** Sibling index within the parent's children. */
   index: number;
+  /**
+   * Set on a folder the browser itself added — 'bookmarks-bar', 'other',
+   * 'mobile', 'managed' (chrome.bookmarks.FolderType, Chrome 134+). The node
+   * cannot be renamed, moved or deleted; its children can be, unless
+   * `unmodifiable` says otherwise. Absent on folders the user created.
+   */
+  folderType?: string;
+  /**
+   * A policy-managed folder. Neither it nor anything under it is ours to
+   * change: every write the browser would reject stays rejected here too.
+   */
+  unmodifiable?: boolean;
 }
 
 /**
@@ -26,6 +38,13 @@ export type BrowserEvent =
 export interface BrowserAdapter {
   /** Resolve a browser id. Returns null for an id the browser does not know. */
   getNode(id: string): Promise<BrowserNode | null>;
+  /**
+   * The parent's children in sibling order. Children of a policy-managed
+   * folder (`unmodifiable`) are left out: nothing under that folder can be
+   * written, so a walker that returned it would map it and then fail on the
+   * first remote change that touches it. `getNode` still resolves those ids,
+   * because a mirror made before the folder became managed has to be found.
+   */
   getChildren(parentId: string): Promise<BrowserNode[]>;
   /**
    * Create under `parentId`. `index` is the position among the parent's

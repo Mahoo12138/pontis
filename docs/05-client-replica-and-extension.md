@@ -28,6 +28,27 @@ UI (Popup / Settings / Recovery)
 
 核心同步逻辑不能直接散落 `chrome.bookmarks.*` 调用，应通过 Browser Adapter 隔离 Chrome/Edge/Firefox 差异。
 
+### 2.1 浏览器自带的文件夹
+
+`chrome.bookmarks` 里有两类节点不是用户创建的，也不归用户管：
+
+- **浏览器自带容器**：节点带 `folderType`（Chrome 134+：`bookmarks-bar` / `other` /
+  `mobile` / `managed`），以及没有父节点的隐藏根。它们不能改名、移动或删除，
+  但书签栏和"其他书签"**可以**装我们同步的节点。
+- **策略托管容器**：`unmodifiable = true`。它自身和整棵子树都写不进去。
+
+Adapter 的取舍因此是明确的：`getChildren` 不返回 `unmodifiable` 子树，因为同步的任何
+一步（映射、上传、应用远端变化）落到它身上都必然失败；`getNode` 仍然解析这些 id，
+好让一个在容器变成托管之前建下的 mapping 还能被查出来。写操作直接拒绝，不返回
+"成功"——测试替身必须一样严格，否则契约测试会掩盖真实 API 的失败。
+
+真实 profile（Chrome 153 + unpacked 扩展）已确认：隐藏根 `id="0"` 无 `folderType`，
+`1`/`2` 分别带 `bookmarks-bar`/`other`；对根、书签栏、其他书签的 create/update/move/
+removeTree 一律以 `Can't modify the root bookmark folders.` 拒绝；空标题文件夹创建得出、
+也不带 `folderType`——separator 那类没有专属类型的节点因此仍然是一个普通 Folder。
+**未验证**：策略托管容器（`unmodifiable`）需要企业策略 profile，本轮只按文档语义实现，
+文案与拒绝时机没有实测。
+
 ## 3. Storage 分工
 
 ### `browser.storage.local`

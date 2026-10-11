@@ -160,6 +160,29 @@ describe('verifyScan is a read-only classification', () => {
     expect(report.problems.some((p) => p.kind === 'orphan_mirror')).toBe(true);
   });
 
+  it('keeps a policy-managed folder out of the managed scope entirely', async () => {
+    await seedBinding({ appliedRevision: 1, receivedRevision: 1 });
+    // What an enterprise policy drops inside the bookmark bar. Chrome lists it
+    // and refuses every write into it, so a scan that treated it as ours would
+    // report missing_mirror forever and the repair would upload a folder this
+    // device can never rename, move or delete.
+    adapter.seed({
+      id: 'managed', parentId: 'f1', title: 'Company bookmarks',
+      folderType: 'managed', unmodifiable: true,
+    });
+    adapter.seed({ id: 'in-managed', parentId: 'managed', title: 'HR', url: 'https://hr.example.com' });
+
+    const report = await verifier.verifyScan(bindingId);
+
+    expect(report.ok).toBe(true);
+    expect(report.problems).toEqual([]);
+
+    const repaired = await verifier.verifyAndRepair(bindingId);
+    expect(repaired.ok).toBe(true);
+    expect(server.journal).toHaveLength(0);
+    expect(await db.localNodes.toArray()).toHaveLength(0);
+  });
+
   it('repairs the drift it just reported', async () => {
     await seedBinding({ appliedRevision: 1, receivedRevision: 1 });
     await seedMappedNode('n1', 'b1', 'Home', 'https://home.example.com');

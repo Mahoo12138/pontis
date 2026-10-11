@@ -32,6 +32,8 @@ export class FakeBrowserAdapter implements BrowserAdapter {
     title: string;
     url?: string | null;
     index?: number;
+    folderType?: string;
+    unmodifiable?: boolean;
   }): BrowserNode {
     const type: NodeType = node.url == null ? 'folder' : 'bookmark';
     const full: BrowserNode = {
@@ -41,6 +43,8 @@ export class FakeBrowserAdapter implements BrowserAdapter {
       url: node.url ?? null,
       type,
       index: node.index ?? this.childrenOf(node.parentId).length,
+      ...(node.folderType == null ? {} : { folderType: node.folderType }),
+      ...(node.unmodifiable ? { unmodifiable: true } : {}),
     };
     this.nodes.set(full.id, full);
     // Generated ids continue the seeded bN sequence: without this, a create
@@ -75,12 +79,47 @@ export class FakeBrowserAdapter implements BrowserAdapter {
   }
 
   async getChildren(parentId: string): Promise<BrowserNode[]> {
-    return this.childrenOf(parentId).sort((a, b) => a.index - b.index);
+    // The real browser hands back policy folders; the adapter contract hides
+    // them because nothing under one can be written (see types.ts).
+    return this.childrenOf(parentId).filter((n) => !n.unmodifiable).sort((a, b) => a.index - b.index);
+  }
+
+  /** The browser's own restrictions, mirrored rather than papered over. */
+  private guardItem(verb: string, node: BrowserNode): void {
+    if (node.folderType != null || node.parentId == null) {
+      throw new Error(`fakeAdapter: ${verb} of browser folder ${node.id} is not supported`);
+    }
+    if (this.policyLocked(node)) {
+      throw new Error(`fakeAdapter: ${verb} of policy-locked ${node.id} is not supported`);
+    }
+  }
+
+  private guardContents(verb: string, parentId: string): void {
+    const parent = this.nodes.get(parentId);
+    if (!parent) throw new Error(`fakeAdapter: ${verb} into unknown parent ${parentId}`);
+    // The bar and "other bookmarks" take children; the hidden root they hang
+    // off does not.
+    if (parent.parentId == null) {
+      throw new Error(`fakeAdapter: ${verb} into the root folder is not supported`);
+    }
+    if (this.policyLocked(parent)) {
+      throw new Error(`fakeAdapter: ${verb} into policy-locked ${parentId} is not supported`);
+    }
+  }
+
+  private policyLocked(node: BrowserNode): boolean {
+    let cur: BrowserNode | undefined = node;
+    while (cur) {
+      if (cur.unmodifiable) return true;
+      cur = cur.parentId == null ? undefined : this.nodes.get(cur.parentId);
+    }
+    return false;
   }
 
   async create(parentId: string, details: { title: string; url?: string; index?: number | null }): Promise<BrowserNode> {
     await this.options.onMutation?.(`create:${parentId}:${details.title}`);
     this.calls.push(`create:${parentId}:${details.title}`);
+    this.guardContents('create', parentId);
     const ordered = await this.getChildren(parentId);
     const at =
       details.index == null ? ordered.length : Math.max(0, Math.min(details.index, ordered.length));
@@ -105,6 +144,7 @@ export class FakeBrowserAdapter implements BrowserAdapter {
     this.calls.push(`update:${id}`);
     const node = this.nodes.get(id);
     if (!node) throw new Error(`fakeAdapter: update of unknown node ${id}`);
+    this.guardItem('update', node);
     if (changes.title !== undefined) node.title = changes.title;
     if (changes.url !== undefined) node.url = changes.url;
   }
@@ -114,6 +154,8 @@ export class FakeBrowserAdapter implements BrowserAdapter {
     this.calls.push(`move:${id}:${parentId}:${index ?? 'append'}`);
     const node = this.nodes.get(id);
     if (!node) throw new Error(`fakeAdapter: move of unknown node ${id}`);
+    this.guardItem('move', node);
+    this.guardContents('move', parentId);
     const oldParent = node.parentId;
     // Insertion order is not sibling order: re-splice against the current
     // index sequence, otherwise a move lands in creation order.
@@ -139,6 +181,7 @@ export class FakeBrowserAdapter implements BrowserAdapter {
     this.calls.push(`removeBookmark:${id}`);
     const node = this.nodes.get(id);
     if (!node) throw new Error(`fakeAdapter: removeBookmark of unknown node ${id}`);
+    this.guardItem('removeBookmark', node);
     if (node.type === 'folder') {
       throw new Error(`fakeAdapter: removeBookmark of folder ${id} requires removeSubtree`);
     }
@@ -151,6 +194,7 @@ export class FakeBrowserAdapter implements BrowserAdapter {
     this.calls.push(`removeSubtree:${id}`);
     const root = this.nodes.get(id);
     if (!root) throw new Error(`fakeAdapter: removeSubtree of unknown node ${id}`);
+    this.guardItem('removeSubtree', root);
     const removeRec = (nid: string) => {
       for (const child of this.childrenOf(nid)) removeRec(child.id);
       this.nodes.delete(nid);

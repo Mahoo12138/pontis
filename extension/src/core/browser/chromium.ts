@@ -12,6 +12,10 @@ export interface ChromeBookmarkNode {
   title: string;
   url?: string;
   index?: number;
+  /** Chrome 134+: a folder the browser added, not the user. */
+  folderType?: string;
+  /** Set on policy-managed folders: nothing inside them may change. */
+  unmodifiable?: boolean;
 }
 
 /** Structural subset of the chrome.bookmarks namespace. */
@@ -44,6 +48,8 @@ function toNode(n: ChromeBookmarkNode): BrowserNode {
     url: type === 'bookmark' ? (n.url ?? null) : null,
     type,
     index: n.index ?? 0,
+    ...(n.folderType == null ? {} : { folderType: n.folderType }),
+    ...(n.unmodifiable ? { unmodifiable: true } : {}),
   };
 }
 
@@ -72,7 +78,11 @@ export function createChromiumAdapter(api: ChromeBookmarksApi): BrowserAdapter {
 
   return {
     getNode,
-    getChildren: async (parentId) => (await api.getChildren(parentId)).map(toNode),
+    getChildren: async (parentId) =>
+      // A policy-managed folder is dropped rather than surfaced: every walker
+      // of the managed scope goes through here, and Chrome would refuse each
+      // write against its subtree anyway.
+      (await api.getChildren(parentId)).map(toNode).filter((n) => !n.unmodifiable),
     create: async (parentId, details) =>
       toNode(
         await api.create({
