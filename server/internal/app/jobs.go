@@ -21,12 +21,14 @@ func buildJobService(
 	organizerSvc *organizer.Service,
 	accounts *sqlite.AccountStore,
 	library *sqlite.LibraryStore,
+	tokens *sqlite.TokenStore,
 ) (*jobs.Service, error) {
 	store := sqlite.NewJobStore(db)
 	svc := jobs.NewService(store, 2)
 
-	// session.cleanup: drop expired web sessions, reset tokens and prune
-	// finished job history past the 90-day summary retention (doc 13 §7).
+	// session.cleanup: drop expired web sessions, reset tokens and API tokens
+	// that can no longer work, and prune finished job history past the 90-day
+	// summary retention (doc 13 §7).
 	svc.Register(jobs.TypeSessionCleanup, func(ctx context.Context, job jobs.Job, report jobs.ReportFunc) error {
 		if err := report("清理过期会话与凭据", nil, nil); err != nil {
 			return err
@@ -36,6 +38,9 @@ func buildJobService(
 			return err
 		}
 		if err := accounts.PurgeExpiredResetTokens(ctx, now); err != nil {
+			return err
+		}
+		if _, err := tokens.PurgeDeadTokensBefore(ctx, now.Add(-90*24*time.Hour)); err != nil {
 			return err
 		}
 		n, err := store.PurgeFinishedBefore(ctx, now.Add(-90*24*time.Hour))

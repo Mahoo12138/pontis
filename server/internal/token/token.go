@@ -30,6 +30,10 @@ type Token struct {
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
 	RevokedAt  *time.Time
+	// ExpiresAt is nil for a token that never expires on its own — which is
+	// every token minted before expiry existed, so upgrading the server does
+	// not cut off running automation.
+	ExpiresAt *time.Time
 }
 
 // Errors.
@@ -37,9 +41,11 @@ var (
 	ErrNameRequired  = errors.New("token: name must not be empty")
 	ErrInvalidScopes = errors.New("token: unknown scope")
 	ErrTokenNotFound = errors.New("token: token not found")
+	ErrInvalidExpiry = errors.New("token: expiry must be in the future")
 
 	// ErrTokenInvalid reports a secret that is not one this instance
-	// issued, is revoked, or belongs to an account that may not be used.
+	// issued, is revoked, has passed its expiry, or belongs to an account
+	// that may not be used.
 	ErrTokenInvalid = errors.New("token: credential invalid")
 )
 
@@ -79,7 +85,8 @@ type Store interface {
 	// GetByHash loads the token a secret belongs to. Implementations carry
 	// the owning account into the lookup and return ErrTokenInvalid for a
 	// secret whose owner may not be used right now: an API token is a
-	// subset of its user's authority, so a disabled account has none.
+	// subset of its user's authority, so a disabled account has none. A past
+	// expiry is refused there too — Verify trusts that rather than re-checking.
 	GetByHash(ctx context.Context, hash string) (Token, error)
 
 	// TouchLastUsed stamps the credential's activity time.
@@ -99,6 +106,8 @@ type CreateParams struct {
 	Name       string
 	Scopes     []string
 	SpaceScope string // "all" or JSON array; empty means "all"
+	// ExpiresAt limits how long the credential works. nil means never.
+	ExpiresAt *time.Time
 }
 
 // Create mints a token and returns it with the one-time secret.
@@ -125,11 +134,17 @@ func (s *Service) Create(ctx context.Context, user canonical.UserID, p CreatePar
 		}
 	}
 
+	now := time.Now().UTC()
+	// An expiry in the past would mint a credential that is already dead: the
+	// caller would get a successful response holding a token that never works.
+	if p.ExpiresAt != nil && !p.ExpiresAt.After(now) {
+		return Token{}, "", ErrInvalidExpiry
+	}
+
 	id, err := uuid.NewV7()
 	if err != nil {
 		return Token{}, "", err
 	}
-	now := time.Now().UTC()
 	t := Token{
 		ID:         id.String(),
 		UserID:     string(user),
@@ -137,6 +152,7 @@ func (s *Service) Create(ctx context.Context, user canonical.UserID, p CreatePar
 		Scopes:     p.Scopes,
 		SpaceScope: spaceScope,
 		CreatedAt:  now,
+		ExpiresAt:  p.ExpiresAt,
 	}
 	secret, prefix, hash, err := newTokenSecret()
 	if err != nil {

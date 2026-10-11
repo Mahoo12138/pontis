@@ -529,6 +529,8 @@ export interface ApiToken {
   space_scope: string;
   created_at: string;
   last_used_at: string | null;
+  /** Absolute instant the credential stops working; null means it never does. */
+  expires_at: string | null;
 }
 
 export interface ApiTokenListResponse {
@@ -540,6 +542,8 @@ export interface CreateTokenRequest {
   scopes: string[];
   /** "all" or a JSON array of space ids encoded as a string (see ApiToken). */
   space_scope: string;
+  /** Whole days of validity; 0 or omitted means the token never expires. */
+  expires_in_days?: number;
 }
 
 export interface CreateTokenResponse {

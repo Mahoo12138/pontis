@@ -85,7 +85,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 	organizerSvc := organizer.NewService(libraryStore, sqlite.NewLinkCheckStore(db),
 		organizer.Outbound{Allow: allow})
-	jobSvc, err := buildJobService(db, backupSvc, organizerSvc, accountStore, libraryStore)
+	tokenStore := sqlite.NewTokenStore(db)
+	jobSvc, err := buildJobService(db, backupSvc, organizerSvc, accountStore, libraryStore, tokenStore)
 	if err != nil {
 		return err
 	}
@@ -113,7 +114,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Reconcile:     reconcile.NewService(sqlite.NewReconcileStore(db)),
 		Library:       library.NewService(libraryStore, canonicalStore, changesetSvc),
 		Changesets:    changesetSvc,
-		Tokens:        token.NewService(sqlite.NewTokenStore(db)),
+		Tokens:        token.NewService(tokenStore),
 		Organizer:     organizerSvc,
 		Transfer:      transfer.NewService(libraryStore, canonicalStore, changesetSvc),
 		SpaceTransfer: spacetransfer.NewService(canonicalStore, changesetSvc),

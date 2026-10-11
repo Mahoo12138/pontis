@@ -21,6 +21,24 @@ func (s *AccountStore) PurgeExpiredSessions(ctx context.Context, at time.Time) (
 	return n, nil
 }
 
+// PurgeDeadTokensBefore deletes API tokens whose credential can no longer
+// work — revoked, or past its expiry — at least as far back as at. The secret
+// rows follow by cascade. "at" is a retention cutoff, not the current time:
+// a dead token is kept for a while so there is still a trail of who revoked
+// or outlived what.
+func (s *TokenStore) PurgeDeadTokensBefore(ctx context.Context, at time.Time) (int64, error) {
+	cutoff := formatTime(at)
+	res, err := s.db.ExecContext(ctx, `
+		DELETE FROM api_tokens
+		WHERE (revoked_at IS NOT NULL AND revoked_at < ?)
+		   OR (expires_at IS NOT NULL AND expires_at < ?)`, cutoff, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // JournalGCSpace advances one space's journal floor and prunes history.
 // A journal row is collectable only when it violates BOTH retention
 // windows: older than 30 days AND below current-50000 revisions

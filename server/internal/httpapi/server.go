@@ -527,12 +527,12 @@ func (s *Server) requireScope(scope token.Scope) func(http.Handler) http.Handler
 			}
 			principal, err := s.Tokens.Verify(r.Context(), secret)
 			if err != nil {
-				s.writeError(w, r, http.StatusUnauthorized, "TOKEN_INVALID", "unknown, revoked, or account-disabled token")
+				s.writeError(w, r, http.StatusUnauthorized, "TOKEN_INVALID", "unknown, expired, revoked, or account-disabled token")
 				return
 			}
 			user, err := s.Auth.UserByID(r.Context(), string(principal.UserID))
 			if err != nil {
-				s.writeError(w, r, http.StatusUnauthorized, "TOKEN_INVALID", "unknown, revoked, or account-disabled token")
+				s.writeError(w, r, http.StatusUnauthorized, "TOKEN_INVALID", "unknown, expired, revoked, or account-disabled token")
 				return
 			}
 			if !principal.Allows(scope) {

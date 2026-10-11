@@ -32,10 +32,15 @@ func (s *TokenStore) InsertToken(ctx context.Context, t token.Token, prefix, has
 		return err
 	}
 	defer tx.Rollback()
+	var expires any
+	if t.ExpiresAt != nil {
+		expires = formatTime(*t.ExpiresAt)
+	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO api_tokens (id, user_id, name, scopes, space_scope, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		t.ID, t.UserID, t.Name, string(scopes), t.SpaceScope, formatTime(t.CreatedAt)); err != nil {
+		INSERT INTO api_tokens (id, user_id, name, scopes, space_scope, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.UserID, t.Name, string(scopes), t.SpaceScope, formatTime(t.CreatedAt),
+		expires); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -52,17 +57,17 @@ func (s *TokenStore) InsertToken(ctx context.Context, t token.Token, prefix, has
 func (s *TokenStore) GetByHash(ctx context.Context, hash string) (token.Token, error) {
 	const cols = `
 		SELECT t.id, t.user_id, t.name, t.scopes, t.space_scope, t.created_at,
-		       t.last_used_at, t.revoked_at, u.status`
+		       t.last_used_at, t.revoked_at, t.expires_at, u.status`
 	var t token.Token
 	var scopes, spaceScope, createdAt, ownerStatus string
-	var lastUsed, revoked sql.NullString
+	var lastUsed, revoked, expires sql.NullString
 	err := s.db.QueryRowContext(ctx, cols+`
 		FROM api_tokens t
 		JOIN api_token_secrets sec ON sec.token_id = t.id
 		JOIN users u ON u.id = t.user_id
 		WHERE sec.token_hash = ?`, hash).
 		Scan(&t.ID, &t.UserID, &t.Name, &scopes, &spaceScope, &createdAt,
-			&lastUsed, &revoked, &ownerStatus)
+			&lastUsed, &revoked, &expires, &ownerStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return token.Token{}, token.ErrTokenInvalid
 	}
@@ -72,8 +77,13 @@ func (s *TokenStore) GetByHash(ctx context.Context, hash string) (token.Token, e
 	if ownerStatus != string(auth.StatusActive) {
 		return token.Token{}, token.ErrTokenInvalid
 	}
-	if err := fillToken(&t, scopes, spaceScope, createdAt, lastUsed, revoked); err != nil {
+	if err := fillToken(&t, scopes, spaceScope, createdAt, lastUsed, revoked, expires); err != nil {
 		return token.Token{}, err
+	}
+	// Checked here rather than by callers: this is the only place that decides
+	// whether a secret carries authority.
+	if t.ExpiresAt != nil && !time.Now().UTC().Before(*t.ExpiresAt) {
+		return token.Token{}, token.ErrTokenInvalid
 	}
 	return t, nil
 }
@@ -85,7 +95,7 @@ func (s *TokenStore) TouchLastUsed(ctx context.Context, id string, at time.Time)
 	return err
 }
 
-func fillToken(t *token.Token, scopes, spaceScope, createdAt string, lastUsed, revoked sql.NullString) error {
+func fillToken(t *token.Token, scopes, spaceScope, createdAt string, lastUsed, revoked, expires sql.NullString) error {
 	if err := json.Unmarshal([]byte(scopes), &t.Scopes); err != nil {
 		return fmt.Errorf("token: bad scope row %s: %w", t.ID, err)
 	}
@@ -105,17 +115,25 @@ func fillToken(t *token.Token, scopes, spaceScope, createdAt string, lastUsed, r
 		}
 		t.RevokedAt = &v
 	}
+	if expires.Valid {
+		v, err := time.Parse(time.RFC3339Nano, expires.String)
+		if err != nil {
+			return fmt.Errorf("token: bad expires_at on %s: %w", t.ID, err)
+		}
+		t.ExpiresAt = &v
+	}
 	return nil
 }
 
 func scanToken(row interface{ Scan(dest ...any) error }) (token.Token, error) {
 	var t token.Token
 	var scopes, spaceScope, createdAt string
-	var lastUsed, revoked sql.NullString
-	if err := row.Scan(&t.ID, &t.UserID, &t.Name, &scopes, &spaceScope, &createdAt, &lastUsed, &revoked); err != nil {
+	var lastUsed, revoked, expires sql.NullString
+	if err := row.Scan(&t.ID, &t.UserID, &t.Name, &scopes, &spaceScope, &createdAt,
+		&lastUsed, &revoked, &expires); err != nil {
 		return t, err
 	}
-	if err := fillToken(&t, scopes, spaceScope, createdAt, lastUsed, revoked); err != nil {
+	if err := fillToken(&t, scopes, spaceScope, createdAt, lastUsed, revoked, expires); err != nil {
 		return token.Token{}, err
 	}
 	return t, nil
@@ -124,7 +142,8 @@ func scanToken(row interface{ Scan(dest ...any) error }) (token.Token, error) {
 // ListByUser returns the user's tokens ordered by creation.
 func (s *TokenStore) ListByUser(ctx context.Context, user canonical.UserID) ([]token.Token, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, user_id, name, scopes, space_scope, created_at, last_used_at, revoked_at
+		SELECT id, user_id, name, scopes, space_scope, created_at, last_used_at, revoked_at,
+		       expires_at
 		FROM api_tokens WHERE user_id = ? ORDER BY created_at, id`, string(user))
 	if err != nil {
 		return nil, err
@@ -144,7 +163,8 @@ func (s *TokenStore) ListByUser(ctx context.Context, user canonical.UserID) ([]t
 // Get loads one token.
 func (s *TokenStore) Get(ctx context.Context, id string) (token.Token, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, user_id, name, scopes, space_scope, created_at, last_used_at, revoked_at
+		SELECT id, user_id, name, scopes, space_scope, created_at, last_used_at, revoked_at,
+		       expires_at
 		FROM api_tokens WHERE id = ?`, id)
 	t, err := scanToken(row)
 	if err == sql.ErrNoRows {

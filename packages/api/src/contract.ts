@@ -243,6 +243,7 @@ export const checkApiToken: Checker<ApiToken> = record<ApiToken>({
   space_scope: str,
   created_at: str,
   last_used_at: nullable(str),
+  expires_at: nullable(str),
 });
 
 export const checkApiTokenList: Checker<ApiTokenListResponse> = record<ApiTokenListResponse>({

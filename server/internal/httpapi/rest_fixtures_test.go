@@ -69,10 +69,15 @@ func TestGoldenRESTFixtures(t *testing.T) {
 	restPOST(t, ts, deviceToken, "/api/v1/device/bindings", map[string]string{"space_id": spaceID})
 
 	// space_scope is either "all" or a JSON array of ids, so a single-space
-	// token carries an encoded string, not a nested array.
+	// token carries an encoded string, not a nested array. The second token
+	// carries an expiry so the fixture shows both shapes of expires_at.
 	restPOST(t, ts, token, "/api/v1/tokens", map[string]any{
 		"name": "read-only", "scopes": []string{"bookmarks:read"},
 		"space_scope": `["` + spaceID + `"]`,
+	})
+	restPOST(t, ts, token, "/api/v1/tokens", map[string]any{
+		"name": "expiring", "scopes": []string{"bookmarks:read"},
+		"space_scope": "all", "expires_in_days": 30,
 	})
 	restPOST(t, ts, token, "/api/v1/spaces/"+spaceID+"/backups", map[string]any{})
 

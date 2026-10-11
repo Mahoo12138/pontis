@@ -51,6 +51,15 @@ const ALL_SCOPES = [
   { value: 'backups:write', label: '写入备份' },
 ];
 
+// Preset lifetimes in whole days; the server turns the number into an absolute
+// instant, so a client with a wrong clock cannot extend a credential.
+const TOKEN_LIFETIMES = [
+  { value: '0', label: '永不过期' },
+  { value: '30', label: '30 天' },
+  { value: '90', label: '90 天' },
+  { value: '365', label: '1 年' },
+];
+
 // Settings hosts only per-user settings (CHANGELOG v1.2); tabs follow the
 // URL so /settings/account, /settings/preferences, /settings/api-tokens are
 // each deep-linkable routes.
@@ -232,6 +241,15 @@ export function PreferencesPanel() {
 
 // ─── API Tokens ───────────────────────────────────────────────
 
+// expiryLabel reads a lifetime the way the column is scanned: a token that
+// never lapses, the day it will, or the fact that it already did.
+function expiryLabel(expiresAt: string | null): string {
+  if (!expiresAt) return '永不过期';
+  const at = new Date(expiresAt);
+  const day = at.toLocaleDateString('zh-CN');
+  return at.getTime() <= Date.now() ? `已过期(${day})` : day;
+}
+
 export function TokensPanel() {
   const { data, isLoading, isError, error, refetch } = useTokens();
   const revoke = useRevokeToken();
@@ -269,13 +287,17 @@ export function TokensPanel() {
             <Table.Tr>
               <Table.Th>名称</Table.Th>
               <Table.Th>权限范围</Table.Th>
-              <Table.Th w={130}>最近使用</Table.Th>
-              <Table.Th w={110}>创建时间</Table.Th>
+              <Table.Th w={120}>最近使用</Table.Th>
+              <Table.Th w={100}>创建时间</Table.Th>
+              <Table.Th w={120}>过期时间</Table.Th>
               <Table.Th w={60} />
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
-            {tokenList.map((token) => (
+            {tokenList.map((token) => {
+              const expired =
+                token.expires_at !== null && new Date(token.expires_at).getTime() <= Date.now();
+              return (
               <Table.Tr key={token.id}>
                 <Table.Td fw={500}>{token.name}</Table.Td>
                 <Table.Td>
@@ -292,6 +314,13 @@ export function TokensPanel() {
                 </Table.Td>
                 <Table.Td c="dimmed" fz={12}>
                   {new Date(token.created_at).toLocaleDateString('zh-CN')}
+                </Table.Td>
+                <Table.Td
+                  fz={12}
+                  c={expired ? undefined : 'dimmed'}
+                  style={expired ? { color: tokens.syncError } : undefined}
+                >
+                  {expiryLabel(token.expires_at)}
                 </Table.Td>
                 <Table.Td>
                   <Menu shadow="md" width={150} position="bottom-end">
@@ -315,7 +344,8 @@ export function TokensPanel() {
                   </Menu>
                 </Table.Td>
               </Table.Tr>
-            ))}
+              );
+            })}
           </Table.Tbody>
         </Table>
       )}
@@ -358,6 +388,7 @@ function CreateTokenModal({ opened, onClose }: { opened: boolean; onClose: () =>
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<string[]>(['bookmarks:read']);
   const [spaceScope, setSpaceScope] = useState<'all' | 'selected'>('all');
+  const [lifetimeDays, setLifetimeDays] = useState(0);
   const [nameError, setNameError] = useState<string | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
 
@@ -366,6 +397,7 @@ function CreateTokenModal({ opened, onClose }: { opened: boolean; onClose: () =>
       setName('');
       setScopes(['bookmarks:read']);
       setSpaceScope('all');
+      setLifetimeDays(0);
       setNameError(null);
       setSecret(null);
     }
@@ -377,7 +409,7 @@ function CreateTokenModal({ opened, onClose }: { opened: boolean; onClose: () =>
       return;
     }
     create.mutate(
-      { name: name.trim(), scopes, space_scope: 'all' },
+      { name: name.trim(), scopes, space_scope: 'all', expires_in_days: lifetimeDays },
       {
         onSuccess: (res) => setSecret(res.secret),
         onError: (e) => setNameError(e instanceof Error ? e.message : '创建失败'),
@@ -438,6 +470,13 @@ function CreateTokenModal({ opened, onClose }: { opened: boolean; onClose: () =>
             description="关闭后需要指定具体空间(V1 暂以全部空间为主)"
             checked={spaceScope === 'all'}
             onChange={(e) => setSpaceScope(e.currentTarget.checked ? 'all' : 'selected')}
+            mb="sm"
+          />
+          <NativeSelect
+            label="有效期"
+            data={TOKEN_LIFETIMES}
+            value={String(lifetimeDays)}
+            onChange={(e) => setLifetimeDays(Number(e.currentTarget.value))}
             mb="sm"
           />
           <Group justify="flex-end" mt="lg">

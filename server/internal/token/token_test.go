@@ -136,6 +136,37 @@ func TestCreateSuccess(t *testing.T) {
 	}
 }
 
+func TestCreateExpiry(t *testing.T) {
+	store := &fakeStore{}
+	s := NewService(store)
+
+	past := time.Now().UTC().Add(-time.Hour)
+	_, _, err := s.Create(context.Background(), "u1", CreateParams{
+		Name: "dead on arrival", Scopes: []string{validScope}, ExpiresAt: &past,
+	})
+	if !errors.Is(err, ErrInvalidExpiry) {
+		t.Errorf("Create err = %v, want ErrInvalidExpiry", err)
+	}
+	if store.insertedAny {
+		t.Error("a token whose expiry was already past got stored anyway")
+	}
+
+	later := time.Now().UTC().Add(7 * 24 * time.Hour)
+	tok, _, err := s.Create(context.Background(), "u1", CreateParams{
+		Name: "weekly", Scopes: []string{validScope}, ExpiresAt: &later,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if tok.ExpiresAt == nil || !tok.ExpiresAt.Equal(later) {
+		t.Errorf("ExpiresAt = %v, want the instant that was asked for", tok.ExpiresAt)
+	}
+	stored := store.inserted[len(store.inserted)-1]
+	if stored.ExpiresAt == nil || !stored.ExpiresAt.Equal(later) {
+		t.Errorf("stored ExpiresAt = %v, want it carried down to the store", stored.ExpiresAt)
+	}
+}
+
 func TestCreateWithSpaceScopeList(t *testing.T) {
 	store := &fakeStore{}
 	s := NewService(store)
