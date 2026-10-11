@@ -1,0 +1,554 @@
+#!/usr/bin/env node
+// Two real Chromium profiles converging through a real server (doc 21 §10).
+//
+// Fake adapter + httptest each use their own double, so the shape differences
+// that only a real browser can show — chrome.bookmarks' actual behaviour, MV3
+// service-worker lifetime, IndexedDB under Dexie, the event echo of our own
+// writes — never meet in a unit test. This script runs that meeting:
+//
+//   server (built binary, clean data dir)
+//     ├── profile A: unpacked extension → pair → bind → initial reconcile
+//     └── profile B: the same, same space
+//   then each side edits its browser bookmarks, both sync, and the script
+//   asserts the server and BOTH browsers hold the same tree.
+//
+// It drives Chrome over the DevTools protocol with Node's global fetch/WebSocket
+// and adds no dependency. It needs a display, so CI does not run it — see the
+// README's known limits. It uses the E2E extension build (extension/wxt.config.ts
+// puts the server origin in host_permissions) because the permission bubble that
+// pairing triggers is browser UI no automation can click.
+//
+//   pnpm build && node scripts/e2e-dual-profile.mjs [--keep] [--debug]
+
+import { spawn, execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+
+const ROOT = path.resolve(import.meta.dirname, '..');
+const ARGS = new Set(process.argv.slice(2));
+const KEEP = ARGS.has('--keep');
+const DEBUG = ARGS.has('--debug');
+const PORT = Number(process.env.PONTIS_E2E_PORT || 8199);
+const ORIGIN = `http://127.0.0.1:${PORT}`;
+const PASSWORD = 'pontis-e2e-pass';
+const WORK = path.join(os.tmpdir(), 'pontis-e2e');
+const EXT_DIR = path.join(ROOT, 'extension', '.e2e-output', 'chrome-mv3');
+
+let failed = 0;
+const log = (...a) => console.log(...a);
+function check(ok, label, detail) {
+  if (ok) {
+    log(`  ok   ${label}`);
+    return true;
+  }
+  failed++;
+  log(`  FAIL ${label}${detail ? ` — ${detail}` : ''}`);
+  return false;
+}
+const die = (msg) => {
+  console.error(`e2e: ${msg}`);
+  process.exit(2);
+};
+
+// --- environment -------------------------------------------------------------
+
+function chromeExecutable() {
+  if (process.env.PONTIS_E2E_CHROME) return process.env.PONTIS_E2E_CHROME;
+  const root = path.join(os.homedir(), 'Library/Caches/ms-playwright');
+  if (!existsSync(root)) die(`no playwright browser cache at ${root}; set PONTIS_E2E_CHROME`);
+  const builds = readdirSync(root)
+    .filter((d) => /^chromium-\d+$/.test(d))
+    .sort()
+    .reverse();
+  for (const b of builds) {
+    const exe = path.join(root, b, 'chrome-mac-arm64',
+      'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing');
+    if (existsSync(exe)) return exe;
+  }
+  die('no Google Chrome for Testing binary found; set PONTIS_E2E_CHROME');
+}
+
+/** Chrome's id for an unpacked extension: sha256 of its absolute path. */
+function extensionId(dir) {
+  return createHash('sha256')
+    .update(dir)
+    .digest('hex')
+    .slice(0, 32)
+    .split('')
+    .map((c) => String.fromCharCode(97 + parseInt(c, 16)))
+    .join('');
+}
+
+function buildExtensionArtifact() {
+  execFileSync('pnpm', ['--filter', '@pontis/extension', 'build'], {
+    cwd: ROOT,
+    stdio: DEBUG ? 'inherit' : 'pipe',
+    env: { ...process.env, PONTIS_E2E_ORIGIN: `${ORIGIN}/*` },
+  });
+  const manifest = JSON.parse(readFileSync(path.join(EXT_DIR, 'manifest.json'), 'utf8'));
+  // Guard the switch itself: silently testing the shipped build would stop at
+  // the permission bubble, and the failure would look like a sync bug.
+  if (manifest.name !== 'Pontis (E2E)') die(`built artifact is "${manifest.name}", not the E2E build`);
+  if (!(manifest.host_permissions || []).includes(`${ORIGIN}/*`)) {
+    die(`built artifact lacks the host permission for ${ORIGIN}`);
+  }
+}
+
+// --- the server --------------------------------------------------------------
+
+let serverProc;
+async function startServer() {
+  const bin = path.join(ROOT, 'server', 'pontis');
+  if (!existsSync(bin)) die('server/pontis missing — run `pnpm build` first');
+  serverProc = spawn(bin, [], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      PONTIS_LISTEN: `127.0.0.1:${PORT}`,
+      PONTIS_DATA_DIR: path.join(WORK, 'data'),
+      PONTIS_LOG_LEVEL: 'warn',
+    },
+    stdio: DEBUG ? 'inherit' : 'ignore',
+  });
+  for (let i = 0; i < 100; i++) {
+    try {
+      const r = await fetch(`${ORIGIN}/api/v1/meta`);
+      if (r.ok) return;
+    } catch {
+      /* not listening yet */
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  die('server did not answer /api/v1/meta');
+}
+
+async function api(method, pathname, { body, token } = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(ORIGIN + pathname, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${method} ${pathname} -> ${res.status} ${text.slice(0, 200)}`);
+  return text ? JSON.parse(text) : null;
+}
+
+/** One account, one space, two bookmarks the browsers have never seen. */
+async function seed() {
+  await api('POST', '/api/v1/auth/setup', {
+    body: { username: 'e2e', password: PASSWORD, display_name: 'E2E' },
+  });
+  const login = await api('POST', '/api/v1/auth/login', {
+    body: { username: 'e2e', password: PASSWORD },
+  });
+  const token = login.token;
+  const space = await api('POST', '/api/v1/spaces', { body: { name: 'E2E Converge' }, token });
+  const parent = { type: 'root', key: 'main' };
+  for (const title of ['Server One', 'Server Two']) {
+    await api('POST', `/api/v1/spaces/${space.id}/nodes`, {
+      body: { type: 'bookmark', title, url: `https://pontis.test/${title.toLowerCase().replace(' ', '-')}`, parent },
+      token,
+    });
+  }
+  return { token, spaceId: space.id };
+}
+
+async function serverTree(spaceId, token) {
+  const { nodes } = await api('GET', `/api/v1/spaces/${spaceId}/nodes`, { token });
+  return nodes.filter((n) => n.type === 'bookmark').map((n) => n.title).sort();
+}
+
+// --- DevTools protocol -------------------------------------------------------
+
+class Session {
+  constructor(ws) {
+    this.ws = ws;
+    this.nextId = 0;
+    this.pending = new Map();
+    ws.addEventListener('message', (ev) => {
+      const msg = JSON.parse(ev.data);
+      const hit = this.pending.get(msg.id);
+      if (!hit) return;
+      this.pending.delete(msg.id);
+      msg.error ? hit.reject(new Error(msg.error.message)) : hit.resolve(msg.result);
+    });
+  }
+  static async connect(wsUrl, { enableRuntime = true } = {}) {
+    const ws = new WebSocket(wsUrl);
+    await new Promise((res, rej) => {
+      ws.addEventListener('open', res);
+      ws.addEventListener('error', () => rej(new Error(`cdp connect failed: ${wsUrl}`)));
+    });
+    const s = new Session(ws);
+    // Only a page/extension target answers Runtime.*; the browser target would
+    // reply "'Runtime.enable' wasn't found".
+    if (enableRuntime) await s.send('Runtime.enable');
+    return s;
+  }
+  send(method, params = {}) {
+    const id = ++this.nextId;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+  async evaluate(expression) {
+    const r = await this.send('Runtime.evaluate', {
+      expression: `(async () => { ${expression} })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (r.exceptionDetails) {
+      throw new Error(r.exceptionDetails.exception?.description || JSON.stringify(r.exceptionDetails));
+    }
+    return r.result.value;
+  }
+  close() {
+    this.ws.close();
+  }
+}
+
+class Browser {
+  constructor(name, debugPort) {
+    this.name = name;
+    this.debugPort = debugPort;
+    this.dir = path.join(WORK, `profile-${name}`);
+    rmSync(this.dir, { recursive: true, force: true });
+    mkdirSync(this.dir, { recursive: true });
+  }
+  async start() {
+    this.proc = spawn(chromeExecutable(), [
+      `--user-data-dir=${this.dir}`,
+      `--load-extension=${EXT_DIR}`,
+      `--disable-extensions-except=${EXT_DIR}`,
+      `--remote-debugging-port=${this.debugPort}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-sync',
+      '--disable-background-timer-throttling',
+      // Without this, macOS pops a keychain prompt ("Chromium Safe Storage")
+      // on the first cookie write and every fetch in the profile hangs behind
+      // it — which reads as a pairing bug. Playwright passes the same flag.
+      '--use-mock-keychain',
+      'about:blank',
+    ], { stdio: DEBUG ? 'inherit' : 'ignore' });
+    for (let i = 0; i < 150; i++) {
+      try {
+        if ((await fetch(`http://127.0.0.1:${this.debugPort}/json/version`)).ok) return;
+      } catch {
+        /* not up yet */
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    throw new Error(`${this.name}: devtools never came up`);
+  }
+  /** Open (or reuse) an extension page and attach to it. */
+  async page(url) {
+    await this.sendBrowser('Target.createTarget', { url });
+    for (let i = 0; i < 60; i++) {
+      const list = await (await fetch(`http://127.0.0.1:${this.debugPort}/json/list`)).json();
+      const target = list.find((t) => t.url === url);
+      if (target?.webSocketDebuggerUrl) return Session.connect(target.webSocketDebuggerUrl);
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error(`${this.name}: page ${url} never appeared`);
+  }
+  async sendBrowser(method, params) {
+    if (!this.browserSession) {
+      const info = await (await fetch(`http://127.0.0.1:${this.debugPort}/json/version`)).json();
+      this.browserSession = await Session.connect(info.webSocketDebuggerUrl, { enableRuntime: false });
+    }
+    return this.browserSession.send(method, params);
+  }
+  stop() {
+    this.browserSession?.close();
+    this.proc?.kill();
+  }
+}
+
+// --- page driving ------------------------------------------------------------
+
+/** The page-side helpers the steps below run through Runtime.evaluate. */
+const HELPERS = `
+  const byText = (sel, text) => [...document.querySelectorAll(sel)]
+    .find((el) => (el.textContent || '').trim() === text);
+  const fieldRoot = (label) => [...document.querySelectorAll(
+      '.mantine-TextInput-root, .mantine-PasswordInput-root, .mantine-Select-root')]
+    .find((el) => (el.querySelector('label')?.textContent || '').trim() === label);
+  const rectOf = (el) => {
+    if (!el) return null;
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    const r = el.getBoundingClientRect();
+    return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
+  };
+  const buttonRect = (label) => rectOf(byText('button', label));
+  const selectRect = (label) => {
+    const root = fieldRoot(label);
+    return root ? rectOf(root.querySelector('input')) : null;
+  };
+  const optionRect = (text) => rectOf([...document.querySelectorAll('[role="option"]')]
+    .find((o) => (o.textContent || '').includes(text)));
+  const typeInto = (label, value) => {
+    const root = fieldRoot(label);
+    if (!root) return 'no field: ' + label;
+    const input = root.querySelector('input');
+    if (!input) return 'no input: ' + label;
+    const setter = Object.getOwnPropertyDescriptor(
+      Object.getPrototypeOf(input), 'value').set;
+    setter.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return 'typed';
+  };
+  const bodyText = () => document.body.innerText;
+`;
+
+/**
+ * A real mouse event, not element.click(): pairing calls
+ * chrome.permissions.request, and that API only answers true inside a user
+ * gesture — a synthetic click is not one, so the shipped flow would report
+ * "需要允许扩展访问…" no matter what the manifest grants.
+ */
+async function clickAt(session, boxJson, what) {
+  if (!boxJson) throw new Error(`${what}: element not found`);
+  const { x, y } = JSON.parse(boxJson);
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await session.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 });
+  }
+  return `clicked (${x},${y})`;
+}
+
+async function clickButton(session, label, what) {
+  return clickAt(session, await session.evaluate(`${HELPERS}return buttonRect(${JSON.stringify(label)});`),
+    `${what}: button ${label}`);
+}
+
+async function pickOption(session, field, option, what) {
+  await clickAt(session, await session.evaluate(`${HELPERS}return selectRect(${JSON.stringify(field)});`),
+    `${what}: select ${field}`);
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const box = await session.evaluate(`${HELPERS}return optionRect(${JSON.stringify(option)});`);
+    if (box) return clickAt(session, box, `${what}: option ${option}`);
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error(`${what}: select ${field} never offered an option matching ${option}`);
+}
+
+async function waitStep(session, expr, want, what, timeoutMs = 90_000, failOn = '') {
+  const deadline = Date.now() + timeoutMs;
+  let last = '';
+  while (Date.now() < deadline) {
+    last = String(await session.evaluate(`${HELPERS}\nreturn ${expr};`));
+    if (last.includes(want)) return last;
+    // The extension surfaces its own failures in an Alert; waiting out the
+    // timeout for a message already on screen wastes the run and hides the why.
+    if (failOn && last.includes(failOn)) {
+      throw new Error(`${what}: page reported failure — ${last.slice(0, 300)}`);
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(`${what}: never saw ${JSON.stringify(want)} (last: ${last.slice(0, 400)})`);
+}
+
+async function runStep(session, expr, label) {
+  const out = await session.evaluate(`${HELPERS}\nreturn ${expr};`);
+  check(!String(out).startsWith('no ') && out !== 'false', label, String(out));
+  return out;
+}
+
+const treeTitles = `
+  const roots = await chrome.bookmarks.getTree();
+  const out = [];
+  const walk = (n) => { if (n.url) out.push(n.title); (n.children || []).forEach(walk); };
+  roots.forEach(walk);
+  return JSON.stringify(out.sort());
+`;
+
+/** Pair, bind the bookmark bar, and wait until the first sync is active. */
+async function pairProfile(name, info) {
+  const browser = new Browser(name, info.debugPort);
+  await browser.start();
+  const page = await browser.page(`chrome-extension://${info.extId}/options.html`);
+
+  // The E2E build carries the origin in the manifest; if this is false the
+  // switch broke and pairing would hang on a bubble nobody can click.
+  await runStep(page, `await chrome.permissions.contains({ origins: ['${ORIGIN}/*'] })`,
+    `${name}: host permission already granted, no bubble`);
+  // An extension page opens as soon as its URL resolves, which is before React
+  // has mounted the form — typing into a field that is not there yet is the
+  // difference between a green run and a flaky one.
+  await waitStep(page, `!!fieldRoot('服务器地址')`, 'true', `${name}: pairing form mounted`, 20_000);
+
+  await runStep(page, `typeInto('服务器地址', '${ORIGIN}')`, `${name}: server url`);
+  await runStep(page, `typeInto('用户名', 'e2e')`, `${name}: username`);
+  await runStep(page, `typeInto('密码', '${PASSWORD}')`, `${name}: password`);
+  await runStep(page, `typeInto('设备名称', 'E2E ${name}')`, `${name}: device name`);
+  log(`  step ${name}: 登录并注册设备 → ${await clickButton(page, '登录并注册设备', name)}`);
+  await waitStep(page, 'bodyText()', '已配对', `${name}: pairing`, 60_000, '操作失败');
+
+  const fields = await page.evaluate(`${HELPERS}
+    return [...document.querySelectorAll('.mantine-Select-root')].length;`);
+  if (fields < 2) throw new Error(`${name}: expected the space and mount selects, saw ${fields}`);
+  await pickOption(page, '同步空间', 'E2E Converge', name);
+  await pickOption(page, '挂载目录', 'Bookmarks Bar', name);
+  log(`  step ${name}: 创建绑定 → ${await clickButton(page, '创建绑定', name)}`);
+
+  await waitStep(page, 'bodyText()', '同步中', `${name}: binding reached active`, 120_000, '需要恢复');
+  return { browser, page };
+}
+
+// --- the run -----------------------------------------------------------------
+
+/**
+ * The replica store as the extension sees it, read from an extension page.
+ * A red run has to say whether the local edit was never captured, captured
+ * and stuck in the outbox, or undone by a change that came back from the
+ * server — the page text alone cannot tell those apart.
+ */
+const REPLICA_DUMP = `
+  const db = await new Promise((res, rej) => {
+    const r = indexedDB.open('pontis-replica');
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+  const all = (store) => new Promise((res) => {
+    const q = db.transaction(store).objectStore(store).getAll();
+    q.onsuccess = () => res(q.result || []); q.onerror = () => res([]);
+  });
+  const [bindings, nodes, ops, remote, diags] = await Promise.all(
+    ['bindings', 'localNodes', 'pendingOps', 'remoteChanges', 'diagnostics'].map(all));
+  return JSON.stringify({
+    bindings: bindings.map((b) => ({ state: b.state, applied: b.appliedRevision, received: b.receivedRevision })),
+    nodes: nodes.map((n) => ({ id: n.browserId, title: n.title, canonical: n.canonicalId })),
+    ops: ops.map((o) => ({ type: o.type, status: o.status, title: o.title })),
+    remote: remote.map((c) => ({ rev: c.revision, type: c.type, node: c.nodeId })).slice(-8),
+    diags: diags.slice(-6).map((d) => [d.level, d.scope, d.message].join(' ')),
+  });
+`;
+
+async function dumpReplica(name, page) {
+  try {
+    const raw = await page.evaluate(REPLICA_DUMP);
+    log(`  --- ${name} replica --- ${raw}`);
+  } catch (err) {
+    log(`  --- ${name} replica: could not read (${err.message})`);
+  }
+}
+
+async function main() {
+  rmSync(WORK, { recursive: true, force: true });
+  mkdirSync(WORK, { recursive: true });
+
+  log('building the E2E extension artifact…');
+  buildExtensionArtifact();
+  const extId = extensionId(EXT_DIR);
+
+  log(`starting the server on ${ORIGIN}…`);
+  await startServer();
+  const { token, spaceId } = await seed();
+  log(`space ${spaceId} seeded with 2 bookmarks`);
+
+  log('launching two profiles (real Chromium windows)…');
+  const [a, b] = await Promise.all([
+    pairProfile('A', { extId, debugPort: 9401 }),
+    pairProfile('B', { extId, debugPort: 9402 }),
+  ]);
+
+  try {
+    // Initial reconciliation must have pushed the server's tree into both bars.
+    for (const [name, ref] of [['A', a], ['B', b]]) {
+      const titles = JSON.parse(await ref.page.evaluate(treeTitles));
+      check(titles.includes('Server One') && titles.includes('Server Two'),
+        `${name}: browser holds the server tree after the first sync`, titles.join(','));
+    }
+
+    // A local edit on each side: created through chrome.bookmarks, so the
+    // extension sees it exactly as it sees a user's click. The expression is a
+    // self-contained IIFE: splicing statements after the caller's `return`
+    // would make ASI end the function there and the create would never run.
+    const createIn = (title) => `(async () => {
+      const n = await chrome.bookmarks.create({
+        parentId: '1', title: ${JSON.stringify(title)},
+        url: ${JSON.stringify(`https://pontis.test/${title}`) },
+      });
+      return n.id;
+    })()`;
+    for (const [name, ref, title] of [['A', a, 'From A'], ['B', b, 'From B']]) {
+      const createdId = await ref.page.evaluate(`${HELPERS}return ${createIn(title)}`);
+      const bar = JSON.parse(await ref.page.evaluate(treeTitles));
+      log(`  step ${name}: created ${title} as browser id ${createdId}; bar now ${bar.join(',')}`);
+    }
+
+    // Both sides sync through the popup's own control.
+    const syncBoth = async () => {
+      for (const [name, ref] of [['A', a], ['B', b]]) {
+        const popup = await ref.browser.page(`chrome-extension://${extId}/popup.html`);
+        await waitStep(popup, 'bodyText()', '立即同步', `${name}: popup mounted`, 20_000);
+        await clickButton(popup, '立即同步', name);
+        popup.close();
+      }
+    };
+
+    await syncBoth();
+    const want = ['From A', 'From B', 'Server One', 'Server Two'];
+    const settled = async (fn) => {
+      for (let i = 0; i < 90; i++) {
+        const got = await fn();
+        if (want.every((t) => got.includes(t))) return got;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      return fn();
+    };
+
+    const server = await settled(() => serverTree(spaceId, token));
+    check(want.every((t) => server.includes(t)), 'server holds both local edits', server.join(','));
+    check(server.length === want.length, 'no duplicate nodes appeared', server.join(','));
+
+    // Nothing pushes to a device: a change the other side made lands on this
+    // one during a round of its own, so ask for one more before judging.
+    await syncBoth();
+
+    for (const [name, ref] of [['A', a], ['B', b]]) {
+      const titles = await settled(async () =>
+        JSON.parse(await ref.page.evaluate(treeTitles)));
+      check(want.every((t) => titles.includes(t)),
+        `${name}: browser shows the other profile's bookmark`, titles.join(','));
+      const dupes = titles.filter((t, i) => titles.indexOf(t) !== i);
+      check(dupes.length === 0, `${name}: no doubled bookmarks`, dupes.join(','));
+      const text = await ref.page.evaluate(`${HELPERS}return bodyText()`);
+      check(!/需要恢复|等待确认|目录缺失/.test(text), `${name}: binding needs no human`, text.slice(0, 160));
+    }
+  } finally {
+    if (failed) {
+      // The page and the replica store are what a human would read next: a red
+      // run that only says "did not converge" sends someone to the browser UI.
+      for (const [name, ref] of [['A', a], ['B', b]]) {
+        await dumpReplica(name, ref.page);
+        const text = String(await ref.page.evaluate(`${HELPERS}return bodyText()`));
+        const tail = text.split('\n').filter(Boolean).slice(-14).join(' / ');
+        log(`  --- ${name} page tail --- ${tail}`);
+      }
+    }
+    if (KEEP) log(`--keep: profiles and data under ${WORK}`);
+    a.browser.stop();
+    b.browser.stop();
+    serverProc.kill();
+  }
+
+  if (failed) {
+    console.error(`\ne2e: ${failed} check(s) failed`);
+    process.exit(1);
+  }
+  log(`\ne2e: two real profiles converged on ${ORIGIN}`);
+}
+
+main().catch((err) => {
+  console.error(`e2e: ${err.message}`);
+  try {
+    serverProc?.kill();
+  } catch { /* already gone */ }
+  process.exit(1);
+});

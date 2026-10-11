@@ -137,6 +137,7 @@ Alpha 阶段的范围与未完成项记在
   在这套同源拓扑下这比双提交 token 更强，所以那层没做——触发条件记在 docs/09 §8。
   `trusted_proxies` 目前只用于判断"能否相信 `X-Forwarded-Proto`"，
   `X-Forwarded-For` 仍无人消费。
-- 真实浏览器（unpacked 扩展 + 真服务端）的双端收敛目前是**手工**流程，
-  见 docs/21 §10；没有自动化 E2E。
+- 真实浏览器的双端收敛有脚本（`pnpm build && pnpm e2e:dual-profile`，见 docs/21 §10），
+  但它要开窗口、要 macOS 上的 Chrome for Testing，**CI 不跑**：CI 仍然只覆盖
+  假 adapter + httptest + 真浏览器无关的那几层。
 - 没有 lint 命令：`eslint` 既不是任何包的依赖，也没有配置文件。

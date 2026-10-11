@@ -247,30 +247,44 @@ Playwright E2E
 
 Extension Core：Vitest + Fake Browser Adapter/Dexie test DB。
 
-### 真实浏览器 smoke（unpacked extension + 真服务端）
+### 真实浏览器 E2E：两个 profile 收敛
 
-Fake adapter + httptest 两侧都用自己的替身，跨界的形状差异只有真机能看见。跑法：
+Fake adapter + httptest 两侧都用自己的替身，跨界的形状差异只有真机能看见。这一步是脚本化的：
 
-```text
-1. 服务端：PONTIS_DATA_DIR 指一个干净目录、PONTIS_LISTEN=127.0.0.1:8080 起进程，
-   POST /auth/setup 建号 → POST /spaces 建空间 → POST /spaces/{id}/nodes 预置节点。
-2. 扩展：pnpm --filter @pontis/extension build → extension/.output/chrome-mv3。
-3. 浏览器：Playwright MCP 以 launchPersistentContext 启动，launchOptions.args 带
-   --load-extension=<绝对路径> 与 --disable-extensions-except=<同一绝对路径>，
-   userDataDir 用独立 profile（可反复重启而保住 storage.local / IndexedDB）。
-4. 扩展 id 由加载路径决定：sha256(绝对路径) 前 16 字节，每个半字节映射成 a-p，
-   于是可以直接 navigate 到 chrome-extension://<id>/options.html。
+```sh
+pnpm build && pnpm e2e:dual-profile        # 需要能开窗口，CI 不跑
 ```
 
-三个必然踩到的坑：
+`scripts/e2e-dual-profile.mjs` 用 Node 的全局 fetch/WebSocket 直接说 DevTools 协议，
+不引入 playwright 依赖。它做的事：起一个干净数据目录的服务端 → 建号建空间预置 2 个书签 →
+构建 E2E 扩展产物 → 开两个独立 profile → 在扩展自己的 options 页里填配对表单、选空间与挂载目录、
+创建绑定 → 等两边都 active 并确认服务端的树被写进了两个真实书签栏 → 一边建一个书签、
+两边各点一次"立即同步" → 断言服务端与**两个浏览器**都持有 4 个节点、没有重复、没有需要人工处理的状态。
+失败时会打印两侧的 replica 快照（bindings / localNodes / pendingOps / remoteChanges / diagnostics）
+与页面尾部文本。
+
+跑法里的两个硬约束：
+
+- **扩展 id** 由加载路径决定：`sha256(绝对路径)` 前 32 个十六进制字符，每个半字节映射成 `a-p`，
+  于是可以直接 navigate 到 `chrome-extension://<id>/options.html`。
+- **host 权限**：配对时 `chrome.permissions.request` 的气泡是浏览器原生 UI，自动化点不到，
+  而且它只在**真实用户手势**里才会答应——`element.click()` 不算，所以点击一律用
+  `Input.dispatchMouseEvent`。免掉气泡的办法是 E2E 构建开关（`extension/wxt.config.ts` 读
+  `PONTIS_E2E_ORIGIN`，把服务端 origin 放进 `host_permissions` 并输出到 `.e2e-output/`，
+  发布产物 `.output/chrome-mv3` 不受影响）。**实测过并否定**的路线：往 profile 的
+  `Default/Secure Preferences` 里写 `active_permissions.explicit_host` 想造出"预授权 profile"，
+  重启后 Chrome 不认（`permissions.contains` 仍为 false）。
+- 启动参数必须带 `--use-mock-keychain`：否则 macOS 会在第一次写 cookie 时弹
+  "Chromium Safe Storage" 钥匙串授权，profile 里所有 fetch 都堵在它后面，症状看起来像配对卡死。
+
+手工排查（不跑脚本，自己开浏览器点）时还会踩到这些：
 
 - 改完代码必须清 profile 的 `Default/Service Worker`、`Default/Extension Scripts`、
   `Default/Code Cache`，否则 Chrome 继续跑缓存里的旧 SW 脚本，症状是"代码明明改了、
   行为没变"。`chrome.runtime.reload()` 之后扩展页面会短暂 `ERR_BLOCKED_BY_CLIENT`，
   只能重启浏览器。
-- 服务端有意不发 CORS，扩展靠 `optional_host_permissions` + 配对时
-  `chrome.permissions.request` 拿权限。那个授权气泡是浏览器原生 UI，Playwright 点不了，
-  需要人点一次「允许」（同一 profile 之后一直有效）。
+- 服务端有意不发 CORS，发布产物靠 `optional_host_permissions` + 配对时
+  `chrome.permissions.request` 拿权限：人点一次「允许」之后，同一 profile 一直有效。
 - `chrome.storage.local.get(key)` 解析成 `{key: value}` 包装对象，不是 value。核心里
   的 KV 抽象与它不同，这层形状差异只能留在 `runtime/kvArea()`。
 - 扩展只在 headed + persistent context 下能加载；没有装 Chrome stable 的机器上，用
@@ -296,13 +310,17 @@ Dexie"是唯一合法顺序（`remoteChangeApplier` 的 `readOrder()` / `writeOr
 提交。要用 `remoteChangeApplier.test.ts` 里的 `onMacrotasks()` 包一层，把每个 adapter
 方法都推到一个 `setTimeout` 之后——只有这样才能重现真实 Chromium 的时序。
 
-两个真实浏览器 converging 的验证：第二个 profile 从第一个 rsync 出来，会连同第一个设备
+双向收敛现在由 `pnpm e2e-dual-profile` 断言：A、B 各自 active 之后，服务端 4 个节点、
+两个浏览器都看到 4 个、镜像里 A 有 B 建的 `From B`、B 有 A 建的 `From A`，且没有重复节点。
+注意它是**拉式**的：B 的创建落到 rev 4 之后，A 只有在自己再跑一轮时才会收到，所以脚本在
+服务端确认之后又点了一次"立即同步"——这不是掩盖问题，协议本来就不往设备推。
+
+另一个曾经手工踩出来的坑仍然成立：第二个 profile 若从第一个 rsync 而来，会连同第一个设备
 的 binding 行一起复制过去，于是同一 profile 里出现两个同 Space 的 binding，旧的那个每轮
 `NOT_BINDING_OWNER`。这不是 bug 的复现路径而是 profile 复制的产物，但它暴露了同一件事：
-本地永远无法拥有这个 binding，重试没有意义，所以 coordinator 现在把它当成终止态处理
-（`needs_recovery` + 一条 error 诊断），和 `EPOCH_MISMATCH` 走同一出口。清理过一次之后
-两边各自只剩自己的 binding，双向 converging 才是可证的：A 侧 4/4 且镜像里出现 B 本地建的
-`From B`，B 侧 4/4 且镜像里出现 A 的 `From A`。
+本地永远无法拥有这个 binding，重试没有意义，所以 coordinator 把它当成终止态处理
+（`needs_recovery` + 一条 error 诊断），和 `EPOCH_MISMATCH` 走同一出口。脚本用的是两个
+全新 profile，不走这条路。
 
 - 复制出来的 profile 若删过 `Service Worker` / `Default/Code Cache` 可能再也起不来（进程
   起来就退出，Playwright 报 `Target page, context or browser has been closed`）。这时不要
@@ -333,6 +351,7 @@ CI（`.github/workflows/ci.yml`）不另立一套命令，跑的就是根命令�
 | `pnpm test:go` | `go test ./...` |
 | `pnpm test:go:race` | `go test -race ./...`，并发与任务队列的边界只在带 race 时才算测过 |
 | `pnpm test:fixtures` | 两组 golden 协议/REST fixture 的漂移检查 |
+| `pnpm e2e:dual-profile` | 两个真实 Chromium profile 经真服务端收敛（见 §10；要开窗口，CI 不跑） |
 | `pnpm build` | web 的 `tsc --noEmit && vite build`（**不等于**可部署产物，见 PR-F1） |
 | `pnpm --filter @pontis/extension build` | `wxt build` → `extension/.output/chrome-mv3` |
 

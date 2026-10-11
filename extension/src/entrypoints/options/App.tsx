@@ -52,7 +52,11 @@ export function App() {
     return { serverUrl: b.serverUrl ?? '', token: b.deviceToken };
   });
   const adapter = createChromiumAdapter(chrome.bookmarks);
-  const pairing = new PairingService(client, bootstrap, db);
+  const pairing = new PairingService(client, bootstrap, db, async () => {
+    // This page wrote the binding; the worker is what activates it. Ask for a
+    // round now instead of leaving 待初始化 on screen until the next alarm.
+    await chrome.runtime.sendMessage({ type: 'pontis/manual-sync' });
+  });
 
   const [paired, setPaired] = useState(false);
   const [serverHost, setServerHost] = useState('');

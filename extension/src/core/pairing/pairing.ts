@@ -30,6 +30,13 @@ export class PairingService {
     private client: ApiClient,
     private bootstrap: BootstrapStore,
     private db: PontisDB,
+    /**
+     * Tells the worker there is new work after a binding is created. The page
+     * that pairs is not the worker that syncs: without this nudge a fresh
+     * binding sits at 待初始化 until the five-minute alarm, a browser event, or
+     * the user happens to press 立即同步.
+     */
+    private onBindingCreated: () => Promise<void> = async () => {},
   ) {}
 
   /** Login → register device → persist bootstrap. */
@@ -102,6 +109,7 @@ export class PairingService {
       createdAt: Date.now(),
     };
     await this.db.bindings.put(record);
+    await this.onBindingCreated();
     return record;
   }
 

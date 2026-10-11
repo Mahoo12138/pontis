@@ -27,6 +27,8 @@ let kv: MemoryKV;
 let db: PontisDB;
 let urls: string[];
 let pairing: PairingService;
+let client: ApiClient;
+let bootstrap: BootstrapStore;
 
 /** Routes keyed by "METHOD /path", the shape that actually gets called. */
 function stubServer(routes: Record<string, [unknown, number?]>): void {
@@ -73,11 +75,11 @@ beforeEach(() => {
   kv = new MemoryKV();
   urls = [];
   db = new PontisDB(`pairing-${Math.random()}`);
-  const bootstrap = new BootstrapStore(kv);
+  bootstrap = new BootstrapStore(kv);
   // The real client resolves its config from stored bootstrap on every call:
   // before pairing that is empty, which is exactly the case that used to send
   // the first request to a relative path.
-  const client = new ApiClient(async () => {
+  client = new ApiClient(async () => {
     const b = await bootstrap.get();
     return { serverUrl: b.serverUrl ?? '', token: b.deviceToken };
   });
@@ -146,6 +148,25 @@ describe('PairingService', () => {
     // with no mapping at all; only the initial reconciliation may activate it.
     expect(record.state).toBe('pending_initial');
     expect(await db.bindings.get('binding-1')).toMatchObject({ state: 'pending_initial', mode: 'partial' });
+  });
+
+  it('wakes the worker once a binding exists', async () => {
+    stubServer(paired);
+    let woken = 0;
+    const svc = new PairingService(client, bootstrap, db, async () => {
+      woken++;
+    });
+
+    await svc.pair(params);
+    // Pairing alone is not new sync work — there is nothing to reconcile yet.
+    expect(woken).toBe(0);
+
+    await svc.bindSpace('space-1', 'Alpha Bookmarks', 'f1');
+    // The page that pairs is not the worker that syncs. Without this the first
+    // reconciliation waits for the five-minute alarm, a browser event, or a
+    // manual press of 立即同步 — with 待初始化 on screen the whole time.
+    expect(woken).toBe(1);
+    expect(await db.bindings.get('binding-1')).toMatchObject({ state: 'pending_initial' });
   });
 
   it('drops local bindings built under a different device credential', async () => {

@@ -27,6 +27,7 @@ server/internal/webui/dist/*
 
 # extension build output / generated types
 extension/.output/
+extension/.e2e-output/
 extension/.wxt/
 
 # os

@@ -11,7 +11,8 @@
     "test": "pnpm -r --no-bail test",
     "test:go": "cd server && go test ./...",
     "test:go:race": "cd server && go test -race ./...",
-    "test:fixtures": "cd server && go test -count=1 ./internal/httpapi -run 'TestGolden(Protocol|REST)Fixtures' && pnpm --filter @pontis/protocol test"
+    "test:fixtures": "cd server && go test -count=1 ./internal/httpapi -run 'TestGolden(Protocol|REST)Fixtures' && pnpm --filter @pontis/protocol test",
+    "e2e:dual-profile": "node scripts/e2e-dual-profile.mjs"
   },
   "devDependencies": {
     "typescript": "^5.7.3"
