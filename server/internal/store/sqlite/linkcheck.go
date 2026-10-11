@@ -99,6 +99,26 @@ func (s *LinkCheckStore) FinishRun(ctx context.Context, jobID string, at time.Ti
 	return err
 }
 
+// RunItemURLs maps each node one run recorded to the URL it checked — both
+// pending and checked items, since the URL was fixed when the run was seeded.
+func (s *LinkCheckStore) RunItemURLs(ctx context.Context, jobID string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT node_id, url FROM link_check_items WHERE job_id = ?`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var nodeID, url string
+		if err := rows.Scan(&nodeID, &url); err != nil {
+			return nil, err
+		}
+		out[nodeID] = url
+	}
+	return out, rows.Err()
+}
+
 // LatestRun returns the newest run of a space with the results it has so
 // far. Results are ordered by node id: they arrive out of order, and the
 // page must not reshuffle between polls.

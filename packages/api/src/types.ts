@@ -475,6 +475,24 @@ export interface LinkCheckResultsResponse {
   results: LinkCheckResult[];
 }
 
+/**
+ * Why the delete re-check refused one finding. A stored scan is a snapshot, so
+ * the node the page points at may no longer be the node that was checked.
+ */
+export type LinkDeletionReason = 'not_in_run' | 'node_gone' | 'url_changed' | 'delete_failed';
+
+export interface LinkDeletionSkip {
+  node_id: string;
+  reason: LinkDeletionReason;
+  /** For url_changed: the url the bookmark holds now. */
+  detail?: string;
+}
+
+export interface LinkDeletionResponse {
+  deleted: string[];
+  skipped: LinkDeletionSkip[];
+}
+
 export interface DuplicateGroup {
   id: string;
   kind: 'exact' | 'suspected';

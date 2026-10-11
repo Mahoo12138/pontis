@@ -104,6 +104,10 @@ type RunStore interface {
 	FinishRun(ctx context.Context, jobID string, at time.Time) error
 	// LatestRun returns the newest run of a space, finished or not.
 	LatestRun(ctx context.Context, space canonical.SpaceID) (LinkRun, bool, error)
+	// RunItemURLs maps each node one run recorded to the URL it checked. The
+	// delete re-check needs exactly this: the finding's own URL, not whatever
+	// the bookmark holds now.
+	RunItemURLs(ctx context.Context, jobID string) (map[string]string, error)
 }
 
 // Queue is the job queue a run is submitted to. It is a parameter rather
@@ -273,9 +277,123 @@ func resumable(ctx context.Context, err error) error {
 	return err
 }
 
-// LinkResults returns the latest run for the space, if any.
+// LinkResults returns the latest run for the space, keeping only the findings
+// that still apply. A stored scan is a snapshot of one moment: a bookmark
+// deleted since then is not a finding, and one whose URL changed was never
+// checked at the URL now on screen. VerifyDeletion re-checks the same thing at
+// action time (doc 12 §2); this only stops the page offering to delete what the
+// re-check would refuse. total and done stay the run's own progress counters.
 func (s *Service) LinkResults(ctx context.Context, space canonical.SpaceID) (LinkRun, bool, error) {
-	return s.runs.LatestRun(ctx, space)
+	run, ok, err := s.runs.LatestRun(ctx, space)
+	if err != nil || !ok {
+		return run, ok, err
+	}
+	nodes, err := s.trees.ListNodes(ctx, space)
+	if err != nil {
+		return LinkRun{}, false, err
+	}
+	holdings := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		holdings[string(n.ID)] = n.URL
+	}
+	kept := make([]LinkResult, 0, len(run.Results))
+	for _, r := range run.Results {
+		if url, exists := holdings[r.NodeID]; exists && url == r.CheckedURL {
+			kept = append(kept, r)
+		}
+	}
+	run.Results = kept
+	return run, true, nil
+}
+
+// Reasons a deletion re-check refuses a node (doc 12 §2: a classification is
+// not a deletion, and the delete must be aimed at the thing that was scanned).
+const (
+	SkipNotInRun   = "not_in_run"
+	SkipNodeGone   = "node_gone"
+	SkipURLChanged = "url_changed"
+	// SkipDeleteFailed is the catch-all for a delete the tree refused after the
+	// re-check passed; it is reported, never folded into "deleted".
+	SkipDeleteFailed = "delete_failed"
+)
+
+// DeletionSkip is one node the re-check refused, and why.
+type DeletionSkip struct {
+	NodeID string `json:"node_id"`
+	Reason string `json:"reason"`
+	// Detail carries the bookmark's current URL for url_changed, so the page
+	// can say what it now points at instead of only "changed".
+	Detail string `json:"detail,omitempty"`
+}
+
+// Errors of the deletion re-check.
+var (
+	ErrNoRun    = errors.New("organizer: this space has no link check run")
+	ErrStaleRun = errors.New("organizer: these findings come from a run that is no longer the latest")
+)
+
+// VerifyDeletion re-reads the tree and returns the requested nodes that are
+// still safe to delete for being what this run flagged: still present, still
+// holding the URL that was checked. Everything else comes back as a refusal
+// rather than being quietly dropped — a bookmark the user edited since the scan
+// is a different bookmark as far as this decision goes. (A node's type cannot
+// change, so an id recorded as a bookmark is still one if it exists at all.)
+//
+// The window between this answer and the caller's delete is not closed here:
+// the organizer does not mutate the tree (doc 12 §1), so the delete goes
+// through the ordinary node path, which fails if the node vanished in between.
+func (s *Service) VerifyDeletion(ctx context.Context, space canonical.SpaceID,
+	jobID string, nodeIDs []string) ([]string, []DeletionSkip, error) {
+	run, ok, err := s.runs.LatestRun(ctx, space)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !ok {
+		return nil, nil, ErrNoRun
+	}
+	// The page's results and the run being deleted against must be one run,
+	// otherwise a stale tab deletes on last-week's evidence.
+	if run.JobID != jobID {
+		return nil, nil, ErrStaleRun
+	}
+	scanned, err := s.runs.RunItemURLs(ctx, jobID)
+	if err != nil {
+		return nil, nil, err
+	}
+	nodes, err := s.trees.ListNodes(ctx, space)
+	if err != nil {
+		return nil, nil, err
+	}
+	current := make(map[canonical.NodeID]canonical.Node, len(nodes))
+	for _, n := range nodes {
+		current[n.ID] = n
+	}
+
+	var verified []string
+	var skipped []DeletionSkip
+	seen := map[string]bool{}
+	for _, id := range nodeIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		want, inRun := scanned[id]
+		if !inRun {
+			skipped = append(skipped, DeletionSkip{NodeID: id, Reason: SkipNotInRun})
+			continue
+		}
+		n, exists := current[canonical.NodeID(id)]
+		if !exists {
+			skipped = append(skipped, DeletionSkip{NodeID: id, Reason: SkipNodeGone})
+			continue
+		}
+		if n.URL != want {
+			skipped = append(skipped, DeletionSkip{NodeID: id, Reason: SkipURLChanged, Detail: n.URL})
+			continue
+		}
+		verified = append(verified, id)
+	}
+	return verified, skipped, nil
 }
 
 // DuplicateItem path building needs parent titles; computed per request.

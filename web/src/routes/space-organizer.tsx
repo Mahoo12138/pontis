@@ -25,7 +25,7 @@ import {
   IconStack2,
   IconTrash,
 } from '@tabler/icons-react';
-import type { LinkCheckResult, LinkStatusClass } from '@pontis/api';
+import type { LinkCheckResult, LinkDeletionReason, LinkStatusClass } from '@pontis/api';
 import Header from '../components/app-shell/Header';
 import ErrorState from '../components/common/ErrorState';
 import { contentRegion } from '../styles/app-shell.css';
@@ -34,6 +34,7 @@ import { tokens } from '../styles/semantic-tokens.css';
 import { useSpaces } from '../hooks/use-spaces';
 import { useNodeCrud } from '../hooks/use-node-crud';
 import {
+  useDeleteBrokenLinks,
   useDuplicates,
   useLinkCheckResults,
   useLinkCheckRun,
@@ -48,6 +49,15 @@ const STATUS_META: Record<LinkStatusClass, { label: string; color: string }> = {
   server_5xx: { label: '服务器错误', color: 'errorRed' },
   timeout: { label: '超时', color: 'warningAmber' },
   network_error: { label: '网络错误', color: 'errorRed' },
+};
+
+// Why the server declined to delete one finding. The scan is a snapshot, so the
+// bookmark on screen may no longer be the one that was checked.
+const SKIP_REASON: Record<LinkDeletionReason, string> = {
+  not_in_run: '不在这次扫描结果里',
+  node_gone: '已经被删除',
+  url_changed: '链接已被修改',
+  delete_failed: '树拒绝了删除',
 };
 
 export default function SpaceOrganizerPage() {
@@ -98,17 +108,18 @@ export default function SpaceOrganizerPage() {
 
 function LinkHealthPanel({ spaceId }: { spaceId: string | undefined }) {
   const run = useLinkCheckRun(spaceId);
-  const crud = useNodeCrud(spaceId);
-  const [hasRun, setHasRun] = useState(false);
-  const { data, isLoading, isError, error, refetch } = useLinkCheckResults(spaceId, hasRun);
+  const del = useDeleteBrokenLinks(spaceId);
+  const { data, isError, error, refetch } = useLinkCheckResults(spaceId);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const results = data?.results ?? [];
+  const running = !!data && data.done < data.total;
   const problems = useMemo(
     () => results.filter((r) => r.status_class !== 'ok_2xx'),
     [results],
   );
+  const titleOf = (id: string) => results.find((r) => r.node_id === id)?.title ?? id;
 
   const toggle = (id: string) => {
     setSelected((prev) => {
@@ -120,42 +131,61 @@ function LinkHealthPanel({ spaceId }: { spaceId: string | undefined }) {
   };
 
   const handleStart = () => {
-    run.mutate(undefined, {
-      onSuccess: () => setHasRun(true),
-    });
+    run.mutate();
   };
 
   const handleDelete = () => {
-    crud.remove.mutate([...selected], {
-      onSuccess: () => {
-        setConfirmOpen(false);
-        setSelected(new Set());
-        notifications.show({
-          message: `已删除 ${selected.size} 个失效书签,30 天内可撤销`,
-          color: 'coolGray',
-        });
-        void refetch();
+    if (!data?.job_id) return;
+    del.mutate(
+      { job_id: data.job_id, node_ids: [...selected] },
+      {
+        onSuccess: (res) => {
+          setConfirmOpen(false);
+          setSelected(new Set());
+          const { deleted, skipped } = res;
+          if (skipped.length === 0) {
+            notifications.show({
+              message: `已删除 ${deleted.length} 个失效书签,30 天内可撤销`,
+              color: 'coolGray',
+            });
+          } else {
+            // The server re-checked each finding and refused some: say which
+            // and why instead of reporting a batch that partly did nothing.
+            notifications.show({
+              title: `已删除 ${deleted.length} 个,${skipped.length} 个没有删除`,
+              message: skipped
+                .slice(0, 3)
+                .map((s) => `${titleOf(s.node_id)}:${SKIP_REASON[s.reason]}`)
+                .join(' · '),
+              color: 'warningAmber',
+            });
+          }
+          void refetch();
+        },
       },
-    });
-  };
-
-  if (!hasRun) {
-    return (
-      <EmptyCheck onStart={handleStart} starting={run.isPending} />
     );
-  }
+  };
 
   if (isError) {
     return <ErrorState error={error} onRetry={() => void refetch()} />;
+  }
+  if (!data) {
+    return <Skeleton height={140} />;
+  }
+  // A space that has never been checked. The findings live on the server, so
+  // returning to this page later shows the last run rather than resetting to
+  // "开始检查".
+  if (!data.job_id && !run.isPending) {
+    return <EmptyCheck onStart={handleStart} starting={run.isPending} />;
   }
 
   return (
     <div>
       <Group justify="space-between" mb="sm">
         <Text fz={13} c="dimmed">
-          {isLoading
-            ? '检查中…'
-            : `发现 ${problems.length} 个问题链接(共检查 ${results.length} 个书签)。`}
+          {running
+            ? `检查中… 已检查 ${data.done}/${data.total} 个书签。`
+            : `发现 ${problems.length} 个问题链接(本次检查 ${data.total} 个书签)。`}
         </Text>
         <Group gap="sm">
           {selected.size > 0 && (
@@ -181,46 +211,38 @@ function LinkHealthPanel({ spaceId }: { spaceId: string | undefined }) {
         </Group>
       </Group>
 
-      {isLoading ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {Array.from({ length: 6 }, (_, i) => (
-            <Skeleton key={i} height={38} />
-          ))}
-        </div>
-      ) : (
-        <div
-          style={{
-            border: `1px solid ${tokens.subtleBorder}`,
-            borderRadius: 8,
-            overflow: 'hidden',
-          }}
-        >
-          {problems.map((result, i) => (
-            <CheckRow
-              key={result.node_id}
-              result={result}
-              checked={selected.has(result.node_id)}
-              onToggle={() => toggle(result.node_id)}
-              withBorder={i < problems.length - 1}
-            />
-          ))}
-          {problems.length === 0 && (
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 6,
-                padding: '40px 0',
-                color: tokens.textSecondary,
-              }}
-            >
-              <IconCheck size={28} stroke={1.2} style={{ color: tokens.syncHealthy }} />
-              <Text fz="sm">所有链接都可以正常访问</Text>
-            </div>
-          )}
-        </div>
-      )}
+      <div
+        style={{
+          border: `1px solid ${tokens.subtleBorder}`,
+          borderRadius: 8,
+          overflow: 'hidden',
+        }}
+      >
+        {problems.map((result, i) => (
+          <CheckRow
+            key={result.node_id}
+            result={result}
+            checked={selected.has(result.node_id)}
+            onToggle={() => toggle(result.node_id)}
+            withBorder={i < problems.length - 1}
+          />
+        ))}
+        {!running && problems.length === 0 && (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 6,
+              padding: '40px 0',
+              color: tokens.textSecondary,
+            }}
+          >
+            <IconCheck size={28} stroke={1.2} style={{ color: tokens.syncHealthy }} />
+            <Text fz="sm">所有链接都可以正常访问</Text>
+          </div>
+        )}
+      </div>
 
       <Modal
         opened={confirmOpen}
@@ -236,7 +258,7 @@ function LinkHealthPanel({ spaceId }: { spaceId: string | undefined }) {
           <Button variant="subtle" color="coolGray" onClick={() => setConfirmOpen(false)}>
             取消
           </Button>
-          <Button color="errorRed" loading={crud.remove.isPending} onClick={handleDelete}>
+          <Button color="errorRed" loading={del.isPending} onClick={handleDelete}>
             删除
           </Button>
         </Group>

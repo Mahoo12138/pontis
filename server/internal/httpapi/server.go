@@ -203,6 +203,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/v1/spaces/{spaceID}/changesets/{changeSetID}/undo", s.handleUndoChangeSet)
 		r.Post("/api/v1/spaces/{spaceID}/organizer/link-check", s.handleRunLinkCheck)
 		r.Get("/api/v1/spaces/{spaceID}/organizer/link-check/results", s.handleLinkCheckResults)
+		r.Post("/api/v1/spaces/{spaceID}/organizer/link-check/delete", s.handleDeleteBrokenLinks)
 		r.Get("/api/v1/spaces/{spaceID}/organizer/duplicates", s.handleDuplicates)
 		r.Post("/api/v1/spaces/{spaceID}/transfers", s.handleSpaceTransfer)
 		r.Post("/api/v1/spaces/{spaceID}/export", s.handleExport)

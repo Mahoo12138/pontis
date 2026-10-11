@@ -29,6 +29,8 @@ import type {
   JobView,
   LinkCheckResult,
   LinkCheckResultsResponse,
+  LinkDeletionResponse,
+  LinkDeletionSkip,
   LinkStatusClass,
   MetaResponse,
   Node,
@@ -369,6 +371,19 @@ export const checkLinkCheckResults: Checker<LinkCheckResultsResponse> =
     finished_at: opt(str),
     results: arr(checkLinkCheckResult),
   });
+
+export const checkLinkDeletionSkip: Checker<LinkDeletionSkip> = record<LinkDeletionSkip>({
+  node_id: str,
+  reason: oneOf('not_in_run', 'node_gone', 'url_changed', 'delete_failed'),
+  detail: opt(str),
+});
+
+export const checkLinkDeletion: Checker<LinkDeletionResponse> = record<LinkDeletionResponse>({
+  // Both arrays are always present: a batch that refused nothing still has to
+  // be iterable, and the page reports "N deleted, M refused" from these.
+  deleted: arr(str),
+  skipped: arr(checkLinkDeletionSkip),
+});
 
 export const checkDuplicateGroup: Checker<DuplicateGroup> = record<DuplicateGroup>({
   id: str,
