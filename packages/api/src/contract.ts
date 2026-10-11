@@ -10,8 +10,11 @@ import type {
   ActivityAction,
   ActivityEntry,
   ActivityListResponse,
+  AdminUserListResponse,
+  AdminUserView,
   ApiToken,
   ApiTokenListResponse,
+  ApplyPublicationResponse,
   Backup,
   BackupKind,
   BackupListResponse,
@@ -23,6 +26,12 @@ import type {
   DeviceOverviewResponse,
   DuplicatesResponse,
   DuplicateGroup,
+  ExportResponse,
+  ImportApplyResponse,
+  ImportEntryAction,
+  ImportFormat,
+  ImportPlan,
+  ImportPlanEntry,
   JobListResponse,
   JobStatus,
   JobType,
@@ -34,8 +43,14 @@ import type {
   LinkStatusClass,
   MetaResponse,
   Node,
+  NodeMapping,
   NodeListResponse,
   NodeType,
+  PublicationDetail,
+  PublicationListResponse,
+  PublicationNodeDTO,
+  PublicationSummary,
+  PublicationVisibility,
   RootSlot,
   RootSlotListResponse,
   ScheduleKind,
@@ -44,6 +59,7 @@ import type {
   SpaceListResponse,
   TaskJobView,
   TaskListResponse,
+  TransferResponse,
   User,
 } from './types';
 import type { ErrorEnvelope } from './errors';
@@ -396,4 +412,142 @@ export const checkDuplicateGroup: Checker<DuplicateGroup> = record<DuplicateGrou
 
 export const checkDuplicates: Checker<DuplicatesResponse> = record<DuplicatesResponse>({
   groups: arr(checkDuplicateGroup),
+});
+
+// --- plaza / publications ---
+
+const publicationVisibility: Checker<PublicationVisibility> = oneOf('private', 'plaza');
+
+// Recursive, so the shape is built when a body arrives rather than while this
+// const is still being initialized.
+export const checkPublicationNode: Checker<PublicationNodeDTO> = (value, at) =>
+  record<PublicationNodeDTO>({
+    id: str,
+    type: nodeType,
+    title: str,
+    url: opt(str),
+    children: opt(arr(checkPublicationNode)),
+  })(value, at);
+
+const publicationSummaryShape = {
+  id: str,
+  slug: str,
+  title: str,
+  description: str,
+  publisher: str,
+  version: num,
+  visibility: publicationVisibility,
+  bookmark_count: num,
+  folder_count: num,
+  tags: arr(str),
+  created_at: str,
+  updated_at: str,
+  is_mine: bool,
+} satisfies { [K in keyof PublicationSummary]-?: Checker<PublicationSummary[K]> };
+
+export const checkPublicationSummary: Checker<PublicationSummary> =
+  record(publicationSummaryShape);
+
+export const checkPublicationDetail: Checker<PublicationDetail> = record<PublicationDetail>({
+  ...publicationSummaryShape,
+  tree: checkPublicationNode,
+});
+
+export const checkPublicationList: Checker<PublicationListResponse> =
+  record<PublicationListResponse>({ publications: arr(checkPublicationSummary) });
+
+export const checkApplyPublication: Checker<ApplyPublicationResponse> =
+  record<ApplyPublicationResponse>({ created: num, updated: num, kept: num });
+
+// --- import / export ---
+
+const importFormat: Checker<ImportFormat> = oneOf('netscape_html', 'native_json');
+
+const importEntryAction: Checker<ImportEntryAction> = oneOf(
+  'create',
+  'update',
+  'move',
+  'delete',
+  'keep',
+  'ambiguous',
+  'unsupported',
+);
+
+export const checkImportPlanEntry: Checker<ImportPlanEntry> = record<ImportPlanEntry>({
+  title: str,
+  url: opt(str),
+  path: str,
+  action: importEntryAction,
+  reason: opt(str),
+});
+
+// A preview only reports the actions it actually planned: `{create: 2}` for a
+// first import, not the other six as zeroes. Each key stays closed, so an action
+// name the server renames is a violation instead of a silently missing badge.
+const importCounts = record<Partial<Record<ImportEntryAction, number>>>({
+  create: opt(num),
+  update: opt(num),
+  move: opt(num),
+  delete: opt(num),
+  keep: opt(num),
+  ambiguous: opt(num),
+  unsupported: opt(num),
+});
+
+export const checkImportPlan: Checker<ImportPlan> = record<ImportPlan>({
+  plan_id: str,
+  space_id: str,
+  format: importFormat,
+  total: num,
+  counts: importCounts,
+  warnings: arr(str),
+  entries: arr(checkImportPlanEntry),
+  bound_revision: num,
+});
+
+export const checkImportApply: Checker<ImportApplyResponse> = record<ImportApplyResponse>({
+  created: num,
+  updated: num,
+  deleted: num,
+  kept: num,
+});
+
+export const checkExport: Checker<ExportResponse> = record<ExportResponse>({
+  filename: str,
+  content_type: str,
+  content: str,
+});
+
+// --- cross-space transfer ---
+
+export const checkTransferResponse: Checker<TransferResponse> = record<TransferResponse>({
+  transfer_id: str,
+  source_revision: num,
+  target_revision: num,
+  // A folder move answers with one entry per node carried, in source order;
+  // the UI maps its own ids through this table, so it must be an array.
+  mapping: arr(record<NodeMapping>({ source_node_id: str, target_node_id: str })),
+});
+
+// --- users admin ---
+
+export const checkAdminUser: Checker<AdminUserView> = record<AdminUserView>({
+  id: str,
+  username: str,
+  display_name: str,
+  email: str,
+  role: oneOf('admin', 'user'),
+  status: oneOf('active', 'disabled'),
+  space_count: num,
+  created_at: str,
+  // A user who has never logged in has no last seen moment at all.
+  last_seen_at: nullable(str),
+});
+
+export const checkAdminUserList: Checker<AdminUserListResponse> = record<AdminUserListResponse>({
+  users: arr(checkAdminUser),
+});
+
+export const checkResetLink: Checker<{ reset_link: string }> = record<{ reset_link: string }>({
+  reset_link: str,
 });

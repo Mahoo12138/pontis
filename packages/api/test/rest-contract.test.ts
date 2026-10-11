@@ -10,39 +10,57 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   checkActivityList,
+  checkAdminUserList,
   checkApiTokenList,
+  checkApplyPublication,
   checkBackupList,
   checkBindingList,
   checkDeviceOverviewResponse,
   checkDuplicates,
   checkErrorEnvelope,
+  checkExport,
+  checkImportApply,
+  checkImportPlan,
   checkJobList,
   checkLinkCheckResults,
   checkMeta,
   checkNodeList,
+  checkPublicationDetail,
+  checkPublicationList,
+  checkResetLink,
   checkRootSlotList,
   checkScheduleList,
   checkSpaceList,
   checkTaskList,
+  checkTransferResponse,
   checkUser,
 } from '../src/contract';
 import { ContractViolation } from '../src/validate';
 import type { ErrorEnvelope } from '../src/errors';
 import type {
   ActivityListResponse,
+  AdminUserListResponse,
+  AdminUserView,
   ApiTokenListResponse,
+  ApplyPublicationResponse,
   BackupListResponse,
   BindingListResponse,
   DeviceOverviewResponse,
   DuplicatesResponse,
+  ExportResponse,
+  ImportApplyResponse,
+  ImportPlan,
   JobListResponse,
   LinkCheckResultsResponse,
   MetaResponse,
   Node,
   NodeListResponse,
+  PublicationDetail,
+  PublicationListResponse,
   RootSlotListResponse,
   SpaceListResponse,
   TaskListResponse,
+  TransferResponse,
   User,
 } from '../src/types';
 
@@ -76,6 +94,15 @@ const contract = {
   duplicates: (v: unknown): DuplicatesResponse => checkDuplicates(v, 'body'),
   'error-validation': (v: unknown): ErrorEnvelope => checkErrorEnvelope(v, 'body'),
   'error-not-found': (v: unknown): ErrorEnvelope => checkErrorEnvelope(v, 'body'),
+  'admin-users': (v: unknown): AdminUserListResponse => checkAdminUserList(v, 'body'),
+  'reset-link': (v: unknown): { reset_link: string } => checkResetLink(v, 'body'),
+  'plaza-publications': (v: unknown): PublicationListResponse => checkPublicationList(v, 'body'),
+  'publication-detail': (v: unknown): PublicationDetail => checkPublicationDetail(v, 'body'),
+  'publication-apply': (v: unknown): ApplyPublicationResponse => checkApplyPublication(v, 'body'),
+  'space-transfer': (v: unknown): TransferResponse => checkTransferResponse(v, 'body'),
+  'import-preview': (v: unknown): ImportPlan => checkImportPlan(v, 'body'),
+  'import-apply': (v: unknown): ImportApplyResponse => checkImportApply(v, 'body'),
+  export: (v: unknown): ExportResponse => checkExport(v, 'body'),
 } as const;
 
 describe('golden REST bodies satisfy the client contract', () => {
@@ -148,5 +175,58 @@ describe('the contract checks are not decorative', () => {
     const body: Record<string, unknown> = load('link-check-results') as Record<string, unknown>;
     expect(body.finished_at).toBeUndefined();
     expect(checkLinkCheckResults(body, 'body').finished_at).toBeUndefined();
+  });
+
+  it('accepts a user who has never been seen, rejects an unknown role', () => {
+    // The golden list has one admin who logged in, so the null branch of
+    // last_seen_at only exists here.
+    const alice = (load('admin-users') as AdminUserListResponse).users[0] as AdminUserView;
+    expect(alice.last_seen_at).not.toBeNull();
+    const never = { users: [{ ...alice, last_seen_at: null }] };
+    expect(checkAdminUserList(never, 'body').users[0]?.last_seen_at).toBeNull();
+
+    const promoted = load('admin-users') as Record<string, unknown>;
+    ((promoted.users as unknown[])[0] as Record<string, unknown>).role = 'owner';
+    expect(() => checkAdminUserList(promoted, 'body')).toThrow(/role.*one of admin \| user/);
+  });
+
+  it('keeps an import plan reporting only the actions it planned', () => {
+    // `{create: 2}` is what the server really sent; a checker that demanded all
+    // seven keys would reject every first import.
+    const plan = load('import-preview') as ImportPlan;
+    expect(plan.counts).toEqual({ create: 2 });
+    expect(checkImportPlan(plan, 'body').counts.update).toBeUndefined();
+
+    const silent = load('import-preview') as Record<string, unknown>;
+    delete silent.counts;
+    expect(() => checkImportPlan(silent, 'body')).toThrow(
+      /expected an object, received undefined/,
+    );
+
+    // The action vocabulary itself is closed, so a rename fails on the entry
+    // that carries it rather than vanishing into an unmatched badge.
+    const renamed = load('import-preview') as Record<string, unknown>;
+    ((renamed.entries as unknown[])[0] as Record<string, unknown>).action = 'remove';
+    expect(() => checkImportPlan(renamed, 'body')).toThrow(/one of create \| update \| move/);
+  });
+
+  it('requires a transfer mapping it can walk', () => {
+    // The explorer maps its own node ids through this table; a null would be a
+    // blank transfer rather than an error.
+    const body = load('space-transfer') as Record<string, unknown>;
+    body.mapping = null;
+    expect(() => checkTransferResponse(body, 'body')).toThrow(/body\.mapping.*an array/);
+  });
+
+  it('names where inside a publication tree the shape broke', () => {
+    const body = load('publication-detail') as PublicationDetail;
+    (body.tree.children?.[0] as unknown as Record<string, unknown>).children = 'Reading';
+    try {
+      checkPublicationDetail(body, 'body');
+    } catch (error) {
+      expect((error as ContractViolation).at).toBe('body.tree.children[0].children');
+      return;
+    }
+    throw new Error('expected a contract violation');
   });
 });

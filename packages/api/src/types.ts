@@ -81,7 +81,7 @@ export interface RegisterDeviceResponse {
   token: string;
 }
 
-// ─── Device overview (gap endpoint — mock only) ─────────────
+// ─── Device overview (pinned by fixtures/api) ──────────────────────────────
 
 /** UI-facing health of a Device × Space binding. */
 export type BindingHealth =
@@ -144,63 +144,18 @@ export interface CreateBindingRequest {
 
 // ─── Sync ───────────────────────────────────────────────────
 
+/**
+ * The /sync wire contract lives in @pontis/protocol, which the extension
+ * validates with real parsers. Nothing here repeated it — this section keeps
+ * only the parent reference the write endpoints share.
+ */
 export interface ParentRef {
   type: 'node' | 'root';
   id?: string;
   key?: string;
 }
 
-export interface OperationDTO {
-  op_id: string;
-  client_seq: number;
-  base_revision: number;
-  type: string;
-  node_id: string;
-  node_type?: 'folder' | 'bookmark';
-  title?: string;
-  url?: string;
-  parent?: ParentRef;
-  before_id?: string;
-}
-
-export interface SyncRequest {
-  protocol_version: number;
-  epoch: number;
-  applied_revision: number;
-  received_revision: number;
-  max_changes: number;
-  operations: OperationDTO[];
-}
-
-export interface OperationResult {
-  op_id: string;
-  client_seq: number;
-  status: string;
-  reason: string;
-  result_revision: number;
-  settle_after_revision: number;
-}
-
-export interface Change {
-  revision: number;
-  type: string;
-  node_id: string;
-  payload: unknown;
-}
-
-export interface SyncResponse {
-  protocol_version: number;
-  epoch: number;
-  journal_floor_revision: number;
-  from_revision: number;
-  through_revision: number;
-  server_revision: number;
-  has_more: boolean;
-  operation_results: OperationResult[];
-  changes: Change[];
-}
-
-// ─── Nodes (gap endpoint — mock only) ───────────────────────
+// ─── Nodes (pinned by fixtures/api) ────────────────────────────────────────
 
 export type NodeType = 'folder' | 'bookmark';
 
@@ -319,7 +274,7 @@ export interface UndoActivityResult {
   reasons?: string[];
 }
 
-// ─── Plaza / Publications (gap endpoint — mock only) ────────
+// ─── Plaza / Publications (pinned by fixtures/api) ─────────────────────────
 
 export type PublicationVisibility = 'private' | 'plaza';
 
@@ -380,7 +335,7 @@ export interface ApplyPublicationResponse {
   kept: number;
 }
 
-// ─── Import / Export (gap endpoint — mock only) ─────────────
+// ─── Import / Export (pinned by fixtures/api) ──────────────────────────────
 
 export type ImportFormat = 'netscape_html' | 'native_json';
 
@@ -404,9 +359,16 @@ export interface ImportPlanEntry {
 
 export interface ImportPlan {
   plan_id: string;
+  /** The space the plan was previewed against; apply must target the same one. */
+  space_id: string;
   format: ImportFormat;
   total: number;
-  counts: Record<ImportEntryAction, number>;
+  /**
+   * Only the actions that occur are present — a clean preview answers
+   * `{create: 2}`, not seven zeroes — so callers must treat a missing key as
+   * "nothing of that kind".
+   */
+  counts: Partial<Record<ImportEntryAction, number>>;
   warnings: string[];
   entries: ImportPlanEntry[];
   /** Plan binds to target epoch/revision; stale plans must be re-previewed. */
@@ -444,7 +406,7 @@ export interface ExportResponse {
   content: string;
 }
 
-// ─── Organizer (gap endpoint — mock only) ────────────────────
+// ─── Organizer (pinned by fixtures/api) ────────────────────────────────────
 
 export type LinkStatusClass = 'ok_2xx' | 'client_4xx' | 'server_5xx' | 'timeout' | 'network_error';
 
@@ -509,7 +471,7 @@ export interface DuplicatesResponse {
   groups: DuplicateGroup[];
 }
 
-// ─── Backups (gap endpoint — mock only) ──────────────────────
+// ─── Backups (pinned by fixtures/api) ──────────────────────────────────────
 
 export type BackupKind = 'manual' | 'scheduled' | 'safety';
 
@@ -534,7 +496,7 @@ export interface RestoreBackupResponse {
   new_epoch: number;
 }
 
-// ─── API Tokens & Settings (gap endpoint — mock only) ────────
+// ─── API Tokens & Settings (pinned by fixtures/api) ────────────────────────
 
 export interface ApiToken {
   id: string;
@@ -580,7 +542,7 @@ export interface SystemSettingsResponse {
   settings: SystemSettings;
 }
 
-// ─── Users admin (gap endpoint — mock only) ──────────────────
+// ─── Users admin (pinned by fixtures/api) ──────────────────────────────────
 
 export interface AdminUserView {
   id: string;

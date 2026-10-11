@@ -1,0 +1,24 @@
+{
+  "bound_revision": 0,
+  "counts": {
+    "create": 2
+  },
+  "entries": [
+    {
+      "action": "create",
+      "path": "",
+      "title": "Reading"
+    },
+    {
+      "action": "create",
+      "path": "/reading",
+      "title": "Example",
+      "url": "https://example.com"
+    }
+  ],
+  "format": "netscape_html",
+  "plan_id": "id-1",
+  "space_id": "id-2",
+  "total": 2,
+  "warnings": []
+}

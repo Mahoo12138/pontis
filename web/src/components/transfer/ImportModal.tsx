@@ -189,10 +189,11 @@ export default function ImportModal({
         <Stack gap="sm">
           <Group gap={6}>
             {(['create', 'update', 'move', 'delete', 'keep', 'ambiguous', 'unsupported'] as ImportEntryAction[])
-              .filter((a) => plan.counts[a] > 0)
-              .map((action) => (
+              .map((action) => ({ action, count: plan.counts[action] ?? 0 }))
+              .filter(({ count }) => count > 0)
+              .map(({ action, count }) => (
                 <Badge key={action} variant="light" color={ACTION_META[action].color} styles={{ root: { fontWeight: 400 } }}>
-                  {ACTION_META[action].label} {plan.counts[action]}
+                  {ACTION_META[action].label} {count}
                 </Badge>
               ))}
             <span style={{ flex: 1 }} />

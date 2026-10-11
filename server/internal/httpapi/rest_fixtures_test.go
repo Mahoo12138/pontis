@@ -126,6 +126,64 @@ func TestGoldenRESTFixtures(t *testing.T) {
 			http.MethodGet, "/api/v1/spaces/0198c0de-7000-7000-8000-00000000dead/nodes", nil)},
 	}
 
+	// Everything below writes: a second space, a publication, an import plan.
+	// It runs only after the reads above have been captured, so the golden
+	// bodies of the listing endpoints stay what a user sees on first opening
+	// the page rather than what the fixture harness left behind.
+	targetSpaceID := restPOST(t, ts, token, "/api/v1/spaces",
+		map[string]string{"name": "Archive"})["id"].(string)
+	userID, _ := restGET(t, ts, token, "/api/v1/auth/me")["id"].(string)
+	publication := restPOST(t, ts, token, "/api/v1/publications", map[string]any{
+		"space_id": spaceID, "title": "Reading list", "description": "Hand-picked",
+		"tags": []string{"books"}, "visibility": "plaza",
+	})
+	publicationID, _ := publication["id"].(string)
+	if publicationID == "" {
+		t.Fatalf("publish returned no id: %v", publication)
+	}
+	exported := restPOST(t, ts, token, "/api/v1/spaces/"+spaceID+"/export",
+		map[string]string{"format": "netscape_html"})
+	content, _ := exported["content"].(string)
+	if content == "" {
+		t.Fatalf("export returned no content: %v", exported)
+	}
+	plan := restPOST(t, ts, token, "/api/v1/spaces/"+targetSpaceID+"/import/preview",
+		map[string]string{"format": "netscape_html", "content": content})
+	planID, _ := plan["plan_id"].(string)
+	if planID == "" {
+		t.Fatalf("preview returned no plan_id: %v", plan)
+	}
+
+	fixtures = append(fixtures,
+		restFixture{"admin-users", restGET(t, ts, token, "/api/v1/admin/users")},
+		restFixture{"reset-link", restPOST(t, ts, token,
+			"/api/v1/admin/users/"+userID+"/reset-link", map[string]any{})},
+		restFixture{"plaza-publications", restGET(t, ts, token, "/api/v1/plaza/publications")},
+		restFixture{"publication-detail", restGET(t, ts, token, "/api/v1/publications/"+publicationID)},
+		// Applied into the space it came from: the merge path answers with the
+		// counts the UI reports after a plaza import.
+		restFixture{"publication-apply", restPOST(t, ts, token,
+			"/api/v1/publications/"+publicationID+"/apply", map[string]any{
+				"space_id": spaceID,
+				"parent":   map[string]string{"type": "root", "key": "main"},
+				"strategy": "merge",
+			})},
+		restFixture{"export", exported},
+		restFixture{"import-preview", plan},
+		restFixture{"import-apply", restPOST(t, ts, token,
+			"/api/v1/spaces/"+targetSpaceID+"/import/apply", map[string]any{
+				"plan_id":  planID,
+				"parent":   map[string]string{"type": "root", "key": "main"},
+				"strategy": "merge",
+			})},
+		// Moving the seeded folder carries its child, so `mapping` has more
+		// than the trivial single-node case.
+		restFixture{"space-transfer", restPOST(t, ts, token, "/api/v1/spaces/"+spaceID+"/transfers", map[string]any{
+			"transfer_id": "fixture-transfer-1", "target_space_id": targetSpaceID, "node_id": folderID,
+			"target_parent": map[string]string{"type": "root", "key": "main"},
+		})},
+	)
+
 	for _, f := range fixtures {
 		t.Run(f.name, func(t *testing.T) {
 			b, err := json.MarshalIndent(normalizeValue(f.value, map[string]string{}), "", "  ")
@@ -211,6 +269,11 @@ var (
 	// is not the RFC 3339 shape above and would otherwise make the fixture
 	// depend on the wall clock.
 	compactTimePat = regexp.MustCompile(`\d{8}-\d{6}`)
+	// A reset link is a freshly signed opaque token hung off whatever origin the
+	// test server happened to bind. What the client contract needs is "a /reset
+	// URL carrying a token"; the token and the ephemeral port are not it.
+	resetTokenPat = regexp.MustCompile(`token=[A-Za-z0-9_-]+`)
+	loopbackPort  = regexp.MustCompile(`127\.0\.0\.1:\d+`)
 )
 
 const fixedTimestamp = "2026-01-01T00:00:00Z"
@@ -262,5 +325,7 @@ func normalizeString(s string, seen map[string]string) string {
 		return id
 	})
 	s = timestampPattern.ReplaceAllString(s, fixedTimestamp)
-	return compactTimePat.ReplaceAllString(s, "20260101-000000")
+	s = compactTimePat.ReplaceAllString(s, "20260101-000000")
+	s = resetTokenPat.ReplaceAllString(s, "token=prs_the-reset-token")
+	return loopbackPort.ReplaceAllString(s, "127.0.0.1:8080")
 }

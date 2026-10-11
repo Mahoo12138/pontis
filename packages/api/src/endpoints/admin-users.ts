@@ -1,18 +1,26 @@
 import { client } from '../client';
-import type { AdminUserListResponse, AdminUserView } from '../types';
+import { checkAdminUserList, checkResetLink, checkUser } from '../contract';
+import type { AdminUserListResponse, User } from '../types';
 
 export function listAdminUsers() {
-  return client.get<AdminUserListResponse>('/admin/users');
+  return client.get<AdminUserListResponse>('/admin/users', checkAdminUserList);
 }
 
+// Both mutations answer with the plain user view (id, username, role, status,
+// locale, created_at) — not the admin row, which adds space_count and
+// last_seen_at and only the list endpoint produces.
 export function setUserStatus(userId: string, status: 'active' | 'disabled') {
-  return client.patch<AdminUserView>(`/admin/users/${userId}`, { status });
+  return client.patch<User>(`/admin/users/${userId}`, { status }, checkUser);
 }
 
 export function setUserRole(userId: string, role: 'admin' | 'user') {
-  return client.patch<AdminUserView>(`/admin/users/${userId}`, { role });
+  return client.patch<User>(`/admin/users/${userId}`, { role }, checkUser);
 }
 
 export function createResetLink(userId: string) {
-  return client.post<{ reset_link: string }>(`/admin/users/${userId}/reset-link`, {});
+  return client.post<{ reset_link: string }>(
+    `/admin/users/${userId}/reset-link`,
+    {},
+    checkResetLink,
+  );
 }
