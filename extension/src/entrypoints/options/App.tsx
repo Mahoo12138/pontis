@@ -16,6 +16,7 @@ import {
   PasswordInput,
   Select,
   Stack,
+  Switch,
   Table,
   Text,
   TextInput,
@@ -23,10 +24,12 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { createChromiumAdapter } from '../../core/browser/chromium';
+import { countScopeBookmarks } from '../../core/browser/scopeCount';
 import type { ReconciliationIssueWire } from '../../core/protocol/types';
 import { ApiClient } from '../../core/transport/client';
 import { BootstrapStore } from '../../core/store/bootstrap';
 import {
+  isSyncEnabled,
   PontisDB,
   type BindingRecord,
   type DiagnosticEvent,
@@ -36,7 +39,7 @@ import {
 import type { IntentDecision } from '../../core/sync/resync';
 import { PairingService, originPatternFor } from '../../core/pairing/pairing';
 import { chromeApi, kvArea } from '../../runtime/chromeApi';
-import { bindingStatus, relTime, syncProgress } from '../../ui/bindingStatus';
+import { bindingStatus, relTime } from '../../ui/bindingStatus';
 
 interface FolderOption {
   value: string;
@@ -69,6 +72,8 @@ export function App() {
   /** Which action is running: only its own button spins. */
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** bindingId → bookmarks this browser really holds in the mounted scope. */
+  const [counts, setCounts] = useState<Record<string, number | null>>({});
   /** Pairing collapses into the header once it is done; the form is for setup. */
   const [editPairing, setEditPairing] = useState(false);
 
@@ -110,12 +115,30 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const refreshCounts = useCallback(async () => {
+    const rows = await db.bindings.toArray();
+    const next: Record<string, number | null> = {};
+    await Promise.all(
+      rows.map(async (b) => {
+        next[b.id] = await countScopeBookmarks(adapter, b.mount);
+      }),
+    );
+    setCounts(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     void refresh();
     void loadFolders();
+    void refreshCounts();
     // Reconciliation progress and decisions update asynchronously.
     const id = setInterval(() => void refresh(), 2000);
-    return () => clearInterval(id);
+    // Counting walks the browser tree, so it runs on its own, slower clock.
+    const countId = setInterval(() => void refreshCounts(), 10_000);
+    return () => {
+      clearInterval(id);
+      clearInterval(countId);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -179,6 +202,19 @@ export function App() {
     });
 
   const doUnbind = (bindingId: string) => run(`unbind:${bindingId}`, () => pairing.unbind(bindingId));
+
+  /**
+   * The user's switch. Off stops every round of sync for this binding; local
+   * edits keep being captured, so switching back on drains what accumulated —
+   * the same path an offline device takes when it reconnects.
+   */
+  const toggleSync = (bindingId: string, enabled: boolean) =>
+    run(`toggle:${bindingId}`, async () => {
+      const row = await db.bindings.get(bindingId);
+      if (!row) return;
+      await db.bindings.put({ ...row, enabled });
+      if (enabled) await chrome.runtime.sendMessage({ type: 'pontis/manual-sync' });
+    });
 
   const doUnpair = async () => {
     await bootstrap.clearPairing();
@@ -417,6 +453,15 @@ export function App() {
                           )}
                         </Group>
                         <Group gap="xs" wrap="nowrap">
+                          <Tooltip label={isSyncEnabled(b) ? '暂停这个空间的同步' : '恢复这个空间的同步'}>
+                            <Switch
+                              size="xs"
+                              checked={isSyncEnabled(b)}
+                              disabled={busy === `toggle:${b.id}`}
+                              aria-label={`${b.spaceName} 的同步开关`}
+                              onChange={(e) => void toggleSync(b.id, e.currentTarget.checked)}
+                            />
+                          </Tooltip>
                           <Text size="xs" c="dimmed">
                             {relTime(b.lastSyncAt)}
                           </Text>
@@ -469,12 +514,21 @@ export function App() {
                         </Group>
                       </Group>
                       <Group gap="md" wrap="nowrap">
-                        <Text size="xs" className="pontis-numerals">
-                          {syncProgress(b)}
+                        <Text size="xs" c="dimmed" className="pontis-numerals">
+                          {counts[b.id] === null || counts[b.id] === undefined
+                            ? '读不到这个目录'
+                            : `${counts[b.id]} 个书签`}
                         </Text>
-                        <Text size="xs" c="dimmed">
-                          epoch {b.epoch}
-                        </Text>
+                        {!st.disabled && st.pending > 0 && (
+                          <Text size="xs" c="recoveryOrange">
+                            还有 {st.pending} 项远端改动没落到浏览器
+                          </Text>
+                        )}
+                        {st.disabled && (
+                          <Text size="xs" c="dimmed">
+                            同步已关闭，本机的改动会攒着
+                          </Text>
+                        )}
                       </Group>
                     </Box>
                   );

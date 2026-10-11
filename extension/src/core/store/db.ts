@@ -56,6 +56,17 @@ export interface BindingRecord {
   lastSyncAt: number | null;
   recovery: { code: string; message: string } | null;
   createdAt: number;
+  /**
+   * The user's switch. Absent means enabled, because rows written before the
+   * switch existed carry no field and turning sync off has to be something a
+   * person did on purpose, never a default.
+   */
+  enabled?: boolean;
+}
+
+/** What the worker asks before spending a round on a binding. */
+export function isSyncEnabled(binding: Pick<BindingRecord, 'enabled'>): boolean {
+  return binding.enabled !== false;
 }
 
 /**

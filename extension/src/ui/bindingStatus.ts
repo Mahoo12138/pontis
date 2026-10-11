@@ -22,27 +22,24 @@ export interface BindingStatus {
   color: string;
   /** Revisions received but not yet applied to the browser. */
   pending: number;
+  /** The user switched this binding off. */
+  disabled: boolean;
 }
 
 /**
- * The watermarks are journal revisions, not a count of bookmarks: deleting one
- * bookmark advances the revision exactly like adding one does. Two bare numbers
- * separated by a slash read as "1402 of 1402 things", so the surfaces phrase the
- * same pair as the position this device has reached, and only mention the gap
- * when there is one.
+ * What a binding is doing, in the words the user would use. An idle active
+ * binding is not "同步中" — it is watching the browser, and saying otherwise
+ * makes a quiet connection look like one that never finishes. It earns 同步中
+ * only while remote revisions are still unapplied.
  */
-export function syncProgress(binding: BindingRecord): string {
-  if (binding.appliedRevision === 0 && binding.receivedRevision === 0) return '还没有同步过';
-  if (binding.appliedRevision < binding.receivedRevision) {
-    return `已同步到修订 ${binding.appliedRevision}，还有 ${binding.receivedRevision - binding.appliedRevision} 项待应用`;
-  }
-  return `已同步到修订 ${binding.appliedRevision}`;
-}
-
 export function bindingStatus(binding: BindingRecord): BindingStatus {
-  const s = STATE[binding.state] ?? { label: binding.state, color: 'coolGray' };
   const pending = Math.max(0, binding.receivedRevision - binding.appliedRevision);
-  return { ...s, pending };
+  if (binding.enabled === false) {
+    return { label: '已暂停', color: 'coolGray', pending, disabled: true };
+  }
+  const s = STATE[binding.state] ?? { label: binding.state, color: 'coolGray' };
+  const label = binding.state === 'active' && pending === 0 ? '监测中' : s.label;
+  return { ...s, label, pending, disabled: false };
 }
 
 export function relTime(ts: number | null | undefined): string {

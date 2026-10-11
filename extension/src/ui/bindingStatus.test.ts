@@ -1,12 +1,11 @@
-// The binding line is the only place a user sees the sync watermarks, and the
-// two numbers are revisions rather than a count of bookmarks — deleting a
-// bookmark advances them just like adding one. These pin the phrasing that makes
-// that readable.
+// The badge is the only place most users see what a binding is doing. "同步中"
+// on a connection that has nothing to do reads as a sync that never finishes,
+// and a switched-off binding must not look healthy. These pin those words.
 
 import { describe, expect, it } from 'vitest';
 
 import type { BindingRecord } from '../core/store/db';
-import { bindingStatus, syncProgress } from './bindingStatus';
+import { bindingStatus } from './bindingStatus';
 
 const record = (over: Partial<BindingRecord>): BindingRecord => ({
   id: 'b1',
@@ -25,29 +24,36 @@ const record = (over: Partial<BindingRecord>): BindingRecord => ({
   ...over,
 });
 
-describe('syncProgress', () => {
-  it('says nothing was synced rather than showing 0 / 0', () => {
-    expect(syncProgress(record({}))).toBe('还没有同步过');
+describe('bindingStatus', () => {
+  it('calls an idle active binding 监测中, not 同步中', () => {
+    expect(bindingStatus(record({ appliedRevision: 1402, receivedRevision: 1402 }))).toMatchObject({
+      label: '监测中',
+      color: 'healthyGreen',
+    });
   });
 
-  it('names a caught-up binding by the revision it reached', () => {
-    expect(syncProgress(record({ appliedRevision: 1402, receivedRevision: 1402 })))
-      .toBe('已同步到修订 1402');
-  });
-
-  it('counts what is still outstanding when the browser is behind', () => {
-    expect(syncProgress(record({ appliedRevision: 1402, receivedRevision: 1405 })))
-      .toBe('已同步到修订 1402，还有 3 项待应用');
+  it('says 同步中 only while remote revisions are unapplied', () => {
+    const st = bindingStatus(record({ appliedRevision: 1402, receivedRevision: 1405 }));
+    expect(st.label).toBe('同步中');
+    expect(st.pending).toBe(3);
   });
 
   it('never reports a negative gap for a watermark ahead of the server', () => {
-    expect(syncProgress(record({ appliedRevision: 9, receivedRevision: 4 })))
-      .toBe('已同步到修订 9');
+    expect(bindingStatus(record({ appliedRevision: 9, receivedRevision: 4 })).pending).toBe(0);
   });
-});
 
-describe('bindingStatus', () => {
-  it('exposes the outstanding revisions for the unbind warning', () => {
-    expect(bindingStatus(record({ appliedRevision: 3, receivedRevision: 7 })).pending).toBe(4);
+  it('shows a switched-off binding as paused whatever its state says', () => {
+    const st = bindingStatus(record({ state: 'active', enabled: false }));
+    expect(st).toMatchObject({ label: '已暂停', color: 'coolGray', disabled: true });
+  });
+
+  it('treats a binding written before the switch existed as enabled', () => {
+    expect(bindingStatus(record({})).disabled).toBe(false);
+  });
+
+  it('keeps the states that need a person', () => {
+    expect(bindingStatus(record({ state: 'waiting_user' })).label).toBe('等待确认');
+    expect(bindingStatus(record({ state: 'needs_recovery' })).label).toBe('需要恢复');
+    expect(bindingStatus(record({ state: 'mount_missing' })).label).toBe('目录缺失');
   });
 });

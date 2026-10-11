@@ -11,6 +11,7 @@ import {
   collectSubtree,
   logDiagnostic,
   releaseRunLock,
+  isSyncEnabled,
   type BindingRecord,
   type LocalNodeRecord,
   type PontisDB,
@@ -182,6 +183,11 @@ export class SyncCoordinator {
   async syncAll(): Promise<void> {
     const bindings = await this.db.bindings.where('state').equals('active').toArray();
     for (const b of bindings) {
+      // A switched-off binding keeps capturing local edits — the journal still
+      // describes the browser — it just spends no round on the network. This
+      // is the same shape as an offline device reconnecting, which the server
+      // already has to survive.
+      if (!isSyncEnabled(b)) continue;
       try {
         await this.syncBinding(b.id);
       } catch (err) {

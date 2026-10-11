@@ -245,6 +245,33 @@ describe('what each trigger is allowed to touch', () => {
     expect(transport.calls.map((c) => c.bindingId)).toEqual([otherBinding]);
     expect(await messages('background')).not.toContain('recovery attempt failed');
   });
+
+  it('does no network work for a switched-off binding, and still journals what it edits', async () => {
+    await seedBinding(bindingId, {
+      state: 'needs_recovery',
+      recovery: { code: 'EPOCH_MISMATCH', message: 'epoch changed' },
+      enabled: false,
+    });
+    await seedQueuedOp('op-1', 'Queued before off');
+
+    await loop.runSync('alarm');
+    await loop.runIntegrity('daily');
+
+    // Off means off across every step that talks to the server: no incremental
+    // round, no recovery attempt, no reconciliation, no drift repair.
+    expect(transport.calls).toEqual([]);
+    expect(reconciler.run).toEqual([]);
+    expect(reconciler.recovered).toEqual([]);
+    expect((await db.pendingOps.get('op-1'))?.status).toBe('QUEUED');
+
+    // Capture is deliberately not part of the switch: the journal keeps
+    // describing the browser, so switching back on drains what accumulated the
+    // same way an offline device does when it reconnects.
+    await db.bindings.update(bindingId, { state: 'active', appliedRevision: 1, receivedRevision: 1 });
+    await loop.dispatch(created('b-9', 'Made while off'));
+    const queued = await db.pendingOps.filter((o) => o.status === 'QUEUED').toArray();
+    expect(queued.map((o) => o.title).sort()).toEqual(['Made while off', 'Queued before off']);
+  });
 });
 
 describe('event capture feeding the loop', () => {

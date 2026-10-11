@@ -15,7 +15,7 @@ let applier: RemoteChangeApplier;
 
 const bindingId = 'binding-1';
 
-async function seedBinding(): Promise<BindingRecord> {
+async function seedBinding(over: Partial<BindingRecord> = {}): Promise<BindingRecord> {
   const binding: BindingRecord = {
     id: bindingId,
     spaceId: 'space-1',
@@ -30,6 +30,7 @@ async function seedBinding(): Promise<BindingRecord> {
     lastSyncAt: null,
     recovery: null,
     createdAt: Date.now(),
+    ...over,
   };
   await db.bindings.put(binding);
   return binding;
@@ -293,5 +294,45 @@ describe('SyncCoordinator', () => {
 
     // The next trigger is not stuck behind the dead holder's stale window.
     await expect(acquireRunLock(db, bindingId, 'fresh-worker')).resolves.toBe('fresh-worker');
+  });
+
+  it('spends no round on a binding the user switched off, and resumes on it', async () => {
+    adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
+    await seedBinding({ enabled: false });
+    // Work is waiting: an off switch has to be what stops the round, not the
+    // absence of anything to send.
+    await db.pendingOps.add({
+      opId: 'op-1',
+      bindingId,
+      clientSeq: 1,
+      baseRevision: 100,
+      status: 'QUEUED',
+      type: 'create',
+      nodeId: '',
+      nodeType: 'bookmark',
+      title: 'While Off',
+      url: 'https://off.example',
+      parent: { type: 'root', key: 'main' },
+      beforeId: null,
+      browserId: 'b1',
+      createdAt: Date.now(),
+    });
+
+    const seen: string[] = [];
+    const transport: SyncTransport = {
+      sync: async (id) => {
+        seen.push(id);
+        return response({});
+      },
+    };
+    const coordinator = new SyncCoordinator(db, applier, transport);
+
+    await coordinator.syncAll();
+    expect(seen).toEqual([]);
+
+    const row = await db.bindings.get(bindingId);
+    await db.bindings.put({ ...row!, enabled: true });
+    await coordinator.syncAll();
+    expect(seen).toEqual([bindingId]);
   });
 });

@@ -14,7 +14,9 @@
 }
 
 .pontis-popup {
-  width: 320px;
+  /* The body carries the popup's width; filling it is what stops a strip of
+     unused background appearing beside the cards. */
+  width: 100%;
   background: var(--mantine-color-coolGray-0);
 }
 

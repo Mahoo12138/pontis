@@ -10,7 +10,7 @@
 import { integrityCheck, type IntegrityResult } from './integrity';
 import { EventProcessor } from './eventProcessor';
 import type { BrowserAdapter, BrowserEvent } from '../browser/types';
-import { logDiagnostic, type PontisDB } from '../store/db';
+import { isSyncEnabled, logDiagnostic, type PontisDB } from '../store/db';
 import type { ReplicaVerifier } from './verifyReplica';
 import type { ResyncService } from './resync';
 import type { SyncCoordinator } from './syncCoordinator';
@@ -64,6 +64,7 @@ export class WorkerLoop {
         .anyOf(['pending_initial', 'initializing'])
         .toArray();
       for (const b of pending) {
+        if (!isSyncEnabled(b)) continue;
         try {
           await reconciler.runBinding(b.id);
         } catch (err) {
@@ -78,6 +79,7 @@ export class WorkerLoop {
 
       const stuck = await db.bindings.where('state').equals('needs_recovery').toArray();
       for (const b of stuck) {
+        if (!isSyncEnabled(b)) continue;
         try {
           await resync.attemptRecovery(b.id);
         } catch (err) {
@@ -97,6 +99,9 @@ export class WorkerLoop {
     const { db } = this.deps;
     const actives = await db.bindings.where('state').equals('active').toArray();
     for (const b of actives) {
+      // Off means off: no scan, no repair, nothing handed to the server. The
+      // switch-back runs the same scan explicitly.
+      if (!isSyncEnabled(b)) continue;
       try {
         await this.integrityFor(b.id);
       } catch (err) {
