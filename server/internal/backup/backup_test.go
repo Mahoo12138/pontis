@@ -19,6 +19,10 @@ type fakeTrees struct {
 	spaces map[canonical.SpaceID]canonical.SyncSpace
 	nodes  map[canonical.SpaceID][]canonical.Node
 	slots  map[canonical.SpaceID][]canonical.RootSlot
+	// How many times a capture has asked for the tree. One per capture is the
+	// point: three separate reads is what let a concurrent commit tear the
+	// snapshot apart.
+	snapshots int
 }
 
 func newFakeTrees() *fakeTrees {
@@ -46,20 +50,15 @@ func (f *fakeTrees) add(spaceID canonical.SpaceID, name, title string) {
 	}}
 }
 
-func (f *fakeTrees) Space(_ context.Context, id canonical.SpaceID) (canonical.SyncSpace, error) {
-	sp, ok := f.spaces[id]
+func (f *fakeTrees) SnapshotTree(_ context.Context, space canonical.SpaceID) (
+	canonical.SyncSpace, []canonical.Node, []canonical.RootSlot, error,
+) {
+	f.snapshots++
+	sp, ok := f.spaces[space]
 	if !ok {
-		return canonical.SyncSpace{}, canonical.ErrSpaceNotFound
+		return canonical.SyncSpace{}, nil, nil, canonical.ErrSpaceNotFound
 	}
-	return sp, nil
-}
-
-func (f *fakeTrees) ListNodes(_ context.Context, space canonical.SpaceID) ([]canonical.Node, error) {
-	return f.nodes[space], nil
-}
-
-func (f *fakeTrees) ListRootSlots(_ context.Context, space canonical.SpaceID) ([]canonical.RootSlot, error) {
-	return f.slots[space], nil
+	return sp, f.nodes[space], f.slots[space], nil
 }
 
 type fakeStore struct {

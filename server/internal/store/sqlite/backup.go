@@ -45,6 +45,17 @@ func (s *BackupStore) Insert(ctx context.Context, b backup.Backup) error {
 	return err
 }
 
+// CountUnlocated reports catalog rows whose payload cannot be located: rows
+// written before the storage key existed carry only a display filename, and
+// two spaces named "Personal" share one. They are refused at restore time, but
+// an operator should learn about them from the log rather than by clicking.
+func (s *BackupStore) CountUnlocated(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM space_backups WHERE storage_key = ''`).Scan(&n)
+	return n, err
+}
+
 // List returns the space's catalog rows.
 func (s *BackupStore) List(ctx context.Context, spaceID string) ([]backup.Backup, error) {
 	rows, err := s.db.QueryContext(ctx, `

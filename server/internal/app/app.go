@@ -69,10 +69,21 @@ func Run(ctx context.Context, cfg config.Config) error {
 	libraryStore := sqlite.NewLibraryStore(db)
 	canonicalStore := sqlite.NewStore(db)
 	changesetSvc := changeset.NewService(sqlite.NewChangeSetStore(db))
-	backupSvc, err := backup.NewService(sqlite.NewBackupStore(db), libraryStore,
+	backupStore := sqlite.NewBackupStore(db)
+	backupSvc, err := backup.NewService(backupStore, libraryStore,
 		filepath.Join(cfg.DataDir, "backups"))
 	if err != nil {
 		return err
+	}
+	// Rows written before a backup got its own opaque storage key carry only a
+	// display filename, which two spaces with the same name share. Restore
+	// refuses them rather than guessing an owner; an operator should hear that
+	// from the log, not from the one click that was meant to recover a tree.
+	if n, err := backupStore.CountUnlocated(ctx); err != nil {
+		logger.Warn("could not audit the backup catalog", "err", err)
+	} else if n > 0 {
+		logger.Warn("backup catalog holds rows whose payload cannot be located; take a new backup before restoring",
+			"count", n)
 	}
 	allow, err := organizer.ParseAllowlist(cfg.LinkCheckAllow)
 	if err != nil {

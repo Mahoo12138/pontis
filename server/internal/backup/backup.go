@@ -178,11 +178,14 @@ type NodeDTO struct {
 	UpdatedAt string  `json:"updated_at"`
 }
 
-// TreeSource reads the canonical tree for capture.
+// TreeSource reads the canonical tree for capture. One method on purpose: a
+// capture that took the space, the nodes and the slots in three reads could
+// straddle a concurrent commit and write a payload describing a tree that
+// never existed — the kind whose child has no parent, which restore then
+// refuses. The snapshot is taken at one instant or not at all.
 type TreeSource interface {
-	Space(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error)
-	ListNodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error)
-	ListRootSlots(ctx context.Context, space canonical.SpaceID) ([]canonical.RootSlot, error)
+	SnapshotTree(ctx context.Context, space canonical.SpaceID) (
+		canonical.SyncSpace, []canonical.Node, []canonical.RootSlot, error)
 }
 
 // Store is the catalog persistence contract.
@@ -218,15 +221,7 @@ func NewService(store Store, trees TreeSource, dir string) (*Service, error) {
 
 // Create captures the space's current tree.
 func (s *Service) Create(ctx context.Context, spaceID canonical.SpaceID, kind Kind) (Backup, error) {
-	sp, err := s.trees.Space(ctx, spaceID)
-	if err != nil {
-		return Backup{}, err
-	}
-	nodes, err := s.trees.ListNodes(ctx, spaceID)
-	if err != nil {
-		return Backup{}, err
-	}
-	slots, err := s.trees.ListRootSlots(ctx, spaceID)
+	sp, nodes, slots, err := s.trees.SnapshotTree(ctx, spaceID)
 	if err != nil {
 		return Backup{}, err
 	}
@@ -376,6 +371,14 @@ func (s *Service) Restore(ctx context.Context, spaceID canonical.SpaceID, id str
 	raw, err := s.files.Read(b.StorageKey)
 	if err != nil {
 		return 0, "", err
+	}
+	// The catalog row and the file are two objects, and a restore is the one
+	// moment their disagreement becomes someone else's problem. A truncated or
+	// swapped-in payload can still parse as JSON, so the byte count the capture
+	// recorded is checked here, before anything is written.
+	if b.SizeBytes > 0 && int64(len(raw)) != b.SizeBytes {
+		return 0, "", fmt.Errorf("%w: payload is %d bytes, the catalog recorded %d",
+			ErrInvalidPayload, len(raw), b.SizeBytes)
 	}
 	var payload Payload
 	if err := json.Unmarshal(raw, &payload); err != nil {

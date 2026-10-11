@@ -320,3 +320,76 @@ func TestRestoreOfNestedTreeKeepsIdsAndParents(t *testing.T) {
 		}
 	}
 }
+
+// A space with nothing in it is the state right after creating one, and people
+// back it up before they start. An empty payload is also the one case where the
+// restore path has no node to anchor on, so it is tested end to end: back up
+// the empty space, fill it, restore, and the tree must be empty again — with
+// the epoch moved, so devices know they cannot resume on the old journal.
+func TestRestoreOfAnEmptySpaceBackup(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	h := map[string]string{"Authorization": "Bearer " + f.sessionToken}
+	api := f.ts.URL + "/api/v1"
+
+	code, space := doJSON(t, "POST", api+"/spaces", h, map[string]string{"name": "Fresh"})
+	if code != http.StatusCreated {
+		t.Fatalf("create space = %d %v", code, space)
+	}
+	spaceID := space["id"].(string)
+	root := api + "/spaces/" + spaceID
+
+	code, snap := doJSON(t, "POST", root+"/backups", h, map[string]any{})
+	if code != http.StatusCreated {
+		t.Fatalf("backup of an empty space = %d %v", code, snap)
+	}
+	if snap["node_count"].(float64) != 0 {
+		t.Fatalf("empty space backed up %v nodes", snap["node_count"])
+	}
+	backupID := snap["id"].(string)
+
+	// Fill it in, including a child that only exists because of its folder.
+	code, folder := doJSON(t, "POST", root+"/nodes", h, map[string]any{
+		"type": "folder", "title": "Work",
+		"parent": map[string]string{"type": "root", "key": "main"},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("create folder = %d %v", code, folder)
+	}
+	code, bookmark := doJSON(t, "POST", root+"/nodes", h, map[string]any{
+		"type": "bookmark", "title": "Ticket", "url": "https://tracker.example",
+		"parent": map[string]string{"type": "node", "id": folder["id"].(string)},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("create bookmark = %d %v", code, bookmark)
+	}
+
+	code, restored := doJSON(t, "POST", root+"/backups/"+backupID+"/restore", h, map[string]any{})
+	if code != http.StatusOK {
+		t.Fatalf("restore of an empty backup = %d %v", code, restored)
+	}
+
+	code, list := doJSON(t, "GET", root+"/nodes", h, nil)
+	if code != http.StatusOK {
+		t.Fatalf("list after restore = %d %v", code, list)
+	}
+	if n, _ := list["nodes"].([]any); len(n) != 0 {
+		t.Fatalf("tree after restore still holds %d nodes: %v", len(n), n)
+	}
+	if restored["new_epoch"].(float64) != 2 {
+		t.Fatalf("new_epoch = %v, want 2", restored["new_epoch"])
+	}
+
+	// The restore is only usable if the space accepts work afterwards: the
+	// first write after a new baseline is what a resynced device sends.
+	code, again := doJSON(t, "POST", root+"/nodes", h, map[string]any{
+		"type": "bookmark", "title": "After", "url": "https://after.example",
+		"parent": map[string]string{"type": "root", "key": "main"},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("first write after restore = %d %v", code, again)
+	}
+	if again["created_revision"].(float64) != 1 {
+		t.Fatalf("first write after restore landed at revision %v, want 1 on the new baseline",
+			again["created_revision"])
+	}
+}

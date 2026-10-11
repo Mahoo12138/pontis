@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,5 +160,63 @@ func TestRestoreHandsTheStoreParentsBeforeChildren(t *testing.T) {
 	}
 	if len(store.replacedSlots) != 1 || store.replacedSlots[0].Key != "main" {
 		t.Fatalf("root slots = %+v", store.replacedSlots)
+	}
+}
+
+// A capture that read the space, the nodes and the root slots in three
+// statements could be handed the nodes of one moment and the slots of the next
+// — a child still pointing at a root slot that has since been removed. That
+// payload passes through the catalog as "a backup" and only fails when someone
+// asks for the restore, which is the worst time to discover it.
+func TestCaptureTakesTheTreeAsOneSnapshot(t *testing.T) {
+	trees := newFakeTrees()
+	trees.add("space-a", "Personal", "Example")
+	svc, _ := newService(t, newFakeStore(), trees)
+
+	if _, err := svc.Create(context.Background(), "space-a", KindManual); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if trees.snapshots != 1 {
+		t.Fatalf("capture took %d tree reads, want exactly one snapshot", trees.snapshots)
+	}
+}
+
+// The catalog row and the payload file are two objects written without a shared
+// transaction, so a restore is where their disagreement has to be caught: a
+// truncated or swapped-in file can still be a valid payload of a *different*
+// size, and writing the live tree from it would be silent data loss.
+func TestRestoreRefusesAPayloadThatDisagreesWithItsCatalogRow(t *testing.T) {
+	store := newFakeStore()
+	svc, dir := newService(t, store, newFakeTrees())
+	ctx := context.Background()
+
+	payload := payloadOf([]NodeDTO{
+		{ID: "b", Type: "bookmark", Title: "B", URL: strRef("https://b"), RootKey: strRef("main")},
+	})
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	key := "truncated.json"
+	if err := os.WriteFile(filepath.Join(dir, key), raw, 0o644); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	if err := store.Insert(ctx, Backup{
+		ID: "b1", SpaceID: string(restoreSpace), Kind: KindManual,
+		Filename: key, StorageKey: key, SizeBytes: int64(len(raw)) + 40,
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	_, _, err = svc.Restore(ctx, restoreSpace, "b1")
+	if !errors.Is(err, ErrInvalidPayload) {
+		t.Fatalf("restore of a size-disagreeing payload = %v, want ErrInvalidPayload", err)
+	}
+	if !strings.Contains(err.Error(), "the catalog recorded") {
+		t.Fatalf("error should name both sizes, got %q", err)
+	}
+	if store.replacedWith != nil {
+		t.Fatalf("restore wrote %d nodes despite the mismatch", len(store.replacedWith))
 	}
 }

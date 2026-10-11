@@ -16,11 +16,15 @@ import (
 	"pontis/internal/changeset"
 )
 
-// TreeSource reads the canonical tree.
+// TreeSource reads the canonical tree. The whole export comes from one
+// snapshot: a file whose folder list and node list were read across somebody
+// else's commit describes a tree that never existed, and re-importing it is
+// then not the round trip it claims to be.
 type TreeSource interface {
+	// Space is the single read the staleness check needs.
 	Space(ctx context.Context, id canonical.SpaceID) (canonical.SyncSpace, error)
-	ListNodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error)
-	ListRootSlots(ctx context.Context, space canonical.SpaceID) ([]canonical.RootSlot, error)
+	SnapshotTree(ctx context.Context, space canonical.SpaceID) (
+		canonical.SyncSpace, []canonical.Node, []canonical.RootSlot, error)
 }
 
 // Writer supplies canonical transactions for import applies.
@@ -95,15 +99,7 @@ func NewService(trees TreeSource, writer Writer, changesets *changeset.Service) 
 
 // Export renders the space (or one root slot) in the requested format.
 func (s *Service) Export(ctx context.Context, space canonical.SpaceID, format Format, rootKey string) (filename, contentType, content string, err error) {
-	sp, err := s.trees.Space(ctx, space)
-	if err != nil {
-		return "", "", "", err
-	}
-	nodes, err := s.trees.ListNodes(ctx, space)
-	if err != nil {
-		return "", "", "", err
-	}
-	slots, err := s.trees.ListRootSlots(ctx, space)
+	sp, nodes, slots, err := s.trees.SnapshotTree(ctx, space)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -224,11 +220,11 @@ func (s *Service) Preview(ctx context.Context, space canonical.SpaceID, format F
 	if err != nil {
 		return nil, err
 	}
-	sp, err := s.trees.Space(ctx, space)
-	if err != nil {
-		return nil, err
-	}
-	nodes, err := s.trees.ListNodes(ctx, space)
+	// One snapshot: the plan records the revision it binds to *and* the tree it
+	// matched against, and those two have to describe the same instant. A plan
+	// stamped at R that holds R+1's nodes would pass the staleness check at
+	// head R+1 and apply onto a tree it never saw.
+	sp, nodes, _, err := s.trees.SnapshotTree(ctx, space)
 	if err != nil {
 		return nil, err
 	}

@@ -69,3 +69,45 @@ func TestBackupCatalogRoundTripsStorageKey(t *testing.T) {
 		t.Fatalf("legacy row = %+v, err %v", loaded, err)
 	}
 }
+
+// The startup audit has to count exactly the rows a restore will refuse: keyed
+// rows are locatable whatever their names look like, unkeyed ones are not.
+func TestCountUnlocatedBackups(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO sync_spaces (id, owner_user_id, name, epoch, current_revision, journal_floor_revision, created_at, updated_at)
+		VALUES ('space-1', 'user-1', 'Personal', 1, 0, 0, ?, ?)`,
+		time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("seed space: %v", err)
+	}
+
+	store := NewBackupStore(db)
+	now := time.Now().UTC()
+	if err := store.Insert(ctx, backup.Backup{
+		ID: "keyed", SpaceID: "space-1", Kind: backup.KindManual,
+		Filename: "Personal-20240101-101010-manual.json", StorageKey: "01keyed.json",
+		SizeBytes: 20, CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("insert keyed: %v", err)
+	}
+	for _, id := range []string{"legacy-1", "legacy-2"} {
+		if err := store.Insert(ctx, backup.Backup{
+			ID: id, SpaceID: "space-1", Kind: backup.KindManual,
+			Filename: "Personal-20240101-101010-manual.json", CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+
+	n, err := store.CountUnlocated(ctx)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("unlocated rows = %d, want the 2 legacy ones", n)
+	}
+}

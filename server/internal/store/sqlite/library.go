@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"pontis/internal/canonical"
@@ -30,7 +31,15 @@ func (s *LibraryStore) GetSpace(ctx context.Context, id canonical.SpaceID) (cano
 
 // ListNodes returns every node of the space; the explorer builds the tree.
 func (s *LibraryStore) ListNodes(ctx context.Context, space canonical.SpaceID) ([]canonical.Node, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return listNodes(ctx, s.db, space)
+}
+
+// listNodes reads from anything that can run a query, so a snapshot can share
+// the exact same statement instead of keeping a second copy of it.
+func listNodes(ctx context.Context, q interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}, space canonical.SpaceID) ([]canonical.Node, error) {
+	rows, err := q.QueryContext(ctx, `
 		SELECT space_id, id, type, title, url, parent_id, root_key, position,
 		       created_revision, title_revision, url_revision, structure_revision,
 		       created_at, updated_at
@@ -64,7 +73,13 @@ func (s *LibraryStore) GetNode(ctx context.Context, space canonical.SpaceID, id 
 
 // ListRootSlots returns the space's root slots ordered by position.
 func (s *LibraryStore) ListRootSlots(ctx context.Context, space canonical.SpaceID) ([]canonical.RootSlot, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return listRootSlots(ctx, s.db, space)
+}
+
+func listRootSlots(ctx context.Context, q interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}, space canonical.SpaceID) ([]canonical.RootSlot, error) {
+	rows, err := q.QueryContext(ctx, `
 		SELECT space_id, key, display_name, position, created_at
 		FROM root_slots WHERE space_id = ?
 		ORDER BY position, key`, string(space))
@@ -84,6 +99,45 @@ func (s *LibraryStore) ListRootSlots(ctx context.Context, space canonical.SpaceI
 		out = append(out, slot)
 	}
 	return out, rows.Err()
+}
+
+// SnapshotTree reads a space, its nodes and its root slots as they stood at
+// one instant.
+//
+// The three statements of a plain read can straddle another request's commit,
+// and the tree they then describe never existed at any moment: a folder from
+// before the commit, its child from after it, or a node counted twice because
+// the space row moved. For an explorer listing that is invisible; for a backup
+// or an export it is the artifact — a payload whose child has no parent is
+// exactly what the restore validator refuses, so the capture silently produces
+// a file that cannot be restored (doc 10 §5).
+func (s *LibraryStore) SnapshotTree(ctx context.Context, space canonical.SpaceID) (
+	canonical.SyncSpace, []canonical.Node, []canonical.RootSlot, error,
+) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return canonical.SyncSpace{}, nil, nil, fmt.Errorf("begin tree snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	sp, err := scanSpace(tx.QueryRowContext(ctx, `
+		SELECT id, owner_user_id, name, epoch, current_revision, journal_floor_revision, created_at, updated_at
+		FROM sync_spaces WHERE id = ?`, string(space)))
+	if err != nil {
+		return canonical.SyncSpace{}, nil, nil, err
+	}
+	nodes, err := listNodes(ctx, tx, space)
+	if err != nil {
+		return canonical.SyncSpace{}, nil, nil, err
+	}
+	slots, err := listRootSlots(ctx, tx, space)
+	if err != nil {
+		return canonical.SyncSpace{}, nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return canonical.SyncSpace{}, nil, nil, err
+	}
+	return sp, nodes, slots, nil
 }
 
 // ListChangeSets returns the space's ChangeSets (activity history, doc 15)
