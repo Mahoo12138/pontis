@@ -11,10 +11,13 @@ import { describe, expect, it } from 'vitest';
 import {
   checkActivityList,
   checkAdminUserList,
+  checkAcknowledged,
   checkApiTokenList,
   checkApplyPublication,
   checkBackupList,
   checkBindingList,
+  checkCreateToken,
+  checkJobAccepted,
   checkDeviceOverviewResponse,
   checkDuplicates,
   checkErrorEnvelope,
@@ -23,16 +26,22 @@ import {
   checkImportPlan,
   checkJobList,
   checkLinkCheckResults,
+  checkLogin,
   checkMeta,
   checkNodeList,
   checkPublicationDetail,
   checkPublicationList,
+  checkRegisterDevice,
   checkResetLink,
+  checkRestoreBackup,
   checkRootSlotList,
+  checkRunNow,
   checkScheduleList,
   checkSpaceList,
+  checkSystemSettingsResponse,
   checkTaskList,
   checkTransferResponse,
+  checkUndoActivity,
   checkUser,
 } from '../src/contract';
 import { ContractViolation } from '../src/validate';
@@ -45,22 +54,30 @@ import type {
   ApplyPublicationResponse,
   BackupListResponse,
   BindingListResponse,
+  CreateTokenResponse,
   DeviceOverviewResponse,
   DuplicatesResponse,
   ExportResponse,
   ImportApplyResponse,
   ImportPlan,
   JobListResponse,
+  JobStatus,
+  JobType,
+  LoginResponse,
   LinkCheckResultsResponse,
   MetaResponse,
   Node,
   NodeListResponse,
+  RegisterDeviceResponse,
+  RestoreBackupResponse,
   PublicationDetail,
   PublicationListResponse,
   RootSlotListResponse,
   SpaceListResponse,
+  SystemSettingsResponse,
   TaskListResponse,
   TransferResponse,
+  UndoActivityResult,
   User,
 } from '../src/types';
 
@@ -103,6 +120,24 @@ const contract = {
   'import-preview': (v: unknown): ImportPlan => checkImportPlan(v, 'body'),
   'import-apply': (v: unknown): ImportApplyResponse => checkImportApply(v, 'body'),
   export: (v: unknown): ExportResponse => checkExport(v, 'body'),
+
+  // One-shot answers: each is what a client reads exactly once.
+  login: (v: unknown): LoginResponse => checkLogin(v, 'body'),
+  'profile-updated': (v: unknown): User => checkUser(v, 'body'),
+  settings: (v: unknown): SystemSettingsResponse => checkSystemSettingsResponse(v, 'body'),
+  'settings-updated': (v: unknown): SystemSettingsResponse =>
+    checkSystemSettingsResponse(v, 'body'),
+  'device-register': (v: unknown): RegisterDeviceResponse => checkRegisterDevice(v, 'body'),
+  'token-create': (v: unknown): CreateTokenResponse => checkCreateToken(v, 'body'),
+  undo: (v: unknown): UndoActivityResult => checkUndoActivity(v, 'body'),
+  'schedule-run-now': (v: unknown): { id: string; status: JobStatus } => checkRunNow(v, 'body'),
+  'job-enqueue': (v: unknown): { id: string; type: JobType; status: JobStatus } =>
+    checkJobAccepted(v, 'body'),
+  'job-cancel': (v: unknown): { status: string } => checkAcknowledged(v, 'body'),
+  'admin-job-cancel': (v: unknown): { status: string } => checkAcknowledged(v, 'body'),
+  logout: (v: unknown): { status: string } => checkAcknowledged(v, 'body'),
+  'password-reset': (v: unknown): { status: string } => checkAcknowledged(v, 'body'),
+  'backup-restore': (v: unknown): RestoreBackupResponse => checkRestoreBackup(v, 'body'),
 } as const;
 
 describe('golden REST bodies satisfy the client contract', () => {
@@ -228,5 +263,41 @@ describe('the contract checks are not decorative', () => {
       return;
     }
     throw new Error('expected a contract violation');
+  });
+
+  it('pins instance settings as the text the store really holds', () => {
+    // The key/value column means a session lifetime arrives as "24", not 24.
+    // Saying so here is what keeps `session_ttl_hours * 3600` from quietly
+    // becoming string repetition in a client that trusted the old declaration.
+    const settings = load('settings') as SystemSettingsResponse;
+    expect(settings.settings.session_ttl_hours).toBe('24');
+    expect(() =>
+      checkSystemSettingsResponse(
+        { settings: { ...settings.settings, session_ttl_hours: 24 } },
+        'body',
+      ),
+    ).toThrow(/body\.settings\.session_ttl_hours.*expected a string, received 24/);
+  });
+
+  it('refuses a login that carries no user', () => {
+    const body = load('login') as Record<string, unknown>;
+    delete body.user;
+    expect(() => checkLogin(body, 'body')).toThrow(
+      /body\.user.*expected an object, received undefined/,
+    );
+  });
+
+  it('keeps an undo status inside the four the page can render', () => {
+    const body = load('undo') as Record<string, unknown>;
+    body.status = 'reverted';
+    expect(() => checkUndoActivity(body, 'body')).toThrow(/one of clean \| review_required/);
+  });
+
+  it('requires the epoch a restore says it moved to', () => {
+    const body = load('backup-restore') as Record<string, unknown>;
+    body.new_epoch = '2';
+    expect(() => checkRestoreBackup(body, 'body')).toThrow(
+      /body\.new_epoch.*expected a number, received "2"/,
+    );
   });
 });

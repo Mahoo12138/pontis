@@ -1,5 +1,5 @@
 import { client } from '../client';
-import { checkDeviceOverviewResponse } from '../contract';
+import { checkDeviceOverviewResponse, checkRegisterDevice } from '../contract';
 import type {
   DeviceOverviewResponse,
   RegisterDeviceRequest,
@@ -7,7 +7,7 @@ import type {
 } from '../types';
 
 export function registerDevice(params: RegisterDeviceRequest) {
-  return client.post<RegisterDeviceResponse>('/devices', params);
+  return client.post<RegisterDeviceResponse>('/devices', params, checkRegisterDevice);
 }
 
 export function listDeviceOverview() {

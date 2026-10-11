@@ -1,0 +1,8 @@
+{
+  "settings": {
+    "default_locale": "zh-CN",
+    "max_spaces_per_user": "16",
+    "registration_mode": "closed",
+    "session_ttl_hours": "24"
+  }
+}

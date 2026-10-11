@@ -1,0 +1,11 @@
+{
+  "device": {
+    "browser": "chrome",
+    "client_type": "extension",
+    "created_at": "2026-01-01T00:00:00Z",
+    "id": "id-1",
+    "name": "Chrome@Work",
+    "platform": "linux"
+  },
+  "token": "one-time-secret"
+}

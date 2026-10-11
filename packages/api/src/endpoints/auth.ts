@@ -1,5 +1,5 @@
 import { client } from '../client';
-import { checkUser } from '../contract';
+import { checkAcknowledged, checkLogin, checkUser } from '../contract';
 import type { SetupRequest, LoginRequest, LoginResponse, User } from '../types';
 
 export function setup(params: SetupRequest) {
@@ -7,11 +7,11 @@ export function setup(params: SetupRequest) {
 }
 
 export function login(params: LoginRequest) {
-  return client.post<LoginResponse>('/auth/login', params);
+  return client.post<LoginResponse>('/auth/login', params, checkLogin);
 }
 
 export function logout() {
-  return client.post<{ status: string }>('/auth/logout');
+  return client.post<{ status: string }>('/auth/logout', undefined, checkAcknowledged);
 }
 
 /**
@@ -19,7 +19,7 @@ export function logout() {
  * caller is by definition not logged in, and the token is the credential.
  */
 export function resetPassword(params: { token: string; new_password: string }) {
-  return client.post<{ status: string }>('/auth/reset', params);
+  return client.post<{ status: string }>('/auth/reset', params, checkAcknowledged);
 }
 
 export function getMe() {

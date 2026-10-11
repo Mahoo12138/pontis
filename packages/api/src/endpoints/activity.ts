@@ -1,5 +1,5 @@
 import { client } from '../client';
-import { checkActivityList } from '../contract';
+import { checkActivityList, checkUndoActivity } from '../contract';
 import type { ActivityListResponse, UndoActivityResult } from '../types';
 
 export function listActivity(spaceId: string) {
@@ -12,5 +12,9 @@ export function listActivity(spaceId: string) {
  * (REVIEW_REQUIRED, UNDO_EXPIRED, NOT_UNDOABLE, ALREADY_UNDONE).
  */
 export function undoActivity(spaceId: string, changeSetId: string) {
-  return client.post<UndoActivityResult>(`/spaces/${spaceId}/changesets/${changeSetId}/undo`);
+  return client.post<UndoActivityResult>(
+    `/spaces/${spaceId}/changesets/${changeSetId}/undo`,
+    {},
+    checkUndoActivity,
+  );
 }

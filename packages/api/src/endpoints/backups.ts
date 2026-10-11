@@ -1,5 +1,5 @@
 import { client } from '../client';
-import { checkBackup, checkBackupList } from '../contract';
+import { checkBackup, checkBackupList, checkRestoreBackup } from '../contract';
 import type {
   Backup,
   BackupListResponse,
@@ -15,7 +15,11 @@ export function createBackup(spaceId: string) {
 }
 
 export function restoreBackup(spaceId: string, backupId: string) {
-  return client.post<RestoreBackupResponse>(`/spaces/${spaceId}/backups/${backupId}/restore`, {});
+  return client.post<RestoreBackupResponse>(
+    `/spaces/${spaceId}/backups/${backupId}/restore`,
+    {},
+    checkRestoreBackup,
+  );
 }
 
 export function deleteBackup(spaceId: string, backupId: string) {

@@ -44,7 +44,7 @@ export default function AdminSystemPage() {
         <NativeSelect
           disabled
           w={220}
-          value={String(s?.session_ttl_hours ?? 24)}
+          value={s?.session_ttl_hours ?? '24'}
           data={[
             { value: '12', label: '12 小时' },
             { value: '24', label: '24 小时' },
@@ -60,7 +60,7 @@ export default function AdminSystemPage() {
         <NativeSelect
           disabled
           w={220}
-          value={String(s?.max_spaces_per_user ?? 16)}
+          value={s?.max_spaces_per_user ?? '16'}
           data={['4', '8', '16', '32', '64'].map((v) => ({ value: v, label: `${v} 个` }))}
           onChange={(e) => update.mutate({ max_spaces_per_user: Number(e.currentTarget.value) })}
         />

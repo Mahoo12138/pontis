@@ -21,6 +21,8 @@ import type {
   Binding,
   BindingListResponse,
   BindingHealth,
+  CreateTokenResponse,
+  Device,
   DeviceBindingView,
   DeviceOverview,
   DeviceOverviewResponse,
@@ -41,6 +43,7 @@ import type {
   LinkDeletionResponse,
   LinkDeletionSkip,
   LinkStatusClass,
+  LoginResponse,
   MetaResponse,
   Node,
   NodeMapping,
@@ -51,15 +54,20 @@ import type {
   PublicationNodeDTO,
   PublicationSummary,
   PublicationVisibility,
+  RegisterDeviceResponse,
+  RestoreBackupResponse,
   RootSlot,
   RootSlotListResponse,
   ScheduleKind,
   ScheduleView,
   Space,
   SpaceListResponse,
+  SystemSettings,
+  SystemSettingsResponse,
   TaskJobView,
   TaskListResponse,
   TransferResponse,
+  UndoActivityResult,
   User,
 } from './types';
 import type { ErrorEnvelope } from './errors';
@@ -551,3 +559,75 @@ export const checkAdminUserList: Checker<AdminUserListResponse> = record<AdminUs
 export const checkResetLink: Checker<{ reset_link: string }> = record<{ reset_link: string }>({
   reset_link: str,
 });
+
+// --- one-shot answers ---
+//
+// These are the bodies a client reads exactly once: a login, a credential issued
+// by registration, the job it just queued. They are pinned like every other
+// response, which is why the secrets themselves are normalized in the fixture
+// harness — the contract is that the answer carries the string.
+
+export const checkDevice: Checker<Device> = record<Device>({
+  id: str,
+  name: str,
+  client_type: str,
+  browser: str,
+  platform: str,
+  sync_mode: opt(syncMode),
+  created_at: str,
+});
+
+export const checkLogin: Checker<LoginResponse> = record<LoginResponse>({
+  token: str,
+  expires_at: str,
+  user: checkUser,
+});
+
+export const checkRegisterDevice: Checker<RegisterDeviceResponse> =
+  record<RegisterDeviceResponse>({ device: checkDevice, token: str });
+
+export const checkCreateToken: Checker<CreateTokenResponse> = record<CreateTokenResponse>({
+  token: checkApiToken,
+  secret: str,
+});
+
+// The instance store is key/value text, so the two numeric policies really do
+// come back as "24" and "16"; nothing on the server acts on them yet.
+export const checkSystemSettings: Checker<SystemSettings> = record<SystemSettings>({
+  registration_mode: oneOf('closed', 'open', 'invite'),
+  default_locale: str,
+  session_ttl_hours: str,
+  max_spaces_per_user: str,
+});
+
+export const checkSystemSettingsResponse: Checker<SystemSettingsResponse> =
+  record<SystemSettingsResponse>({ settings: checkSystemSettings });
+
+export const checkUndoActivity: Checker<UndoActivityResult> = record<UndoActivityResult>({
+  status: oneOf('clean', 'review_required', 'not_undoable', 'expired'),
+  // Only the clean path carries an inverse ChangeSet; every other status is
+  // answered as an error envelope instead, so these stay optional here.
+  change_set_id: opt(str),
+  summary: opt(str),
+  reasons: opt(arr(str)),
+});
+
+export const checkRestoreBackup: Checker<RestoreBackupResponse> =
+  record<RestoreBackupResponse>({ safety_backup_id: str, new_epoch: num });
+
+/** The `{status:"ok"}` every acknowledged action answers with. */
+export const checkAcknowledged: Checker<{ status: string }> = record<{ status: string }>({
+  status: str,
+});
+
+/** A job the server has just taken: enqueue, retry and run-now all answer this. */
+export const checkJobAccepted: Checker<{ id: string; type: JobType; status: JobStatus }> =
+  record<{ id: string; type: JobType; status: JobStatus }>({
+    id: str,
+    type: jobIdType,
+    status: jobStatus,
+  });
+
+/** run-now omits `type`; the id is what the caller polls. */
+export const checkRunNow: Checker<{ id: string; status: JobStatus }> =
+  record<{ id: string; status: JobStatus }>({ id: str, status: jobStatus });

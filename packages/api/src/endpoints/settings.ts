@@ -1,12 +1,17 @@
 import { client } from '../client';
-import { checkApiTokenList } from '../contract';
+import {
+  checkAcknowledged,
+  checkApiTokenList,
+  checkCreateToken,
+  checkSystemSettingsResponse,
+  checkUser,
+} from '../contract';
 import type {
-  ApiToken,
   ApiTokenListResponse,
   CreateTokenRequest,
   CreateTokenResponse,
-  SystemSettings,
   SystemSettingsResponse,
+  UpdateSystemSettingsRequest,
   User,
 } from '../types';
 
@@ -14,8 +19,9 @@ export function listTokens() {
   return client.get<ApiTokenListResponse>('/tokens', checkApiTokenList);
 }
 
+// The secret is present exactly once, in this answer; the list never carries it.
 export function createToken(params: CreateTokenRequest) {
-  return client.post<CreateTokenResponse>('/tokens', params);
+  return client.post<CreateTokenResponse>('/tokens', params, checkCreateToken);
 }
 
 export function revokeToken(id: string) {
@@ -23,17 +29,17 @@ export function revokeToken(id: string) {
 }
 
 export function getSystemSettings() {
-  return client.get<SystemSettingsResponse>('/settings');
+  return client.get<SystemSettingsResponse>('/settings', checkSystemSettingsResponse);
 }
 
-export function updateSystemSettings(params: Partial<SystemSettings>) {
-  return client.patch<SystemSettingsResponse>('/settings', params);
+export function updateSystemSettings(params: UpdateSystemSettingsRequest) {
+  return client.patch<SystemSettingsResponse>('/settings', params, checkSystemSettingsResponse);
 }
 
 export function updateProfile(params: { display_name?: string; email?: string }) {
-  return client.patch<User>('/auth/me', params);
+  return client.patch<User>('/auth/me', params, checkUser);
 }
 
 export function changePassword(params: { current_password: string; new_password: string }) {
-  return client.post<{ status: string }>('/auth/password', params);
+  return client.post<{ status: string }>('/auth/password', params, checkAcknowledged);
 }

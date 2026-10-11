@@ -7,7 +7,7 @@ import {
   updateProfile,
   updateSystemSettings,
 } from '@pontis/api/endpoints/settings';
-import type { CreateTokenRequest, SystemSettings } from '@pontis/api';
+import type { CreateTokenRequest, UpdateSystemSettingsRequest } from '@pontis/api';
 
 export function useTokens() {
   return useQuery({
@@ -44,7 +44,7 @@ export function useSystemSettings() {
 export function useUpdateSystemSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (params: Partial<SystemSettings>) => updateSystemSettings(params),
+    mutationFn: (params: UpdateSystemSettingsRequest) => updateSystemSettings(params),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
   });
 }

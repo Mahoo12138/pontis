@@ -1,6 +1,13 @@
 import { client } from '../client';
-import { checkScheduleList, checkScheduleView, checkTaskList } from '../contract';
+import {
+  checkAcknowledged,
+  checkRunNow,
+  checkScheduleList,
+  checkScheduleView,
+  checkTaskList,
+} from '../contract';
 import type {
+  JobStatus,
   ScheduleRequest,
   ScheduleView,
   TaskListResponse,
@@ -31,10 +38,14 @@ export function deleteSchedule(scheduleId: string) {
 
 /** Enqueue an immediate occurrence for a plan schedule. */
 export function runScheduleNow(scheduleId: string) {
-  return client.post<{ id: string; status: string }>(`/schedules/${scheduleId}/run-now`, {});
+  return client.post<{ id: string; status: JobStatus }>(
+    `/schedules/${scheduleId}/run-now`,
+    {},
+    checkRunNow,
+  );
 }
 
 /** Cancel one of the caller's own jobs (doc 13 §4.1). */
 export function cancelMyJob(jobId: string) {
-  return client.post<{ status: string }>(`/jobs/${jobId}/cancel`, {});
+  return client.post<{ status: string }>(`/jobs/${jobId}/cancel`, {}, checkAcknowledged);
 }

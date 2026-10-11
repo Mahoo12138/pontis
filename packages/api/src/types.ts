@@ -534,8 +534,21 @@ export interface CreateTokenResponse {
 export interface SystemSettings {
   registration_mode: 'closed' | 'open' | 'invite';
   default_locale: string;
-  session_ttl_hours: number;
-  max_spaces_per_user: number;
+  /**
+   * Instance settings live in a key/value text column, so the two numeric
+   * policies are stored and returned as `"24"` / `"16"` — while the write side
+   * (UpdateSystemSettingsRequest) takes real numbers. Nothing enforces either
+   * value yet, and the admin page shows them disabled.
+   */
+  session_ttl_hours: string;
+  max_spaces_per_user: string;
+}
+
+export interface UpdateSystemSettingsRequest {
+  registration_mode?: 'closed' | 'open' | 'invite';
+  default_locale?: string;
+  session_ttl_hours?: number;
+  max_spaces_per_user?: number;
 }
 
 export interface SystemSettingsResponse {

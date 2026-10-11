@@ -76,6 +76,7 @@ export type {
   CreateTokenResponse,
   SystemSettings,
   SystemSettingsResponse,
+  UpdateSystemSettingsRequest,
   AdminUserView,
   AdminUserListResponse,
   JobStatus,

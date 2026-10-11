@@ -28,6 +28,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -133,6 +134,10 @@ func TestGoldenRESTFixtures(t *testing.T) {
 	targetSpaceID := restPOST(t, ts, token, "/api/v1/spaces",
 		map[string]string{"name": "Archive"})["id"].(string)
 	userID, _ := restGET(t, ts, token, "/api/v1/auth/me")["id"].(string)
+	// Kept unnormalized on purpose: the link carries the single-use secret the
+	// password reset at the very end of this test consumes.
+	resetLink := restPOST(t, ts, token,
+		"/api/v1/admin/users/"+userID+"/reset-link", map[string]any{})
 	publication := restPOST(t, ts, token, "/api/v1/publications", map[string]any{
 		"space_id": spaceID, "title": "Reading list", "description": "Hand-picked",
 		"tags": []string{"books"}, "visibility": "plaza",
@@ -156,8 +161,7 @@ func TestGoldenRESTFixtures(t *testing.T) {
 
 	fixtures = append(fixtures,
 		restFixture{"admin-users", restGET(t, ts, token, "/api/v1/admin/users")},
-		restFixture{"reset-link", restPOST(t, ts, token,
-			"/api/v1/admin/users/"+userID+"/reset-link", map[string]any{})},
+		restFixture{"reset-link", resetLink},
 		restFixture{"plaza-publications", restGET(t, ts, token, "/api/v1/plaza/publications")},
 		restFixture{"publication-detail", restGET(t, ts, token, "/api/v1/publications/"+publicationID)},
 		// Applied into the space it came from: the merge path answers with the
@@ -182,6 +186,67 @@ func TestGoldenRESTFixtures(t *testing.T) {
 			"transfer_id": "fixture-transfer-1", "target_space_id": targetSpaceID, "node_id": folderID,
 			"target_parent": map[string]string{"type": "root", "key": "main"},
 		})},
+	)
+
+	// The last group is what a client reads from an action that answers once:
+	// a login, a freshly issued device secret, a job it just queued. They run
+	// after everything else because logging out and resetting the password end
+	// the session this whole test rides on.
+	login := restPOST(t, ts, token, "/api/v1/auth/login",
+		map[string]string{"username": "alice", "password": "password123"})
+	scheduleID := restFirstID(t, restGET(t, ts, token, "/api/v1/schedules"), "schedules")
+	runNow := restPOST(t, ts, token, "/api/v1/schedules/"+scheduleID+"/run-now", map[string]any{})
+	runJob, _ := runNow["id"].(string)
+	if runJob == "" {
+		t.Fatalf("run-now returned no job id: %v", runNow)
+	}
+	backupID := restFirstID(t, restGET(t, ts, token,
+		"/api/v1/spaces/"+spaceID+"/backups"), "backups")
+	// A plain create made right here is the one change the undo planner accepts
+	// cleanly — cross-space transfers and imports answer NOT_UNDOABLE — and the
+	// activity list is newest-first, so its first row is that create.
+	restPOST(t, ts, token, "/api/v1/spaces/"+spaceID+"/nodes", map[string]any{
+		"type": "bookmark", "title": "Undo me", "url": "https://undo.example",
+		"parent": map[string]string{"type": "root", "key": "main"},
+	})
+	changeSetID := restFirstID(t, restGET(t, ts, token,
+		"/api/v1/spaces/"+spaceID+"/activity"), "activity")
+	resetToken := restResetToken(t, resetLink)
+
+	fixtures = append(fixtures,
+		restFixture{"login", login},
+		restFixture{"profile-updated", restExpect(t, ts, token, http.StatusOK, http.MethodPatch,
+			"/api/v1/auth/me", map[string]string{
+				"display_name": "Alice Liddell", "email": "alice@liddell.example",
+			})},
+		restFixture{"settings", restGET(t, ts, token, "/api/v1/settings")},
+		restFixture{"settings-updated", restExpect(t, ts, token, http.StatusOK, http.MethodPatch,
+			"/api/v1/settings", map[string]any{"registration_mode": "closed",
+				"default_locale": "zh-CN", "session_ttl_hours": 24, "max_spaces_per_user": 5})},
+		restFixture{"device-register", restPOST(t, ts, token, "/api/v1/devices",
+			map[string]string{"name": "Chrome@Work", "browser": "chrome", "platform": "linux"})},
+		restFixture{"token-create", restPOST(t, ts, token, "/api/v1/tokens", map[string]any{
+			"name": "ci", "scopes": []string{"bookmarks:read"}, "space_scope": "all",
+		})},
+		restFixture{"undo", restPOST(t, ts, token,
+			"/api/v1/spaces/"+spaceID+"/changesets/"+changeSetID+"/undo", map[string]any{})},
+		restFixture{"schedule-run-now", runNow},
+		restFixture{"job-cancel", restPOST(t, ts, token,
+			"/api/v1/jobs/"+runJob+"/cancel", map[string]any{})},
+		// Retry is not captured: with no worker running in this harness, a
+		// cancelled job stays `queued` (cancellation is a request the executor
+		// honours, not a state flip), and only failed/cancelled jobs can be
+		// re-enqueued. Its body is the same three keys the enqueue handler
+		// writes, so `job-enqueue` pins that shape.
+		restFixture{"job-enqueue", restPOST(t, ts, token, "/api/v1/admin/jobs",
+			map[string]string{"type": "organizer.link_check", "space_id": spaceID})},
+		restFixture{"admin-job-cancel", restPOST(t, ts, token,
+			"/api/v1/admin/jobs/"+runJob+"/cancel", map[string]any{})},
+		restFixture{"backup-restore", restPOST(t, ts, token,
+			"/api/v1/spaces/"+spaceID+"/backups/"+backupID+"/restore", map[string]any{})},
+		restFixture{"logout", restPOST(t, ts, token, "/api/v1/auth/logout", map[string]any{})},
+		restFixture{"password-reset", restPOST(t, ts, token, "/api/v1/auth/reset",
+			map[string]string{"token": resetToken, "new_password": "another-password"})},
 	)
 
 	for _, f := range fixtures {
@@ -262,6 +327,35 @@ func restExpect(t *testing.T, ts *httptest.Server, token string, wantStatus int,
 	return out
 }
 
+// restFirstID reads the id of the first row of a list body, which is how the
+// harness reaches a resource it does not create itself (a schedule's job, the
+// backup a restore will read).
+func restFirstID(t *testing.T, body map[string]any, list string) string {
+	t.Helper()
+	rows, _ := body[list].([]any)
+	if len(rows) == 0 {
+		t.Fatalf("fixture list %q is empty: %v", list, body)
+	}
+	row, _ := rows[0].(map[string]any)
+	id, _ := row["id"].(string)
+	if id == "" {
+		t.Fatalf("first %s has no id: %v", list, rows[0])
+	}
+	return id
+}
+
+// restResetToken unwraps the secret out of the admin link, exactly as a person
+// clicking the link would.
+func restResetToken(t *testing.T, link map[string]any) string {
+	t.Helper()
+	full, _ := link["reset_link"].(string)
+	_, token, found := strings.Cut(full, "token=")
+	if !found || token == "" {
+		t.Fatalf("reset link carries no token: %v", link)
+	}
+	return token
+}
+
 var (
 	uuidPattern      = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 	timestampPattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?`)
@@ -290,6 +384,16 @@ func normalizeValue(v any, seen map[string]string) any {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
+			if k == "token" || k == "secret" {
+				// A session token, a device credential and an API token secret
+				// are freshly generated on every call, and only ever shown once.
+				// The contract is that the answer carries the string, not which
+				// string.
+				if _, ok := t[k].(string); ok {
+					t[k] = "one-time-secret"
+					continue
+				}
+			}
 			if k == "size_bytes" {
 				// A backup's size is the size of a payload that embeds
 				// RFC 3339Nano timestamps, and Go trims their trailing zeros,
