@@ -65,12 +65,13 @@ Web 端消费的 REST 响应体（doc 08）。`fixtures/protocol/` 钉住的是
   它写回的三个键与 `job-enqueue` 完全相同，所以形状由后者钉住，客户端
   也用同一个校验器。
 - 写端点的错误分支（409/422 那些）只在 `error-*` 两个通用信封里钉过。
-- `packages/api/src/mock/data/*.json`（`VITE_API_MOCK` 打开时的离线替身）
-  没有对着这批文件校验过，已知与真服务端不一致：例如 mock 里
-  `tokens.json` 的 `space_scope` 是真数组，而服务端发的是一段 JSON
-  字符串。默认配置（`.env` 里 `VITE_API_MOCK=off`）不经过 mock，所以
-  不影响正常联调；一旦有人依赖 mock 模式做离线开发，它应当先进同一道
-  契约检查。
+
+`packages/api/src/mock/`（`VITE_API_MOCK=on` 时的离线外壳）只造 session 与
+`/meta`：它过去附带十个 JSON 当"完整离线数据"，而**没有任何代码读它们**——
+`gapHandlers` 是空的，`allHandlers` 里也只有 auth+meta。那十个文件已经删掉，
+剩下的这点表面由 `test/mock-contract.test.ts` 管着：既过一遍与真服务端同一个
+校验器，也比对键集合与 golden body 一致，免得 mock 少发一个字段、页面却照着
+那个形状写组件。默认（`web/.env` 里 `VITE_API_MOCK=off`）不经过 mock。
 
 ## 这批文件当场抓到的形状错误
 

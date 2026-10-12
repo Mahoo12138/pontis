@@ -1,18 +1,47 @@
 import { http, HttpResponse } from 'msw';
+import type { LoginResponse, MetaResponse, User } from '../types';
 
 const BASE = '/api/v1';
 
 /**
- * No remaining backend gaps: every endpoint the web UI uses is served by
- * the Go server. Keep the module for offline development ('all' mode),
- * where a minimal in-memory auth backs the shell.
+ * The mock's whole surface: a session and an instance description, so the app
+ * can be opened without the Go server. Everything else is served by the real
+ * backend — the `/api` proxy in vite.config, or nothing at all, which is the
+ * honest failure of running this shell against no server.
+ *
+ * These bodies are declared with their contract types and checked against the
+ * same runtime validators the client uses (test/mock-contract.test.ts). A mock
+ * that invents a field, or drops one, is worse than no mock: the screen looks
+ * right and the real server disagrees.
  */
-export const gapHandlers = [];
+export const mockMeta: MetaResponse = {
+  instance_id: 'mock',
+  product_version: '0.1.0',
+  api_version: 'v1',
+  sync_protocol_versions: [1],
+};
 
-/**
- * Handlers for a fully-mocked session ('all' mode): a minimal in-memory
- * auth so the UI can run without the Go server.
- */
+export function mockUser(username: string): User {
+  return {
+    id: 'u001',
+    username,
+    display_name: username,
+    email: `${username}@pontis.local`,
+    role: 'admin',
+    status: 'active',
+    locale: 'zh-CN',
+    created_at: '2026-08-20T08:00:00Z',
+  };
+}
+
+export function mockLogin(username: string, at: number): LoginResponse {
+  return {
+    token: `mock-session-token-${at}`,
+    expires_at: new Date(at + 86_400_000).toISOString(),
+    user: mockUser(username),
+  };
+}
+
 const SESSION_KEY = 'pontis-mock-session';
 
 function loadSession(): { username: string } | null {
@@ -24,39 +53,32 @@ function loadSession(): { username: string } | null {
   }
 }
 
-function saveSession(session: { username: string } | null) {
+function saveSession(session: { username: string } | null): void {
   try {
     if (session) sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
     else sessionStorage.removeItem(SESSION_KEY);
   } catch {
-    // Storage unavailable: session lives for this page only.
+    // Storage unavailable: the session lives for this page only.
   }
 }
 
 let mockSession: { username: string } | null = loadSession();
 
-function mockUser(username: string) {
-  return {
-    id: 'u001', username, display_name: username, email: `${username}@pontis.local`, role: 'admin', status: 'active', locale: 'zh-CN', created_at: '2026-08-20T08:00:00Z',
-  };
-}
-
-export const mockAuthHandlers = [
+export const mockHandlers = [
   http.post(`${BASE}/auth/login`, async ({ request }) => {
     const body = (await request.json()) as { username?: string };
     const username = body.username?.trim() || 'admin';
     mockSession = { username };
     saveSession(mockSession);
-    return HttpResponse.json({
-      token: `mock-session-token-${Date.now()}`,
-      expires_at: new Date(Date.now() + 86400000).toISOString(),
-      user: mockUser(username),
-    });
+    return HttpResponse.json(mockLogin(username, Date.now()));
   }),
 
   http.get(`${BASE}/auth/me`, () => {
     if (!mockSession) {
-      return HttpResponse.json({ error: { code: 'UNAUTHENTICATED', message: 'not logged in', request_id: 'req_mock' } }, { status: 401 });
+      return HttpResponse.json(
+        { error: { code: 'UNAUTHENTICATED', message: 'not logged in', request_id: 'req_mock' } },
+        { status: 401 },
+      );
     }
     return HttpResponse.json(mockUser(mockSession.username));
   }),
@@ -67,7 +89,5 @@ export const mockAuthHandlers = [
     return HttpResponse.json({ status: 'ok' });
   }),
 
-  http.get(`${BASE}/meta`, () => HttpResponse.json({ instance_id: 'mock', product_version: '0.1.0', api_version: 'v1', sync_protocol_versions: [1] })),
+  http.get(`${BASE}/meta`, () => HttpResponse.json(mockMeta)),
 ];
-
-export const allHandlers = [...mockAuthHandlers, ...gapHandlers];

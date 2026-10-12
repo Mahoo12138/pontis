@@ -25,14 +25,13 @@ const queryClient = new QueryClient({
 });
 
 async function bootstrap() {
-  // Start MSW in development. 'all' mocks every endpoint so the web app
-  // runs without the Go backend; 'partial' only mocks gap endpoints.
-  if (import.meta.env.DEV) {
-    const mockMode = import.meta.env.VITE_API_MOCK ?? 'all';
-    if (mockMode !== 'off') {
-      const { startMsw } = await import('@pontis/api/mock/server');
-      await startMsw(mockMode as 'partial' | 'all');
-    }
+  // The MSW shell mocks a session and /meta only; data still comes from the
+  // proxied backend. It has to be asked for by name — a missing VITE_API_MOCK
+  // used to fall through to 'all', which left a developer looking at a logged-in
+  // app whose lists were served by nothing.
+  if (import.meta.env.DEV && import.meta.env.VITE_API_MOCK === 'on') {
+    const { startMsw } = await import('@pontis/api/mock/server');
+    await startMsw();
   }
 
   ReactDOM.createRoot(document.getElementById('root')!).render(
