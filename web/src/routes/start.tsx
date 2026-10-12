@@ -7,6 +7,7 @@ import { useMeta } from '../hooks/use-meta';
 import { useStartPageSnapshot } from '../hooks/use-start-page';
 import StartPageLayout from '../components/start-page/StartPageLayout';
 import BookmarkGrid from '../components/start-page/BookmarkGrid';
+import StartPageSearch from '../components/start-page/StartPageSearch';
 import StartPageSettings from '../components/start-page/StartPageSettings';
 import { buildSourceTree, resolveCurrentFolder } from '../features/start-page/tree';
 import { loadConfig, saveConfig, type StartPageConfig } from '../features/start-page/config';
@@ -238,6 +239,18 @@ export default function StartPage() {
           </Group>
         }
       >
+        {/* The search box is part of the page's shape even before anything is
+            typed: a new tab is opened to look something up, and the box is
+            where that intention goes (§4.3). */}
+        <div className={styles.searchArea}>
+          <StartPageSearch
+            tree={tree}
+            sourceTitle={tree.sourceTitle}
+            spaceId={spaceId}
+            openTarget={config.openTarget}
+            onNavigate={navigate}
+          />
+        </div>
         <BookmarkGrid
           tree={tree}
           folderId={currentFolder ?? tree.sourceId}

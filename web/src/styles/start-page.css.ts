@@ -338,3 +338,87 @@ export const skeleton = style({
   borderRadius: tokens.startPageRadius,
   backgroundColor: tokens.raisedBg,
 });
+
+/* ─── Search ─────────────────────────────────────────────────────────────── */
+
+/** The result list is the only floating layer on this page, so it is the only
+ * thing allowed a shadow (§10). */
+export const searchResults = style({
+  position: 'absolute',
+  top: 'calc(100% + 6px)',
+  left: 0,
+  right: 0,
+  maxHeight: 420,
+  overflowY: 'auto',
+  margin: 0,
+  padding: '4px',
+  listStyle: 'none',
+  border: `1px solid ${tokens.subtleBorder}`,
+  borderRadius: tokens.startPageRadius,
+  backgroundColor: tokens.workspaceBg,
+  boxShadow: '0 4px 16px rgba(16, 24, 40, 0.10)',
+  zIndex: 10,
+});
+
+export const searchWrap = style({
+  position: 'relative',
+  width: '100%',
+  maxWidth: tokens.startPageSearchWidth,
+  '@media': {
+    '(max-width: 720px)': {
+      maxWidth: '100%',
+    },
+  },
+});
+
+export const searchRow = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: '10px',
+  padding: '8px 10px',
+  borderRadius: '6px',
+  border: 'none',
+  width: '100%',
+  background: 'transparent',
+  color: tokens.textPrimary,
+  textAlign: 'left',
+  cursor: 'pointer',
+  selectors: {
+    '&[data-selected="true"]': {
+      backgroundColor: tokens.focusBg,
+    },
+    '&:hover': {
+      backgroundColor: tokens.hoverBg,
+    },
+  },
+});
+
+export const searchRowText = style({
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '2px',
+});
+
+export const searchRowTitle = style({
+  fontSize: '14px',
+  lineHeight: '18px',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+});
+
+export const searchRowPath = style({
+  fontSize: '12px',
+  lineHeight: '16px',
+  color: tokens.textSecondary,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+});
+
+export const searchEmpty = style({
+  padding: '14px 10px',
+  fontSize: '13px',
+  color: tokens.textSecondary,
+});
