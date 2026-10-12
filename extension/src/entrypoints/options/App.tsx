@@ -73,6 +73,18 @@ export function App() {
   const { chrome, db, bootstrap, adapter, pairing } = runtime;
 
   const [tab, setTab] = useState<Tab>(initialTab);
+
+  /** Switch tab and put it in the address.
+   *
+   * The hash is read on load so the guide and the popup can send someone to a
+   * particular tab; without writing it back, the URL kept lying about where
+   * the reader was, and a reload dropped them on 账号管理. replaceState rather
+   * than location.hash so the back button does not walk through tabs the
+   * reader already left. */
+  const selectTab = useCallback((next: Tab) => {
+    setTab(next);
+    window.history.replaceState(null, '', `#${next}`);
+  }, []);
   const [unpairOpen, setUnpairOpen] = useState(false);
   const [paired, setPaired] = useState(false);
   const [serverHost, setServerHost] = useState('');
@@ -336,7 +348,7 @@ export function App() {
           </Alert>
         )}
 
-        <Tabs value={tab} onChange={(v) => setTab((v as typeof tab) ?? 'account')}>
+        <Tabs value={tab} onChange={(v) => selectTab((v as typeof tab) ?? 'account')}>
           <Tabs.List mb="md">
             <Tabs.Tab value="account">
               账号管理

@@ -234,6 +234,9 @@ html[data-mantine-color-scheme='dark'] {
 .pontis-pagePad {
   padding: 16px 24px 32px;
   max-width: 860px;
+  /* These pages fill the browser tab, so an uncentred column leaves a wide
+     band of empty background on the right on a large monitor. */
+  margin-inline: auto;
 }
 
 .pontis-section + .pontis-section {
