@@ -251,3 +251,4 @@ Release 记录 server version、commit、Go version、extension version，便于
 5. 日志只记录错误码、数量、耗时与受控内部标识，不记录搜索词、完整书签 URL 或请求体。
 6. **Server 无法远程收回已落到离线设备上的明文缓存**：本机解除来源或解除配对时立即清理；远程侧的撤销（设备被吊销、账户被禁用、空间被解除绑定）要等设备重新联机并被验证后才生效，文案不得承诺离线设备上的即时远程擦除。
 7. 起始页沿用所需 Server 的 host permission，仅为浏览器默认搜索申请 `search`；不因新页面申请 history、cookies 或注入能力。
+8. 自定义背景图**只留在本机**：本地缩放重编码后写入 IndexedDB，不上传 Server，不进入快照、日志或配置导出；重编码同时抹掉 EXIF。只接受光栅格式，`image/svg+xml` 明确拒绝——SVG 可引用外部资源，一张壁纸就能让起始页静默向第三方发请求。回读时必须重新校验值是 `data:image/…;base64,` 内联图片，才允许进入 `background-image`。
