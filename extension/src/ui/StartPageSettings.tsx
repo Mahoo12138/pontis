@@ -310,7 +310,7 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
           than offering a toggle that would lie (§8.3). */}
       <Text size="sm" c="dimmed">
         {typeof __PONTIS_NEWTAB_BUILD__ !== 'undefined' && __PONTIS_NEWTAB_BUILD__
-          ? '当前安装的是接管版本：新标签页会显示 Pontis 起始页。要恢复浏览器原来的新标签页，停用或卸载本扩展即可；扩展内没有这个开关。'
+          ? '当前安装的是接管版本：新标签页会显示 Pontis 起始页。要恢复浏览器原来的新标签页，停用或卸载本扩展即可；扩展内没有这个开关。若新标签页仍是浏览器原来的样子，多半是浏览器在装入或更新时把它停用了——到扩展管理页点「启用」即可，每次更新后可能需要再点一次。'
           : '当前安装的是标准同步版本，不会接管新标签页。想让新标签页显示 Pontis 起始页，请另行安装「Pontis (起始页)」构建；停用本扩展不会影响浏览器原有的新标签页。'}
       </Text>
 
