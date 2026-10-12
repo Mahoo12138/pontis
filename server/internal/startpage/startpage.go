@@ -1,41 +1,27 @@
-// Package startpage implements the start page's read side: one per-device
-// source grant and the snapshot of exactly one folder subtree
-// (pontis-start-page-v1 §5, §11).
+// Package startpage implements the start page's read side: the snapshot of
+// one folder subtree, for a device that already syncs the space it lives in
+// (pontis-start-page-v1 §11).
 //
 // It is not a replica and carries no write path. Reading a source never
-// creates a sync binding, touches pending operations, or advances a
-// watermark — the grant is a narrower *read* capability than the device's
-// existing sync scope, and it exists so a browser can show one folder of the
-// tree without subscribing to a Space at all (§5.3).
+// creates a binding, touches pending operations, or advances a watermark —
+// the projection is allowed to look at the tree, not to take a position in it
+// (§11.1).
+//
+// Authorization is deliberately *derived*, not stored: a device may read a
+// folder when it already has an active binding for that space, because the
+// sync protocol lets it read that whole space anyway. Naming a folder inside a
+// space you are entitled to is not a widening of scope, so no separate grant
+// object — and no account re-authentication — is needed to pick one. What the
+// projection still enforces is the *shape*: one folder, its descendants only,
+// inside the size the page can honestly render.
 package startpage
 
 import (
 	"context"
 	"errors"
-	"fmt"
-	"time"
-
-	"github.com/google/uuid"
 
 	"pontis/internal/canonical"
 )
-
-// Grant is one device's approved start-page source: whose tree, which folder,
-// as of which version.
-type Grant struct {
-	ID       string
-	DeviceID string
-	UserID   canonical.UserID
-	SpaceID  canonical.SpaceID
-	FolderID canonical.NodeID
-	// Version rises when the grant is re-pointed at another folder. Clients
-	// key their cached snapshot on it, so a moved source can never be served
-	// from the previous source's cache (§14.1).
-	Version   int64
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	RevokedAt time.Time
-}
 
 // Subtree is one consistent read of a source folder and everything below it.
 type Subtree struct {
@@ -56,31 +42,17 @@ const (
 	MaxSnapshotBytes = 8 << 20
 )
 
-// Errors. A grant, device or space that belongs to someone else reports the
-// same way as one that does not exist: resource ids are not capabilities and
-// the API must not confirm which of the two a guesser struck (§13.3).
+// Errors. A space the device does not sync and a space that does not exist
+// answer alike: the first says something about the account's binding layout
+// that the caller has no business probing for (§13.3).
 var (
-	ErrDeviceNotFound = errors.New("startpage: device not found")
-	ErrSpaceNotFound  = errors.New("startpage: space not found")
-	ErrGrantNotFound  = errors.New("startpage: grant not found")
-	ErrNotConfigured  = errors.New("startpage: no source configured")
-	// ErrSourceUnavailable covers a source that is gone, is no longer a
-	// folder, or no longer belongs to the granting account. There is no
-	// fallback to the whole Space behind it (§5.2).
+	ErrSpaceNotSynced = errors.New("startpage: this device does not sync that space")
+	// ErrSourceUnavailable covers a folder that is gone, is not a folder, or
+	// sits outside every space the device may read. There is no fallback to
+	// the whole Space behind it (§5.2).
 	ErrSourceUnavailable = errors.New("startpage: source folder unavailable")
 	ErrSourceTooLarge    = errors.New("startpage: source subtree exceeds the read budget")
 )
-
-// GrantStore persists source grants and the device lookups Authorize needs.
-type GrantStore interface {
-	InsertGrant(ctx context.Context, g Grant) error
-	RepointGrant(ctx context.Context, id string, space canonical.SpaceID, folder canonical.NodeID, at time.Time) error
-	RevokeGrant(ctx context.Context, id string, at time.Time) error
-	GetGrant(ctx context.Context, id string) (Grant, error)
-	ActiveGrant(ctx context.Context, deviceID string) (Grant, error)
-	ListGrants(ctx context.Context, user canonical.UserID) ([]Grant, error)
-	DeviceOwner(ctx context.Context, deviceID string) (canonical.UserID, error)
-}
 
 // TreeStore reads the canonical tree the source points into.
 type TreeStore interface {
@@ -89,203 +61,70 @@ type TreeStore interface {
 	Subtree(ctx context.Context, space canonical.SpaceID, folder canonical.NodeID, budget int) (Subtree, error)
 }
 
-// Service implements the start page's read authorization and snapshot reads.
+// SpaceAccess reports whether one device may read one space with its own
+// credential. It is answered from the device's binding, so the start page
+// inherits an authorization that already exists instead of minting a second
+// one that could drift from it.
+type SpaceAccess func(ctx context.Context, deviceID string, space canonical.SpaceID) (bool, error)
+
+// Service implements the start page's snapshot reads.
 type Service struct {
-	grants GrantStore
-	tree   TreeStore
+	tree    TreeStore
+	allowed SpaceAccess
 }
 
 // NewService returns a start-page read service.
-func NewService(grants GrantStore, tree TreeStore) *Service {
-	return &Service{grants: grants, tree: tree}
+func NewService(tree TreeStore, allowed SpaceAccess) *Service {
+	return &Service{tree: tree, allowed: allowed}
 }
 
-// Authorize confirms a device's start-page source, or moves it to another
-// folder. Only the device's owner may call it, and only for a folder they
-// themselves own.
+// Snapshot reads the subtree one device asked to display.
 //
-// The credential that gets here is a web session or the short-lived pairing
-// session — never the standing device credential. A device that could mint
-// its own grant could aim it at any folder in the account, which would make
-// the runtime snapshot endpoint as broad as the tree it was meant to narrow
-// (§11.2).
-func (s *Service) Authorize(ctx context.Context, user canonical.UserID, deviceID string,
-	spaceID canonical.SpaceID, folderID canonical.NodeID) (Grant, error) {
-
-	owner, err := s.grants.DeviceOwner(ctx, deviceID)
-	if err != nil {
-		if errors.Is(err, ErrDeviceNotFound) {
-			return Grant{}, ErrDeviceNotFound
-		}
-		return Grant{}, err
-	}
-	if owner != user {
-		return Grant{}, ErrDeviceNotFound
-	}
-	if _, err := s.checkFolder(ctx, user, spaceID, folderID); err != nil {
-		return Grant{}, err
-	}
-
-	now := time.Now().UTC()
-	current, err := s.grants.ActiveGrant(ctx, deviceID)
-	if errors.Is(err, ErrGrantNotFound) {
-		id, err := newGrantID()
-		if err != nil {
-			return Grant{}, err
-		}
-		g := Grant{
-			ID:        id,
-			DeviceID:  deviceID,
-			UserID:    user,
-			SpaceID:   spaceID,
-			FolderID:  folderID,
-			Version:   1,
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-		if err := s.grants.InsertGrant(ctx, g); err != nil {
-			return Grant{}, err
-		}
-		return g, nil
-	}
-	if err != nil {
-		return Grant{}, err
-	}
-	if current.SpaceID == spaceID && current.FolderID == folderID {
-		// Re-asserting the same source is not a change: a client that saves
-		// the form twice must not expire its own cache.
-		return current, nil
-	}
-	if err := s.grants.RepointGrant(ctx, current.ID, spaceID, folderID, now); err != nil {
-		return Grant{}, err
-	}
-	current.SpaceID, current.FolderID, current.UpdatedAt = spaceID, folderID, now
-	current.Version++
-	return current, nil
-}
-
-// Revoke withdraws one grant. The device keeps syncing whatever it was
-// already bound to — dropping the start-page source is not unbinding the
-// Space (§5.3).
-func (s *Service) Revoke(ctx context.Context, user canonical.UserID, grantID string) error {
-	g, err := s.grants.GetGrant(ctx, grantID)
-	if err != nil {
-		if errors.Is(err, ErrGrantNotFound) {
-			return ErrGrantNotFound
-		}
-		return err
-	}
-	if g.UserID != user || !g.RevokedAt.IsZero() {
-		return ErrGrantNotFound
-	}
-	return s.grants.RevokeGrant(ctx, grantID, time.Now().UTC())
-}
-
-// ActiveGrant returns a device's current source, or ErrNotConfigured.
-func (s *Service) ActiveGrant(ctx context.Context, deviceID string) (Grant, error) {
-	g, err := s.grants.ActiveGrant(ctx, deviceID)
-	if errors.Is(err, ErrGrantNotFound) {
-		return Grant{}, ErrNotConfigured
-	}
-	return g, err
-}
-
-// Source loads the space and folder a grant points at, without reading
-// anything below it. A client checking whether its cached source is still
-// alive asks that question, and the answer should not cost a subtree.
-func (s *Service) Source(ctx context.Context, g Grant) (canonical.SyncSpace, canonical.Node, error) {
-	sp, err := s.tree.Space(ctx, g.SpaceID)
-	if err != nil {
-		if errors.Is(err, canonical.ErrSpaceNotFound) {
-			return canonical.SyncSpace{}, canonical.Node{}, ErrSourceUnavailable
-		}
-		return canonical.SyncSpace{}, canonical.Node{}, err
-	}
-	// A space that has changed hands is not this grant's space any more: the
-	// folder id may still resolve, but it resolves to somebody else's tree.
-	if sp.OwnerUserID != g.UserID {
-		return canonical.SyncSpace{}, canonical.Node{}, ErrSourceUnavailable
-	}
-	node, err := s.tree.Node(ctx, g.SpaceID, g.FolderID)
-	if err != nil {
-		if errors.Is(err, canonical.ErrNodeNotFound) {
-			return canonical.SyncSpace{}, canonical.Node{}, ErrSourceUnavailable
-		}
-		return canonical.SyncSpace{}, canonical.Node{}, err
-	}
-	if node.Type != canonical.NodeTypeFolder {
-		return canonical.SyncSpace{}, canonical.Node{}, ErrSourceUnavailable
-	}
-	return sp, node, nil
-}
-
-// ListGrants returns the account's live grants.
-func (s *Service) ListGrants(ctx context.Context, user canonical.UserID) ([]Grant, error) {
-	all, err := s.grants.ListGrants(ctx, user)
-	if err != nil {
-		return nil, err
-	}
-	out := all[:0]
-	for _, g := range all {
-		if g.RevokedAt.IsZero() {
-			out = append(out, g)
-		}
-	}
-	return out, nil
-}
-
-// GrantSnapshot reads the source subtree one grant points at. The grant is
-// revalidated on every read: a folder deleted since it was approved, or a
-// Space transferred to another account, must stop being served rather than
-// resolve to whatever else shares its name (§5.2).
-func (s *Service) GrantSnapshot(ctx context.Context, g Grant) (Subtree, error) {
-	if _, _, err := s.Source(ctx, g); err != nil {
-		return Subtree{}, err
-	}
-	return s.read(ctx, g.SpaceID, g.FolderID)
-}
-
-// SessionSnapshot reads a source for a signed-in account. The web start page
-// may point at any folder of any space the user owns, so ownership, not a
-// grant, is what bounds this read; a grant is what bounds the device one.
-func (s *Service) SessionSnapshot(ctx context.Context, user canonical.UserID,
+// The folder id arrives from the request, which is safe only because of the
+// binding check that precedes it: everything reachable from here is something
+// the same credential could already pull through /sync. The check that is NOT
+// relaxed is the boundary of the answer — the source's own subtree, never its
+// parents, never another space (§11.3).
+func (s *Service) Snapshot(ctx context.Context, deviceID string,
 	spaceID canonical.SpaceID, folderID canonical.NodeID) (Subtree, error) {
 
-	if _, err := s.checkFolder(ctx, user, spaceID, folderID); err != nil {
+	if s.allowed == nil {
+		return Subtree{}, ErrSpaceNotSynced
+	}
+	allowed, err := s.allowed(ctx, deviceID, spaceID)
+	if err != nil {
 		return Subtree{}, err
 	}
-	return s.read(ctx, spaceID, folderID)
-}
-
-// checkFolder accepts only a real folder node in a space the user owns. A
-// root slot or the space itself is out of scope for V1 (§5.1).
-func (s *Service) checkFolder(ctx context.Context, user canonical.UserID,
-	spaceID canonical.SpaceID, folderID canonical.NodeID) (canonical.Node, error) {
+	if !allowed {
+		return Subtree{}, ErrSpaceNotSynced
+	}
 
 	sp, err := s.tree.Space(ctx, spaceID)
 	if err != nil {
 		if errors.Is(err, canonical.ErrSpaceNotFound) {
-			return canonical.Node{}, ErrSpaceNotFound
+			return Subtree{}, ErrSpaceNotSynced
 		}
-		return canonical.Node{}, err
-	}
-	if sp.OwnerUserID != user {
-		return canonical.Node{}, ErrSpaceNotFound
+		return Subtree{}, err
 	}
 	node, err := s.tree.Node(ctx, spaceID, folderID)
 	if err != nil {
 		if errors.Is(err, canonical.ErrNodeNotFound) {
-			return canonical.Node{}, ErrSourceUnavailable
+			return Subtree{}, ErrSourceUnavailable
 		}
-		return canonical.Node{}, err
+		return Subtree{}, err
 	}
+	// A bookmark, or anything that is not a container, cannot be a source.
+	// The space itself and its root slots are not selectable either: V1 shows
+	// one real folder rather than inventing a second kind of root (§5.1).
 	if node.Type != canonical.NodeTypeFolder {
-		return canonical.Node{}, ErrSourceUnavailable
+		return Subtree{}, ErrSourceUnavailable
 	}
-	return node, nil
+	return s.read(ctx, sp, spaceID, folderID)
 }
 
-func (s *Service) read(ctx context.Context, spaceID canonical.SpaceID, folderID canonical.NodeID) (Subtree, error) {
+func (s *Service) read(ctx context.Context, sp canonical.SyncSpace,
+	spaceID canonical.SpaceID, folderID canonical.NodeID) (Subtree, error) {
+
 	sub, err := s.tree.Subtree(ctx, spaceID, folderID, MaxDescendants)
 	if err != nil {
 		return Subtree{}, err
@@ -299,6 +138,11 @@ func (s *Service) read(ctx context.Context, spaceID canonical.SpaceID, folderID 
 	if snapshotBytes(sub) > MaxSnapshotBytes {
 		return Subtree{}, ErrSourceTooLarge
 	}
+	// The space row was read to decide entitlement; the subtree read carries
+	// its own, from the same transaction as the nodes it describes.
+	if sub.Space.UpdatedAt.IsZero() {
+		sub.Space = sp
+	}
 	return sub, nil
 }
 
@@ -311,14 +155,4 @@ func snapshotBytes(sub Subtree) int {
 		total += len(n.Title) + len(n.URL) + 96
 	}
 	return total
-}
-
-// newGrantID mints a grant identifier. UUIDv7 keeps grants ordered by
-// creation, matching how the rest of the system names its resources.
-func newGrantID() (string, error) {
-	id, err := uuid.NewV7()
-	if err != nil {
-		return "", fmt.Errorf("startpage: new grant id: %w", err)
-	}
-	return id.String(), nil
 }

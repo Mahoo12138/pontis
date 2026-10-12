@@ -5,13 +5,10 @@
 // may advance, and nothing here is accepted as an input to sync (§11.1).
 
 export interface StartPageSourceWire {
-  grant_id: string;
-  device_id: string;
   space_id: string;
   space_name: string;
   folder_id: string;
   folder_title: string;
-  grant_version: number;
 }
 
 export interface StartPageSnapshotNodeWire {
@@ -92,13 +89,10 @@ function wantBoolean(value: unknown, at: string): boolean {
 export function parseStartPageSource(json: unknown): StartPageSourceWire {
   const body = field(json);
   return {
-    grant_id: wantString(body.grant_id, 'source.grant_id'),
-    device_id: wantString(body.device_id, 'source.device_id'),
     space_id: wantString(body.space_id, 'source.space_id'),
     space_name: wantString(body.space_name, 'source.space_name'),
     folder_id: wantString(body.folder_id, 'source.folder_id'),
     folder_title: wantString(body.folder_title, 'source.folder_title'),
-    grant_version: wantNumber(body.grant_version, 'source.grant_version'),
   };
 }
 
@@ -110,6 +104,10 @@ export function parseStartPageSource(json: unknown): StartPageSourceWire {
  * shape, and the two budgets. A body that fails is never written, so the last
  * good snapshot stays in place rather than being replaced by a broken one
  * (§13.3, SP-15).
+ *
+ * The returned source must also be the one that was asked for; the provider
+ * compares it, because a body describing a different folder is not this page's
+ * content whatever else is true of it.
  */
 export function parseStartPageSnapshot(json: unknown): StartPageSnapshotWire {
   const body = field(json);
@@ -184,7 +182,7 @@ export function parseStartPageSnapshot(json: unknown): StartPageSnapshotWire {
 }
 
 /** A folder as the source picker sees it: one row of the account's own tree,
- * read through the session rather than through the device grant. */
+ * read through the device credential that already covers the whole space. */
 export interface StartPageFolderWire {
   id: string;
   title: string;

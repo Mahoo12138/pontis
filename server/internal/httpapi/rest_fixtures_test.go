@@ -67,18 +67,13 @@ func TestGoldenRESTFixtures(t *testing.T) {
 	if deviceToken == "" {
 		t.Fatalf("device registration returned no token: %v", device)
 	}
-	restPOST(t, ts, deviceToken, "/api/v1/device/bindings", map[string]string{"space_id": spaceID})
+	created := restPOST(t, ts, deviceToken, "/api/v1/device/bindings", map[string]string{"space_id": spaceID})
+	// The binding is carried through an initial reconciliation to active, the
+	// same gate /sync's own snapshot read applies. A pending binding has no
+	// reconciled tree yet, and the start page reads nothing from one.
+	initializeBinding(t, ts, map[string]string{"Authorization": "Bearer " + deviceToken},
+		created["id"].(string), emptyBrowserSnapshot())
 
-	// The start page reads one folder the account approved for this device.
-	// "Reading" is the folder the tree above already holds, so the snapshot
-	// fixture shows a source with contents.
-	deviceID, _ := device["device"].(map[string]any)["id"].(string)
-	if deviceID == "" {
-		t.Fatalf("device registration returned no id: %v", device)
-	}
-	restPOST(t, ts, token, "/api/v1/start-page-grants", map[string]string{
-		"device_id": deviceID, "space_id": spaceID, "folder_id": folderID,
-	})
 
 	// space_scope is either "all" or a JSON array of ids, so a single-space
 	// token carries an encoded string, not a nested array. The second token
@@ -123,13 +118,11 @@ func TestGoldenRESTFixtures(t *testing.T) {
 			"/api/v1/spaces/"+spaceID+"/organizer/link-check/results")},
 		{"duplicates", restGET(t, ts, token, "/api/v1/spaces/"+spaceID+"/organizer/duplicates")},
 
-		// Start page (§13.2): the source the device may read, the whole
-		// subtree it resolves to, and the same read as a signed-in account.
-		{"start-page-source", restGET(t, ts, deviceToken, "/api/v1/device/start-page")},
-		{"start-page-snapshot", restGET(t, ts, deviceToken, "/api/v1/device/start-page/snapshot")},
-		{"start-page-grants", restGET(t, ts, token, "/api/v1/start-page-grants")},
-		{"start-page-web-snapshot", restGET(t, ts, token,
-			"/api/v1/start-page/snapshot?space_id="+spaceID+"&folder_id="+folderID)},
+		// Start page (§13.2): the subtree one bound device reads. The source
+		// is named on the request because the binding, not an approval, is
+		// what entitles it.
+		{"start-page-snapshot", restGET(t, ts, deviceToken,
+			"/api/v1/device/start-page/snapshot?space_id="+spaceID+"&folder_id="+folderID)},
 
 		// A space with no nodes is the first-run state, and `nodes` must
 		// still be an array — this is the class of bug that broke the
@@ -208,9 +201,9 @@ func TestGoldenRESTFixtures(t *testing.T) {
 		// A source folder with nothing in it: an empty list and an absent key
 		// are different answers to a page that has to tell "this folder is
 		// empty" from "the read failed".
-		restFixture{"start-page-snapshot-empty", restGET(t, ts, token,
-			"/api/v1/start-page/snapshot?space_id="+targetSpaceID+"&folder_id="+
-				restPOST(t, ts, token, "/api/v1/spaces/"+targetSpaceID+"/nodes", map[string]any{
+		restFixture{"start-page-snapshot-empty", restGET(t, ts, deviceToken,
+			"/api/v1/device/start-page/snapshot?space_id="+spaceID+"&folder_id="+
+				restPOST(t, ts, token, "/api/v1/spaces/"+spaceID+"/nodes", map[string]any{
 					"type": "folder", "title": "Empty source", "url": "",
 					"parent": map[string]string{"type": "root", "key": "main"},
 				})["id"].(string))},

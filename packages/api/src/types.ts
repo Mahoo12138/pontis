@@ -664,29 +664,15 @@ export interface ScheduleRequest {
   enabled?: boolean;
 }
 
-// ─── Start page (pontis-start-page-v1 §12-§13, pinned by fixtures/api) ──────
+// ─── Start page (pontis-start-page-v1 §13, pinned by fixtures/api) ──────────
 
-/** One device's approved source: a space, a folder inside it, and the
- * version of that approval. `grant_*` are empty on a session read, which is
- * bounded by ownership rather than by a grant. */
+/** The source a snapshot describes. The device names it on the request; there
+ * is no approval object behind it, so nothing like a grant id appears here. */
 export interface StartPageSource {
-  grant_id: string;
-  device_id: string;
   space_id: string;
   space_name: string;
   folder_id: string;
   folder_title: string;
-  grant_version: number;
-}
-
-export interface StartPageGrantListResponse {
-  grants: StartPageSource[];
-}
-
-export interface AuthorizeStartPageGrantRequest {
-  device_id: string;
-  space_id: string;
-  folder_id: string;
 }
 
 /** A node inside the source subtree. The source folder itself is not among

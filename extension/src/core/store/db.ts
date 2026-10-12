@@ -321,6 +321,7 @@ export class PontisDB extends Dexie {
       // shares a database with the replica because that is where browser-local
       // state already lives, but no table here is read or written by the sync
       // engine, and none of them holds a watermark it may advance (§11.1).
+      // Choosing a source writes here and nowhere else.
       startPageConfigs: 'id, deviceId, [instanceId+deviceId]',
       // deviceId is indexed on its own because releasing a source, clearing
       // one device's cache after a revocation, and unpairing all delete by
@@ -336,6 +337,10 @@ export class PontisDB extends Dexie {
  * Keyed by instance and device rather than by the logged-in user alone: the
  * same account in two browsers is two sources, and a server moved to another
  * origin is not the same server.
+ *
+ * This is the whole record of the source. There is no matching server-side
+ * approval: the folder is displayed because the device already syncs the space
+ * it lives in, so choosing it is a local decision.
  */
 export interface StartPageConfigRecord {
   id: string;
@@ -345,8 +350,6 @@ export interface StartPageConfigRecord {
   userId: string;
   spaceId: string;
   folderId: string;
-  grantId: string;
-  grantVersion: number;
   searchMode: 'web' | 'bookmarks';
   openTarget: 'current-tab' | 'new-tab';
   density: 'standard' | 'compact';
@@ -365,8 +368,6 @@ export interface StartPageSnapshotRecord {
   deviceId: string;
   spaceId: string;
   folderId: string;
-  grantId: string;
-  grantVersion: number;
   epoch: number;
   revision: number;
   etag: string;

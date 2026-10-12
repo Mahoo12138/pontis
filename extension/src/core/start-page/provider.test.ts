@@ -6,7 +6,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PontisDB, type StartPageConfigRecord } from '../store/db';
 import { ApiError, NOT_MODIFIED, type StartPageSnapshotRead } from '../transport/client';
-import type { StartPageSnapshotWire } from './wire';
 import {
   clearStartPage,
   configIdFor,
@@ -16,76 +15,58 @@ import {
   snapshotIdFor,
   type StartPageDeps,
 } from './provider';
+import type { StartPageSnapshotWire } from './wire';
 
 const INSTANCE = 'instance-1';
 const DEVICE = 'dev-1';
 const USER = 'user-1';
+const SPACE = 'space-1';
+const FOLDER = 'folder-1';
 
 let db: PontisDB;
-let deps: StartPageDeps & { snapshot: ReturnType<typeof vi.fn> };
+let deps: StartPageDeps;
 
 beforeEach(async () => {
   db = new PontisDB(`start-page-test-${Math.random().toString(36).slice(2)}`);
   await db.open();
   deps = {
     db,
-    bootstrap: { get: async () => ({ serverUrl: 'http://x', instanceId: INSTANCE, deviceId: DEVICE, deviceToken: 'pdv_x' }) },
-    client: {
-      deviceStartPage: vi.fn(),
-      deviceStartPageSnapshot: vi.fn(),
+    bootstrap: {
+      get: async () => ({ serverUrl: 'http://x', instanceId: INSTANCE, deviceId: DEVICE, deviceToken: 'pdv_x' }),
     },
-    snapshot: vi.fn(),
+    client: { deviceStartPageSnapshot: vi.fn() },
   };
 });
 
-function snapshotWire(over: Partial<StartPageSnapshotWire> = {}): StartPageSnapshotWire {
+function wire(over: Partial<StartPageSnapshotWire> = {}): StartPageSnapshotWire {
   return {
     schema_version: 1,
     instance_id: INSTANCE,
     user_id: USER,
-    source: {
-      grant_id: 'grant-1',
-      device_id: DEVICE,
-      space_id: 'space-1',
-      space_name: '个人',
-      folder_id: 'folder-1',
-      folder_title: '日常入口',
-      grant_version: 1,
-    },
-    snapshot: {
-      epoch: 1,
-      revision: 10,
-      captured_at: '2026-10-12T08:00:00Z',
-      complete: true,
-      source_title: '日常入口',
-    },
+    source: { space_id: SPACE, space_name: '个人', folder_id: FOLDER, folder_title: '日常入口' },
+    snapshot: { epoch: 1, revision: 10, captured_at: '2026-10-12T08:00:00Z', complete: true, source_title: '日常入口' },
     nodes: [
-      {
-        id: 'bm-1',
-        type: 'bookmark',
-        parent_id: 'folder-1',
-        title: 'GitHub',
-        url: 'https://github.com/',
-        position: 0,
-        updated_at: '2026-10-12T08:00:00Z',
-      },
+      { id: 'bm-1', type: 'bookmark', parent_id: FOLDER, title: 'GitHub', url: 'https://github.com/', position: 0, updated_at: '2026-10-12T08:00:00Z' },
     ],
     ...over,
   };
 }
 
 function reads(...bodies: (StartPageSnapshotRead | Error)[]) {
-  const fn = vi.fn<StartPageDeps['client']['deviceStartPageSnapshot']>();
+  const fn = vi.fn();
   for (const body of bodies) {
     if (body instanceof Error) fn.mockRejectedValueOnce(body);
     else fn.mockResolvedValueOnce(body);
   }
-  if (!fn.getMockImplementation()) fn.mockResolvedValue({ value: NOT_MODIFIED, etag: '' });
+  // The default answer once the queued ones run out. vi.fn() already has a
+  // no-op implementation, so this has to be set unconditionally rather than
+  // probed for.
+  fn.mockResolvedValue({ value: NOT_MODIFIED, etag: 'W/"new"' });
   deps.client.deviceStartPageSnapshot = fn;
   return fn;
 }
 
-const ok = (wire: StartPageSnapshotWire, etag = 'W/"sp-1"'): StartPageSnapshotRead => ({ value: wire, etag });
+const ok = (body: StartPageSnapshotWire, etag = 'W/"sp-1"'): StartPageSnapshotRead => ({ value: body, etag });
 
 async function seedConfig(over: Partial<StartPageConfigRecord> = {}): Promise<StartPageConfigRecord> {
   const record: StartPageConfigRecord = {
@@ -93,10 +74,8 @@ async function seedConfig(over: Partial<StartPageConfigRecord> = {}): Promise<St
     instanceId: INSTANCE,
     deviceId: DEVICE,
     userId: USER,
-    spaceId: 'space-1',
-    folderId: 'folder-1',
-    grantId: 'grant-1',
-    grantVersion: 1,
+    spaceId: SPACE,
+    folderId: FOLDER,
     searchMode: 'web',
     openTarget: 'current-tab',
     density: 'standard',
@@ -106,6 +85,16 @@ async function seedConfig(over: Partial<StartPageConfigRecord> = {}): Promise<St
   };
   await db.startPageConfigs.put(record);
   return record;
+}
+
+/** Cache the given body under the config's current key and age it, so the next
+ * load is forced to ask rather than trust a fresh copy. */
+async function seedCachedSource(body: StartPageSnapshotWire, verifiedAt = 0) {
+  await saveSource(deps, { spaceId: body.source.space_id, folderId: body.source.folder_id }, body);
+  await db.startPageSnapshots.update(
+    snapshotIdFor(INSTANCE, USER, DEVICE, body.source.space_id, body.source.folder_id),
+    { verifiedAt },
+  );
 }
 
 describe('loadStartPage', () => {
@@ -123,33 +112,32 @@ describe('loadStartPage', () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
+  it('treats a half-filled source as unconfigured', async () => {
+    // A record that names a space but no folder would otherwise ask the
+    // server a question it cannot answer.
+    await seedConfig({ folderId: '' });
+    const fn = reads();
+    expect((await loadStartPage(deps)).phase).toBe('unconfigured');
+    expect(fn).not.toHaveBeenCalled();
+  });
+
   it('renders a fresh local copy without going out at all', async () => {
     await seedConfig();
-    const first = snapshotWire();
-    await saveSource(deps, first.source, first);
-    await db.startPageSnapshots.update(
-      snapshotIdFor(INSTANCE, USER, DEVICE, 'grant-1', 1, 'space-1', 'folder-1'),
-      { verifiedAt: Date.now() },
-    );
+    await seedCachedSource(wire(), Date.now());
     const fn = reads();
 
     const view = await loadStartPage(deps);
     expect(view.phase).toBe('ready');
     expect(view.fromCache).toBe(true);
     expect(view.snapshot?.nodes.map((n) => n.title)).toEqual(['GitHub']);
-    // The point of the cache: the first screen does not wait on a request
-    // that might not land (§14.1).
+    // The point of the cache: the first screen does not wait on a request that
+    // might not land (§14.1).
     expect(fn).not.toHaveBeenCalled();
   });
 
   it('keeps showing the cached tree when the network is down', async () => {
     await seedConfig();
-    const first = snapshotWire();
-    await saveSource(deps, first.source as never, first);
-    await db.startPageSnapshots.update(
-      snapshotIdFor(INSTANCE, USER, DEVICE, 'grant-1', 1, 'space-1', 'folder-1'),
-      { verifiedAt: 0 },
-    );
+    await seedCachedSource(wire());
     reads(new Error('NetworkError'));
 
     const view = await loadStartPage(deps);
@@ -170,17 +158,22 @@ describe('loadStartPage', () => {
 });
 
 describe('refreshStartPage', () => {
+  it('asks for the configured space and folder, with the cached tag', async () => {
+    await seedConfig();
+    await seedCachedSource(wire());
+    const fn = reads({ value: NOT_MODIFIED, etag: 'W/"new"' });
+
+    await refreshStartPage(deps);
+    expect(fn).toHaveBeenCalledWith(SPACE, FOLDER, expect.any(String));
+  });
+
   it('revalidates a not-modified copy instead of leaving it stale', async () => {
     await seedConfig();
-    const wire = snapshotWire();
-    await saveSource(deps, wire.source as never, wire);
-    const key = snapshotIdFor(INSTANCE, USER, DEVICE, 'grant-1', 1, 'space-1', 'folder-1');
-    await db.startPageSnapshots.update(key, { verifiedAt: 0, etag: 'W/"old"' });
+    await seedCachedSource(wire());
+    const key = snapshotIdFor(INSTANCE, USER, DEVICE, SPACE, FOLDER);
+    reads();
 
-    const fn = reads({ value: NOT_MODIFIED, etag: 'W/"new"' });
     const view = await refreshStartPage(deps);
-
-    expect(fn).toHaveBeenCalledWith('W/"old"');
     expect(view.phase).toBe('ready');
     const stored = await db.startPageSnapshots.get(key);
     expect(stored?.verifiedAt).toBeGreaterThan(0);
@@ -189,17 +182,13 @@ describe('refreshStartPage', () => {
 
   it('installs a new body and drops the copy of the folder it replaced', async () => {
     const config = await seedConfig();
-    const first = snapshotWire();
-    await saveSource(deps, first.source, first);
+    await seedCachedSource(wire());
 
-    // A re-pointed grant is a new version as well as a new folder; the body
-    // has to say so or the provider is right to refuse it.
-    const moved = snapshotWire({
-      source: { ...first.source, folder_id: 'folder-2', folder_title: '工具', grant_version: 2 },
+    const moved = wire({
+      source: { ...wire().source, folder_id: 'folder-2', folder_title: '工具' },
       nodes: [{ id: 'bm-2', type: 'bookmark', parent_id: 'folder-2', title: 'Gitea', url: 'http://127.0.0.1:3000/', position: 0, updated_at: 'x' }],
     });
-    // The config has to say folder-2 for that body to be this read's answer.
-    await db.startPageConfigs.update(config.id, { folderId: 'folder-2', grantVersion: 2, configGeneration: 2 });
+    await db.startPageConfigs.update(config.id, { folderId: 'folder-2', configGeneration: 2 });
     reads(ok(moved));
 
     const view = await refreshStartPage(deps);
@@ -211,29 +200,22 @@ describe('refreshStartPage', () => {
     expect(rows[0]?.folderId).toBe('folder-2');
   });
 
-  it('refuses a body describing a different source than the one asked for', async () => {
-    const config = await seedConfig();
-    const wrong = snapshotWire({ source: { ...snapshotWire().source, grant_version: 7 } });
+  it('refuses a body describing a different folder than the one asked for', async () => {
+    await seedConfig();
+    const wrong = wire({ source: { ...wire().source, folder_id: 'somewhere-else' } });
     reads(ok(wrong));
 
     await refreshStartPage(deps);
-    const rows = await db.startPageSnapshots.toArray();
-    expect(rows).toHaveLength(0);
-    expect(config.folderId).toBe('folder-1');
+    expect(await db.startPageSnapshots.count()).toBe(0);
     const warnings = (await db.diagnostics.toArray()).filter((w) => w.scope === 'start-page');
     expect(warnings.some((w) => w.level === 'warn')).toBe(true);
   });
 
   it('keeps the previous copy when a body cannot be installed', async () => {
+    await seedConfig();
+    await seedCachedSource(wire());
     // The transport's parser is what refuses a torn tree (see wire.test.ts);
     // by the time the provider sees a rejection the good copy has to survive.
-    await seedConfig();
-    const good = snapshotWire();
-    await saveSource(deps, good.source, good);
-    await db.startPageSnapshots.update(
-      snapshotIdFor(INSTANCE, USER, DEVICE, 'grant-1', 1, 'space-1', 'folder-1'),
-      { verifiedAt: 0 },
-    );
     reads(new Error('StartPageShapeError: node has a parent outside the source'));
 
     const view = await refreshStartPage(deps);
@@ -248,27 +230,23 @@ describe('refreshStartPage', () => {
 describe('a response that arrives too late', () => {
   it('does not overwrite a source chosen while it was in flight', async () => {
     // SP-10: the reader moved from A to B while A's request was still running.
-    const config = await seedConfig({ folderId: 'folder-A', grantId: 'grant-A', grantVersion: 1 });
-    const bodyA = snapshotWire({
-      source: { ...snapshotWire().source, folder_id: 'folder-A', grant_id: 'grant-A' },
+    const config = await seedConfig({ spaceId: 'space-A', folderId: 'folder-A' });
+    const bodyA = wire({
+      source: { ...wire().source, space_id: 'space-A', folder_id: 'folder-A' },
       nodes: [{ id: 'a', type: 'bookmark', parent_id: 'folder-A', title: 'From A', url: 'https://a.example', position: 0, updated_at: 'x' }],
     });
 
     let resolveA: (r: StartPageSnapshotRead) => void = () => {};
-    const fn = vi.fn(
-      () => new Promise<StartPageSnapshotRead>((resolve) => { resolveA = resolve; }),
-    );
+    const fn = vi.fn(() => new Promise<StartPageSnapshotRead>((resolve) => { resolveA = resolve; }));
     deps.client.deviceStartPageSnapshot = fn;
 
     const inFlight = refreshStartPage(deps);
     // Wait for the request to leave: resolving a promise that was never
     // created would hang the test instead of proving anything.
     await vi.waitFor(() => expect(fn).toHaveBeenCalled());
-    // The user picks another folder mid-request.
     await db.startPageConfigs.update(config.id, {
+      spaceId: 'space-B',
       folderId: 'folder-B',
-      grantId: 'grant-B',
-      grantVersion: 2,
       configGeneration: config.configGeneration + 1,
     });
     resolveA(ok(bodyA));
@@ -284,7 +262,7 @@ describe('a response that arrives too late', () => {
     // SP-11: signing out clears the private tree; a late response must not
     // resurrect it.
     await seedConfig();
-    const body = snapshotWire();
+    const body = wire();
     let resolveIt: (r: StartPageSnapshotRead) => void = () => {};
     deps.client.deviceStartPageSnapshot = vi.fn(
       () => new Promise<StartPageSnapshotRead>((resolve) => { resolveIt = resolve; }),
@@ -303,12 +281,7 @@ describe('a response that arrives too late', () => {
 describe('what a refusal takes with it', () => {
   it('clears the tree when the source is gone, and never falls back', async () => {
     await seedConfig();
-    const body = snapshotWire();
-    await saveSource(deps, body.source, body);
-    await db.startPageSnapshots.update(
-      snapshotIdFor(INSTANCE, USER, DEVICE, 'grant-1', 1, 'space-1', 'folder-1'),
-      { verifiedAt: 0 },
-    );
+    await seedCachedSource(wire());
     reads(apiError(404, 'START_PAGE_SOURCE_UNAVAILABLE'));
 
     const view = await loadStartPage(deps);
@@ -317,51 +290,28 @@ describe('what a refusal takes with it', () => {
     expect(await db.startPageSnapshots.count()).toBe(0);
   });
 
-  it('clears the tree when the approval is withdrawn', async () => {
+  it('clears the tree when the space stops being synced', async () => {
     await seedConfig();
-    const body = snapshotWire();
-    await saveSource(deps, body.source, body);
-    await db.startPageSnapshots.update(
-      snapshotIdFor(INSTANCE, USER, DEVICE, 'grant-1', 1, 'space-1', 'folder-1'),
-      { verifiedAt: 0 },
-    );
-    reads(apiError(403, 'START_PAGE_PERMISSION_REQUIRED'));
+    await seedCachedSource(wire());
+    reads(apiError(404, 'START_PAGE_PERMISSION_REQUIRED'));
 
     const view = await loadStartPage(deps);
-    expect(view.phase).toBe('permission-required');
-    // Nothing readable is left behind, even though the settings entry stays.
+    expect(view.phase).toBe('space-not-synced');
+    // Nothing readable is left behind, even though the chosen source stays put
+    // so the reader can re-sync the space and see it again.
     expect(await db.startPageSnapshots.count()).toBe(0);
+    expect(await db.startPageConfigs.count()).toBe(1);
   });
 
   it('keeps a good copy when the source is merely too large', async () => {
     await seedConfig();
-    const body = snapshotWire();
-    await saveSource(deps, body.source, body);
-    const key = snapshotIdFor(INSTANCE, USER, DEVICE, 'grant-1', 1, 'space-1', 'folder-1');
-    await db.startPageSnapshots.update(key, { verifiedAt: 0 });
+    await seedCachedSource(wire());
     reads(apiError(413, 'START_PAGE_SOURCE_TOO_LARGE'));
 
     const view = await refreshStartPage(deps);
     expect(view.phase).toBe('ready');
     expect(view.fromCache).toBe(true);
     expect(await db.startPageSnapshots.count()).toBe(1);
-  });
-
-  it('forgets the source when the server no longer has one for this device', async () => {
-    await seedConfig();
-    const body = snapshotWire();
-    await saveSource(deps, body.source, body);
-    await db.startPageSnapshots.update(
-      snapshotIdFor(INSTANCE, USER, DEVICE, 'grant-1', 1, 'space-1', 'folder-1'),
-      { verifiedAt: 0 },
-    );
-    reads(apiError(404, 'START_PAGE_NOT_CONFIGURED'));
-
-    const view = await loadStartPage(deps);
-    expect(view.phase).toBe('source-unavailable');
-    expect(await db.startPageSnapshots.count()).toBe(0);
-    // The choice goes too: there is nothing left for it to point at.
-    expect(await db.startPageConfigs.count()).toBe(0);
   });
 });
 

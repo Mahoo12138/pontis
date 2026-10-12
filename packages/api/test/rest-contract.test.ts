@@ -38,9 +38,7 @@ import {
   checkRunNow,
   checkScheduleList,
   checkSpaceList,
-  checkStartPageGrantList,
   checkStartPageSnapshot,
-  checkStartPageSource,
   checkSystemSettingsResponse,
   checkTaskList,
   checkTransferResponse,
@@ -77,9 +75,7 @@ import type {
   PublicationListResponse,
   RootSlotListResponse,
   SpaceListResponse,
-  StartPageGrantListResponse,
   StartPageSnapshot,
-  StartPageSource,
   SystemSettingsResponse,
   TaskListResponse,
   TransferResponse,
@@ -117,10 +113,7 @@ const contract = {
   duplicates: (v: unknown): DuplicatesResponse => checkDuplicates(v, 'body'),
   // Start page: the source a device may read, the subtree it resolves to,
   // and the same read as a signed-in account.
-  'start-page-source': (v: unknown): StartPageSource => checkStartPageSource(v, 'body'),
-  'start-page-grants': (v: unknown): StartPageGrantListResponse => checkStartPageGrantList(v, 'body'),
   'start-page-snapshot': (v: unknown): StartPageSnapshot => checkStartPageSnapshot(v, 'body'),
-  'start-page-web-snapshot': (v: unknown): StartPageSnapshot => checkStartPageSnapshot(v, 'body'),
   'start-page-snapshot-empty': (v: unknown): StartPageSnapshot => checkStartPageSnapshot(v, 'body'),
   'error-validation': (v: unknown): ErrorEnvelope => checkErrorEnvelope(v, 'body'),
   'error-not-found': (v: unknown): ErrorEnvelope => checkErrorEnvelope(v, 'body'),
@@ -257,18 +250,6 @@ describe('the contract checks are not decorative', () => {
     const empty = load('start-page-snapshot-empty') as StartPageSnapshot;
     expect(empty.nodes).toEqual([]);
     expect(checkStartPageSnapshot(empty, 'body').snapshot.complete).toBe(true);
-  });
-
-  it('names a source by both ends of its authorization', () => {
-    const source = load('start-page-source') as StartPageSource;
-    expect(source.folder_title).toBe('Reading');
-    // A grant version is what expires a cache; without it the client cannot
-    // tell a moved source from an unchanged one.
-    expect(source.grant_version).toBe(1);
-
-    const stale = load('start-page-source') as Record<string, unknown>;
-    stale.grant_id = undefined;
-    expect(() => checkStartPageSource(stale, 'body')).toThrow(/grant_id.*a string/);
   });
 
   it('keeps an import plan reporting only the actions it planned', () => {    // `{create: 2}` is what the server really sent; a checker that demanded all

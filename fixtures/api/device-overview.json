@@ -3,15 +3,15 @@
     {
       "bindings": [
         {
-          "applied_revision": 0,
+          "applied_revision": 2,
           "epoch": 1,
-          "health": "warning",
+          "health": "healthy",
           "id": "id-1",
-          "last_sync_at": null,
+          "last_sync_at": "2026-01-01T00:00:00Z",
           "server_revision": 2,
           "space_id": "id-2",
           "space_name": "Personal",
-          "state": "pending_initial",
+          "state": "active",
           "sync_mode": "partial"
         }
       ],

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	"pontis/internal/auth"
 	"pontis/internal/backup"
+	"pontis/internal/canonical"
 	"pontis/internal/changeset"
 	"pontis/internal/device"
 	"pontis/internal/jobs"
@@ -83,7 +85,15 @@ func newTestServerWithDB(t *testing.T) (*Server, *httptest.Server, *sql.DB) {
 		Accounts:      sqlite.NewAccountStore(db),
 		Jobs:          jobSvc,
 		Schedules:     schedule.NewService(sqlite.NewScheduleStore(db), jobSvc),
-		StartPage:     startpage.NewService(sqlite.NewStartPageStore(db), sqlite.NewStartPageStore(db)),
+		StartPage: startpage.NewService(sqlite.NewStartPageStore(db), func(ctx context.Context,
+			deviceID string, space canonical.SpaceID) (bool, error) {
+
+			b, err := device.NewService(sqlite.NewDeviceStore(db)).GetBinding(ctx, deviceID, space)
+			if errors.Is(err, device.ErrBindingNotFound) {
+				return false, nil
+			}
+			return err == nil && b.State == device.StateActive, err
+		}),
 		InstanceID:    instanceID,
 		Logger:        slog.New(slog.DiscardHandler),
 	}

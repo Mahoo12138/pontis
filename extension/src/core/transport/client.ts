@@ -29,12 +29,8 @@ import {
   parseSyncResponse,
 } from '../protocol/validate';
 import {
-  parseStartPageFolders,
   parseStartPageSnapshot,
-  parseStartPageSource,
-  type StartPageFolderWire,
   type StartPageSnapshotWire,
-  type StartPageSourceWire,
 } from '../start-page/wire';
 
 /** What a conditional GET answers when the bytes have not changed.
@@ -328,67 +324,31 @@ export class ApiClient
     });
   }
 
-  deviceStartPage(): Promise<StartPageSourceWire> {
-    return this.request<StartPageSourceWire>('/api/v1/device/start-page', {
-      validate: parseStartPageSource,
-    });
-  }
-
-  deviceStartPageSnapshot(ifNoneMatch?: string): Promise<StartPageSnapshotRead> {
-    return this.requestConditional<StartPageSnapshotWire>('/api/v1/device/start-page/snapshot', {
-      ifNoneMatch,
-      validate: parseStartPageSnapshot,
-    });
-  }
-
-  authorizeStartPageGrant(
-    sessionToken: string,
-    body: { device_id: string; space_id: string; folder_id: string },
-  ): Promise<StartPageSourceWire> {
-    return this.request<StartPageSourceWire>('/api/v1/start-page-grants', {
-      method: 'POST',
-      token: sessionToken,
-      body,
-      validate: parseStartPageSource,
-    });
-  }
-
-  revokeStartPageGrant(sessionToken: string, grantId: string): Promise<void> {
-    return this.request<void>(`/api/v1/start-page-grants/${grantId}`, {
-      method: 'DELETE',
-      token: sessionToken,
-    });
-  }
-
-  sessionSpaces(sessionToken: string, serverUrl?: string): Promise<SpaceWire[]> {
-    return this.request<{ spaces: SpaceWire[] }>('/api/v1/spaces', { token: sessionToken, serverUrl }).then(
-      (r) => r.spaces ?? [],
+  deviceStartPageSnapshot(
+    spaceId: string,
+    folderId: string,
+    ifNoneMatch?: string,
+  ): Promise<StartPageSnapshotRead> {
+    const query = `space_id=${encodeURIComponent(spaceId)}&folder_id=${encodeURIComponent(folderId)}`;
+    return this.requestConditional<StartPageSnapshotWire>(
+      `/api/v1/device/start-page/snapshot?${query}`,
+      { ifNoneMatch, validate: parseStartPageSnapshot },
     );
-  }
-
-  sessionFolders(sessionToken: string, spaceId: string, serverUrl?: string): Promise<StartPageFolderWire[]> {
-    return this.request<StartPageFolderWire[]>(`/api/v1/spaces/${spaceId}/nodes`, {
-      token: sessionToken,
-      serverUrl,
-      validate: parseStartPageFolders,
-    });
   }
 }
 
-/** The start page's read side (start-page doc §13.1).
+/**
+ * The start page's read side (start-page doc §13.1).
  *
- * Two credentials, two surfaces. The device credential reads only the source
- * its account approved; approving, moving and revoking a source — and browsing
- * the folders to choose one from — happen on a session token, because a
- * standing device credential must not be able to widen what it reads. */
+ * One credential and one call. The folder is named on the request because the
+ * device is entitled to the whole space already — the server answers only for
+ * spaces this device has an active binding for, so naming a folder inside one
+ * widens nothing. There is no approval to mint and no session to trade.
+ */
 export interface StartPageTransport {
-  deviceStartPage(): Promise<StartPageSourceWire>;
-  deviceStartPageSnapshot(ifNoneMatch?: string): Promise<StartPageSnapshotRead>;
-  authorizeStartPageGrant(
-    sessionToken: string,
-    body: { device_id: string; space_id: string; folder_id: string },
-  ): Promise<StartPageSourceWire>;
-  revokeStartPageGrant(sessionToken: string, grantId: string): Promise<void>;
-  sessionSpaces(sessionToken: string, serverUrl?: string): Promise<SpaceWire[]>;
-  sessionFolders(sessionToken: string, spaceId: string, serverUrl?: string): Promise<StartPageFolderWire[]>;
+  deviceStartPageSnapshot(
+    spaceId: string,
+    folderId: string,
+    ifNoneMatch?: string,
+  ): Promise<StartPageSnapshotRead>;
 }

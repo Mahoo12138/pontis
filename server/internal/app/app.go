@@ -15,6 +15,7 @@ import (
 
 	"pontis/internal/auth"
 	"pontis/internal/backup"
+	"pontis/internal/canonical"
 	"pontis/internal/changeset"
 	"pontis/internal/config"
 	"pontis/internal/device"
@@ -67,6 +68,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	accountStore := sqlite.NewAccountStore(db)
+	deviceStore := sqlite.NewDeviceStore(db)
 	libraryStore := sqlite.NewLibraryStore(db)
 	canonicalStore := sqlite.NewStore(db)
 	changesetSvc := changeset.NewService(sqlite.NewChangeSetStore(db))
@@ -120,7 +122,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Web:           webui.Assets(),
 		Deploy:        deploy,
 		Auth:          auth.NewService(sqlite.NewAuthStore(db), sessionTTL),
-		Devices:       device.NewService(sqlite.NewDeviceStore(db)),
+		Devices:       device.NewService(deviceStore),
 		Spaces:        space.NewService(sqlite.NewSpaceStore(db)),
 		Sync:          sync.NewService(sqlite.NewSyncStore(db), changesetSvc),
 		Reconcile:     reconcile.NewService(sqlite.NewReconcileStore(db)),
@@ -134,9 +136,20 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Backups:       backupSvc,
 		Jobs:          jobSvc,
 		Schedules:     scheduleSvc,
-		// One store plays both halves: the grants it owns and the tree it may
-		// read are the same aggregate's problem.
-		StartPage:  startpage.NewService(sqlite.NewStartPageStore(db), sqlite.NewStartPageStore(db)),
+		// The start page is authorized by the device's own binding, so the
+		// only state it needs is the tree plus that one question.
+		StartPage: startpage.NewService(sqlite.NewStartPageStore(db), func(ctx context.Context,
+			deviceID string, space canonical.SpaceID) (bool, error) {
+
+			binding, err := deviceStore.GetBinding(ctx, deviceID, space)
+			if errors.Is(err, device.ErrBindingNotFound) {
+				return false, nil
+			}
+			if err != nil {
+				return false, err
+			}
+			return binding.State == device.StateActive, nil
+		}),
 		Accounts:   accountStore,
 		InstanceID: instanceID,
 		Logger:     logger,

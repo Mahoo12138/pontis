@@ -62,7 +62,6 @@ import type {
   ScheduleView,
   Space,
   SpaceListResponse,
-  StartPageGrantListResponse,
   StartPageSnapshot,
   StartPageSnapshotMeta,
   StartPageSnapshotNode,
@@ -638,19 +637,17 @@ export const checkRunNow: Checker<{ id: string; status: JobStatus }> =
   record<{ id: string; status: JobStatus }>({ id: str, status: jobStatus });
 
 // ─── Start page ────────────────────────────────────────────────────────────
+//
+// Pinned here even though the Web app reads none of it: the extension carries
+// its own hand-copied version of these shapes, and this is the only automated
+// link that says the two still describe the same bytes.
 
 export const checkStartPageSource: Checker<StartPageSource> = record<StartPageSource>({
-  grant_id: str,
-  device_id: str,
   space_id: str,
   space_name: str,
   folder_id: str,
   folder_title: str,
-  grant_version: num,
 });
-
-export const checkStartPageGrantList: Checker<StartPageGrantListResponse> =
-  record<StartPageGrantListResponse>({ grants: arr(checkStartPageSource) });
 
 export const checkStartPageSnapshotNode: Checker<StartPageSnapshotNode> =
   record<StartPageSnapshotNode>({

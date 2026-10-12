@@ -1,14 +1,14 @@
 {
   "bindings": [
     {
-      "applied_revision": 0,
+      "applied_revision": 2,
       "device_id": "id-1",
       "epoch": 1,
       "id": "id-2",
       "max_client_seq": 0,
-      "received_revision": 0,
+      "received_revision": 2,
       "space_id": "id-3",
-      "state": "pending_initial"
+      "state": "active"
     }
   ]
 }

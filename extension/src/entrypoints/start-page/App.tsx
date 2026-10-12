@@ -445,8 +445,12 @@ function Refusal({
           body: '它可能被删除了，也可能被移到了别的位置。起始页不会改用整个空间来代替它。',
           strong: true,
         }
-      : phase === 'permission-required'
-        ? { title: '这个来源读不了了', body: '内容已停止显示。重新确认来源后才能继续。', strong: true }
+      : phase === 'space-not-synced'
+        ? {
+            title: '这台设备不再同步这个空间',
+            body: '内容已停止显示。在「同步管理」里重新绑定该空间后，这个来源会照原样出现。',
+            strong: true,
+          }
         : phase === 'source-too-large'
           ? {
               title: '这个文件夹比起始页能读取的范围大',

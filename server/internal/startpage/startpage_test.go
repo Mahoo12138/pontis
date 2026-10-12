@@ -4,88 +4,13 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"pontis/internal/canonical"
 )
 
-// fakeGrants and fakeTree stand in for the SQLite store so the decisions the
-// service makes — whose device, what kind of node, when the version moves —
-// can be tested without a database.
-type fakeGrants struct {
-	byID    map[string]Grant
-	active  map[string]Grant
-	owners  map[string]canonical.UserID
-	revoked []string
-}
-
-func newFakeGrants() *fakeGrants {
-	return &fakeGrants{byID: map[string]Grant{}, active: map[string]Grant{}, owners: map[string]canonical.UserID{}}
-}
-
-func (f *fakeGrants) InsertGrant(_ context.Context, g Grant) error {
-	f.byID[g.ID] = g
-	f.active[g.DeviceID] = g
-	return nil
-}
-
-func (f *fakeGrants) RepointGrant(_ context.Context, id string, space canonical.SpaceID, folder canonical.NodeID, at time.Time) error {
-	g, ok := f.byID[id]
-	if !ok || !g.RevokedAt.IsZero() {
-		return ErrGrantNotFound
-	}
-	g.SpaceID, g.FolderID, g.UpdatedAt, g.Version = space, folder, at, g.Version+1
-	f.byID[id] = g
-	f.active[g.DeviceID] = g
-	return nil
-}
-
-func (f *fakeGrants) RevokeGrant(_ context.Context, id string, at time.Time) error {
-	g, ok := f.byID[id]
-	if !ok {
-		return nil
-	}
-	g.RevokedAt = at
-	f.byID[id] = g
-	delete(f.active, g.DeviceID)
-	f.revoked = append(f.revoked, id)
-	return nil
-}
-
-func (f *fakeGrants) GetGrant(_ context.Context, id string) (Grant, error) {
-	g, ok := f.byID[id]
-	if !ok {
-		return Grant{}, ErrGrantNotFound
-	}
-	return g, nil
-}
-
-func (f *fakeGrants) ActiveGrant(_ context.Context, deviceID string) (Grant, error) {
-	g, ok := f.active[deviceID]
-	if !ok {
-		return Grant{}, ErrGrantNotFound
-	}
-	return g, nil
-}
-
-func (f *fakeGrants) ListGrants(_ context.Context, user canonical.UserID) ([]Grant, error) {
-	var out []Grant
-	for _, g := range f.byID {
-		if g.UserID == user {
-			out = append(out, g)
-		}
-	}
-	return out, nil
-}
-
-func (f *fakeGrants) DeviceOwner(_ context.Context, deviceID string) (canonical.UserID, error) {
-	owner, ok := f.owners[deviceID]
-	if !ok {
-		return "", ErrDeviceNotFound
-	}
-	return owner, nil
-}
-
+// fakeTree stands in for the SQLite read so the decisions this service makes —
+// what counts as a source, how far an answer may reach, when a folder is too
+// big to show — can be tested without a database.
 type fakeTree struct {
 	spaces map[canonical.SpaceID]canonical.SyncSpace
 	nodes  map[canonical.NodeID]canonical.Node
@@ -109,26 +34,21 @@ func (f *fakeTree) Node(_ context.Context, _ canonical.SpaceID, id canonical.Nod
 	return n, nil
 }
 
-func (f *fakeTree) Subtree(_ context.Context, space canonical.SpaceID, folder canonical.NodeID, budget int) (Subtree, error) {
+func (f *fakeTree) Subtree(_ context.Context, space canonical.SpaceID, folder canonical.NodeID, _ int) (Subtree, error) {
 	kids, ok := f.below[folder]
 	if !ok {
 		return Subtree{}, canonical.ErrNodeNotFound
 	}
-	// The real store reads budget+1 rows and hands them all back, so the
-	// service is what turns "more than asked for" into a refusal.
 	return Subtree{Space: f.spaces[space], Source: f.nodes[folder], Nodes: kids}, nil
 }
 
-func newTestService() (*Service, *fakeGrants, *fakeTree) {
-	grants := newFakeGrants()
-	grants.owners["dev-1"] = "user-1"
+func newTestService() (*Service, *fakeTree, *int) {
 	tree := &fakeTree{
 		spaces: map[canonical.SpaceID]canonical.SyncSpace{
-			"space-1": {ID: "space-1", OwnerUserID: "user-1", Epoch: 3, CurrentRevision: 42},
+			"space-1": {ID: "space-1", OwnerUserID: "user-1", Name: "Personal", Epoch: 3, CurrentRevision: 42},
 		},
 		nodes: map[canonical.NodeID]canonical.Node{
 			"folder-1": {ID: "folder-1", SpaceID: "space-1", Type: canonical.NodeTypeFolder, Title: "Entries"},
-			"folder-2": {ID: "folder-2", SpaceID: "space-1", Type: canonical.NodeTypeFolder, Title: "Reading"},
 			"mark-1":   {ID: "mark-1", SpaceID: "space-1", Type: canonical.NodeTypeBookmark, Title: "GitHub", URL: "https://github.com/"},
 			"child-1":  {ID: "child-1", SpaceID: "space-1", Type: canonical.NodeTypeBookmark, Title: "MDN", URL: "https://developer.mozilla.org"},
 		},
@@ -136,108 +56,25 @@ func newTestService() (*Service, *fakeGrants, *fakeTree) {
 			"folder-1": {
 				{ID: "child-1", SpaceID: "space-1", Type: canonical.NodeTypeBookmark, Title: "MDN", URL: "https://developer.mozilla.org"},
 			},
-			"folder-2": {},
+			"mark-1": {},
 		},
 	}
-	return NewService(grants, tree), grants, tree
+	accessCalls := 0
+	allowed := map[string]bool{"dev-1|space-1": true, "dev-2|space-2": true}
+	svc := NewService(tree, func(_ context.Context, deviceID string, space canonical.SpaceID) (bool, error) {
+		accessCalls++
+		return allowed[deviceID+"|"+string(space)], nil
+	})
+	return svc, tree, &accessCalls
 }
 
-func TestAuthorizeRefuseForeignResources(t *testing.T) {
-	svc, grants, _ := newTestService()
-	ctx := context.Background()
-	grants.owners["dev-2"] = "user-2"
-
-	for _, tc := range []struct {
-		name   string
-		user   canonical.UserID
-		device string
-		space  canonical.SpaceID
-		folder canonical.NodeID
-		want   error
-	}{
-		{"someone else's device", "user-1", "dev-2", "space-1", "folder-1", ErrDeviceNotFound},
-		{"unknown device", "user-1", "dev-gone", "space-1", "folder-1", ErrDeviceNotFound},
-		{"someone else's space", "user-1", "dev-1", "space-2", "folder-1", ErrSpaceNotFound},
-		{"unknown folder", "user-1", "dev-1", "space-1", "node-gone", ErrSourceUnavailable},
-		{"a bookmark as source", "user-1", "dev-1", "space-1", "mark-1", ErrSourceUnavailable},
-	} {
-		if _, err := svc.Authorize(ctx, tc.user, tc.device, tc.space, tc.folder); !errors.Is(err, tc.want) {
-			t.Errorf("%s: err = %v, want %v", tc.name, err, tc.want)
-		}
-	}
-	// None of those guesses may leave a grant behind: a half-authorized
-	// device would read a source nobody approved.
-	if _, err := grants.ActiveGrant(ctx, "dev-1"); !errors.Is(err, ErrGrantNotFound) {
-		t.Fatalf("grants written by refused attempts: %v", err)
-	}
-}
-
-func TestAuthorizeVersionMovesOnlyWhenTheSourceDoes(t *testing.T) {
-	svc, _, _ := newTestService()
+// The whole authorization question, in one case: a device reads a folder in a
+// space it syncs, and cannot read one in a space it does not.
+func TestSnapshotNeedsAnActiveBindingNotAnApproval(t *testing.T) {
+	svc, _, accessCalls := newTestService()
 	ctx := context.Background()
 
-	first, err := svc.Authorize(ctx, "user-1", "dev-1", "space-1", "folder-1")
-	if err != nil {
-		t.Fatalf("authorize: %v", err)
-	}
-	if first.Version != 1 {
-		t.Fatalf("version = %d, want 1", first.Version)
-	}
-	again, err := svc.Authorize(ctx, "user-1", "dev-1", "space-1", "folder-1")
-	if err != nil {
-		t.Fatalf("re-authorize: %v", err)
-	}
-	// Saving the same form twice must not expire the snapshot the client
-	// already holds for this source.
-	if again.Version != 1 || again.ID != first.ID {
-		t.Fatalf("same source moved the grant: %+v", again)
-	}
-
-	moved, err := svc.Authorize(ctx, "user-1", "dev-1", "space-1", "folder-2")
-	if err != nil {
-		t.Fatalf("move source: %v", err)
-	}
-	// A different folder is a different source: the version has to move, or a
-	// client would keep serving the old folder's cache under the new name.
-	if moved.Version != 2 || moved.FolderID != "folder-2" {
-		t.Fatalf("moved = %+v, want version 2 at folder-2", moved)
-	}
-}
-
-func TestRevokeOnlyByOwnerAndOnce(t *testing.T) {
-	svc, grants, _ := newTestService()
-	ctx := context.Background()
-
-	g, err := svc.Authorize(ctx, "user-1", "dev-1", "space-1", "folder-1")
-	if err != nil {
-		t.Fatalf("authorize: %v", err)
-	}
-	if err := svc.Revoke(ctx, "user-2", g.ID); !errors.Is(err, ErrGrantNotFound) {
-		t.Fatalf("foreign revoke = %v, want ErrGrantNotFound", err)
-	}
-	if _, err := grants.ActiveGrant(ctx, "dev-1"); err != nil {
-		t.Fatalf("a stranger's revocation took effect: %v", err)
-	}
-	if err := svc.Revoke(ctx, "user-1", g.ID); err != nil {
-		t.Fatalf("owner revoke: %v", err)
-	}
-	if err := svc.Revoke(ctx, "user-1", g.ID); !errors.Is(err, ErrGrantNotFound) {
-		t.Fatalf("second revoke = %v, want ErrGrantNotFound", err)
-	}
-	if _, err := svc.ActiveGrant(ctx, "dev-1"); !errors.Is(err, ErrNotConfigured) {
-		t.Fatalf("after revoke = %v, want ErrNotConfigured", err)
-	}
-}
-
-func TestGrantSnapshotRevalidatesTheSource(t *testing.T) {
-	svc, _, tree := newTestService()
-	ctx := context.Background()
-
-	g, err := svc.Authorize(ctx, "user-1", "dev-1", "space-1", "folder-1")
-	if err != nil {
-		t.Fatalf("authorize: %v", err)
-	}
-	sub, err := svc.GrantSnapshot(ctx, g)
+	sub, err := svc.Snapshot(ctx, "dev-1", "space-1", "folder-1")
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
@@ -245,91 +82,110 @@ func TestGrantSnapshotRevalidatesTheSource(t *testing.T) {
 		t.Fatalf("subtree = %+v", sub)
 	}
 
-	// The folder was deleted in the workbench, or a same-named one was made
-	// elsewhere: the grant's id still resolves, but not to a folder.
-	delete(tree.nodes, "folder-1")
-	if _, err := svc.GrantSnapshot(ctx, g); !errors.Is(err, ErrSourceUnavailable) {
-		t.Fatalf("after deletion = %v, want ErrSourceUnavailable", err)
+	// A space this device never bound. The device could not read it through
+	// /sync either, so the start page is not narrowing anything by refusing.
+	if _, err := svc.Snapshot(ctx, "dev-1", "space-2", "folder-1"); !errors.Is(err, ErrSpaceNotSynced) {
+		t.Fatalf("unbound space = %v, want ErrSpaceNotSynced", err)
+	}
+	// A space that does not exist answers the same way: which space ids this
+	// account holds is not something to confirm to a caller (§13.3).
+	if _, err := svc.Snapshot(ctx, "dev-1", "space-nope", "folder-1"); !errors.Is(err, ErrSpaceNotSynced) {
+		t.Fatalf("unknown space = %v, want ErrSpaceNotSynced", err)
+	}
+	// Entitlement is asked once per read, not re-derived per node.
+	if *accessCalls != 3 {
+		t.Fatalf("access checks = %d, want 3", *accessCalls)
 	}
 }
 
-func TestGrantSnapshotStopsWhenTheSpaceChangesHands(t *testing.T) {
-	svc, _, tree := newTestService()
+// A bookmark, a missing node, and a foreign folder id all fail the same way:
+// they are not sources, and there is no fallback to the space behind them.
+func TestSnapshotSourceMustBeAFolder(t *testing.T) {
+	svc, _, _ := newTestService()
 	ctx := context.Background()
 
-	g, err := svc.Authorize(ctx, "user-1", "dev-1", "space-1", "folder-1")
-	if err != nil {
-		t.Fatalf("authorize: %v", err)
+	if _, err := svc.Snapshot(ctx, "dev-1", "space-1", "mark-1"); !errors.Is(err, ErrSourceUnavailable) {
+		t.Fatalf("bookmark source = %v, want ErrSourceUnavailable", err)
 	}
-	// A cross-space transfer gives the tree a new identity (§5.2).
-	tree.spaces["space-1"] = canonical.SyncSpace{ID: "space-1", OwnerUserID: "user-2", Epoch: 3}
-	if _, err := svc.GrantSnapshot(ctx, g); !errors.Is(err, ErrSourceUnavailable) {
-		t.Fatalf("after transfer = %v, want ErrSourceUnavailable", err)
+	if _, err := svc.Snapshot(ctx, "dev-1", "space-1", "node-gone"); !errors.Is(err, ErrSourceUnavailable) {
+		t.Fatalf("unknown folder = %v, want ErrSourceUnavailable", err)
 	}
 }
 
-func TestSourceOverTheBudgetIsRefused(t *testing.T) {
-	svc, _, tree := newTestService()
+// A folder id from another space must not resolve, even though the id itself
+// exists somewhere: the binding gates the space, and the node is looked up
+// inside it.
+func TestSnapshotCannotReachIntoAnotherSpace(t *testing.T) {
+	svc, tree, _ := newTestService()
 	ctx := context.Background()
 
-	var many []canonical.Node
-	for i := 0; i < MaxDescendants+1; i++ {
-		many = append(many, canonical.Node{
-			ID: canonical.NodeID("n"), SpaceID: "space-1",
-			Type: canonical.NodeTypeBookmark, Title: "t", URL: "https://e.example",
-		})
+	// space-2 holds a folder the device may not read; it is registered in the
+	// shared node map, which is exactly the confusion the space-scoped lookup
+	// has to prevent.
+	tree.spaces["space-2"] = canonical.SyncSpace{ID: "space-2", OwnerUserID: "user-1", Name: "Work"}
+	if _, err := svc.Snapshot(ctx, "dev-1", "space-2", "folder-1"); !errors.Is(err, ErrSpaceNotSynced) {
+		t.Fatalf("cross-space read = %v, want ErrSpaceNotSynced", err)
 	}
-	tree.below["folder-1"] = many
+	// The same device, bound to space-2, can read it.
+	if _, err := svc.Snapshot(ctx, "dev-2", "space-2", "folder-1"); err != nil {
+		t.Fatalf("bound device cross-space read: %v", err)
+	}
+}
 
-	g, err := svc.Authorize(ctx, "user-1", "dev-1", "space-1", "folder-1")
-	if err != nil {
-		t.Fatalf("authorize: %v", err)
-	}
-	// Refused, not trimmed: a truncated list labelled complete would be
-	// shown as the whole folder.
-	if _, err := svc.GrantSnapshot(ctx, g); !errors.Is(err, ErrSourceTooLarge) {
+func TestSourceOverTheNodeBudgetIsRefused(t *testing.T) {
+	svc, tree, _ := newTestService()
+	ctx := context.Background()
+
+	tree.below["folder-1"] = manyNodes(MaxDescendants + 1)
+	// Refused, not trimmed: a truncated list labelled complete would be shown
+	// as the whole folder.
+	if _, err := svc.Snapshot(ctx, "dev-1", "space-1", "folder-1"); !errors.Is(err, ErrSourceTooLarge) {
 		t.Fatalf("err = %v, want ErrSourceTooLarge", err)
 	}
 }
 
-func TestSnapshotBytesRefusesAnOversizedSource(t *testing.T) {
-	svc, _, tree := newTestService()
+func TestSourceOverTheByteBudgetIsRefused(t *testing.T) {
+	svc, tree, _ := newTestService()
 	ctx := context.Background()
 
 	long := make([]byte, 4096)
 	for i := range long {
 		long[i] = 'a'
 	}
-	var many []canonical.Node
-	for i := 0; i < 3000; i++ {
-		many = append(many, canonical.Node{
-			ID: canonical.NodeID("n"), SpaceID: "space-1",
-			Type: canonical.NodeTypeBookmark, Title: string(long), URL: "https://e.example",
-		})
+	nodes := manyNodes(3000)
+	for i := range nodes {
+		nodes[i].Title = string(long)
 	}
-	tree.below["folder-1"] = many
+	tree.below["folder-1"] = nodes
 
-	g, err := svc.Authorize(ctx, "user-1", "dev-1", "space-1", "folder-1")
-	if err != nil {
-		t.Fatalf("authorize: %v", err)
-	}
-	if _, err := svc.GrantSnapshot(ctx, g); !errors.Is(err, ErrSourceTooLarge) {
+	if _, err := svc.Snapshot(ctx, "dev-1", "space-1", "folder-1"); !errors.Is(err, ErrSourceTooLarge) {
 		t.Fatalf("err = %v, want ErrSourceTooLarge under the node cap but over the byte cap", err)
 	}
 }
 
-func TestSessionSnapshotNeedsOwnership(t *testing.T) {
-	svc, _, _ := newTestService()
+// Exactly at the budget is still a complete read: the refusal has to start one
+// past the line, not on it.
+func TestSourceAtTheBudgetIsAccepted(t *testing.T) {
+	svc, tree, _ := newTestService()
 	ctx := context.Background()
 
-	if _, err := svc.SessionSnapshot(ctx, "user-2", "space-1", "folder-1"); !errors.Is(err, ErrSpaceNotFound) {
-		t.Fatalf("stranger's space = %v, want ErrSpaceNotFound", err)
-	}
-	sub, err := svc.SessionSnapshot(ctx, "user-1", "space-1", "folder-1")
+	tree.below["folder-1"] = manyNodes(MaxDescendants)
+	sub, err := svc.Snapshot(ctx, "dev-1", "space-1", "folder-1")
 	if err != nil {
-		t.Fatalf("owner snapshot: %v", err)
+		t.Fatalf("at-budget source refused: %v", err)
 	}
-	if len(sub.Nodes) != 1 {
-		t.Fatalf("subtree = %+v", sub)
+	if len(sub.Nodes) != MaxDescendants {
+		t.Fatalf("nodes = %d, want %d", len(sub.Nodes), MaxDescendants)
 	}
+}
+
+func manyNodes(n int) []canonical.Node {
+	out := make([]canonical.Node, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, canonical.Node{
+			ID: canonical.NodeID("n"), SpaceID: "space-1",
+			Type: canonical.NodeTypeBookmark, Title: "t", URL: "https://e.example",
+		})
+	}
+	return out
 }

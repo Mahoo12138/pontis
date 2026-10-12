@@ -1,13 +1,12 @@
 // The 起始页 section of the settings page: which folder this browser shows, and
 // how it opens.
 //
-// Approving a source is deliberately an account action. The extension's
-// standing device credential is what *reads* the approved folder; if it could
-// also pick one, the approval would describe nothing (start-page doc §11.2). So
-// this form asks for the account password the same way pairing does, uses the
-// short-lived session token to approve, and keeps nothing of it.
+// Choosing a source is a local decision. A device may display a folder of a
+// space it already syncs, and it can read that whole space through its own
+// credential already, so naming one folder inside it needs no approval — and
+// therefore no account password (start-page doc §11.2 as implemented).
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -15,146 +14,155 @@ import {
   Divider,
   Group,
   Loader,
-  PasswordInput,
+  Radio,
   ScrollArea,
   Select,
   Stack,
   Text,
-  TextInput,
 } from '@mantine/core';
 import { createRuntime, errText } from './runtime';
 import { chromeApi } from '../runtime/chromeApi';
-import { clearStartPage, patchConfig, saveSource, snapshotIdFor } from '../core/start-page/provider';
+import { clearStartPage, patchConfig, saveSource } from '../core/start-page/provider';
 import type { StartPageConfigRecord } from '../core/store/db';
-import type { StartPageFolderWire } from '../core/start-page/wire';
+import type { ParentRefWire } from '../core/protocol/types';
 
 const runtime = createRuntime();
 const deps = { db: runtime.db, bootstrap: runtime.bootstrap, client: runtime.client };
 
-/** A folder plus the titles of the folders above it, for the row label. The
- * ids alone would not tell 开发-in-日常入口 from 开发-in-工作. */
-interface FolderChoice extends StartPageFolderWire {
+/** One folder the reader could choose, with the titles above it so two folders
+ * named 开发 can be told apart. */
+interface FolderChoice {
+  id: string;
+  title: string;
   trail: string[];
+  /** How many direct children it has, for the row's hint. */
+  children: number;
 }
 
 export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
   const [config, setConfig] = useState<StartPageConfigRecord | null>(null);
-  /** The names beside the ids, from the copy that is currently installed: a
-   * source is chosen by id, but it is confirmed to the user by name. */
-  const [sourceNames, setSourceNames] = useState<{ space: string; folder: string } | null>(null);
   const [paired, setPaired] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // The approval flow's own state; nothing here outlives the save.
-  const [authorizing, setAuthorizing] = useState(false);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [sessionToken, setSessionToken] = useState('');
-  const [spaces, setSpaces] = useState<{ value: string; label: string }[]>([]);
+  /** Spaces this device actually syncs, with the binding that grants the read. */
+  const [synced, setSynced] = useState<{ value: string; label: string; bindingId: string }[]>([]);
   const [spaceId, setSpaceId] = useState('');
   const [folders, setFolders] = useState<FolderChoice[]>([]);
   const [picked, setPicked] = useState('');
-  const [serverUrl, setServerUrl] = useState('');
+  const [loadingTree, setLoadingTree] = useState(false);
 
   const reload = useCallback(async () => {
     const b = await runtime.bootstrap.get();
     setPaired(Boolean(b.serverUrl && b.deviceToken && b.instanceId && b.deviceId));
-    setServerUrl(b.serverUrl ?? '');
     if (!b.instanceId || !b.deviceId) {
       setConfig(null);
       return;
     }
     const row = (await runtime.db.startPageConfigs.get(`${b.instanceId}:${b.deviceId}`)) ?? null;
     setConfig(row);
-    if (!row) {
-      setSourceNames(null);
-      return;
-    }
-    const snapshot = await runtime.db.startPageSnapshots.get(
-      snapshotIdFor(row.instanceId, row.userId, row.deviceId, row.grantId, row.grantVersion, row.spaceId, row.folderId),
-    );
-    setSourceNames(snapshot ? { space: snapshot.spaceName, folder: snapshot.sourceTitle } : null);
+    if (row?.spaceId) setSpaceId(row.spaceId);
   }, []);
 
   useEffect(() => {
     void reload();
   }, [reload]);
 
-  const begin = async () => {
-    setError(null);
-    setBusy('authorize');
-    try {
-      // The origin has to be granted before any fetch can reach it; pairing
-      // already asked for it, so this only matters after a server move.
-      const granted = await requestOriginPermission(serverUrl);
-      if (!granted) {
-        setError('没有该 Server 的访问权限，无法读取目录。');
-        return;
-      }
-      const login = await runtime.client.login(username, password, serverUrl);
-      setSessionToken(login.token);
-      const list = await runtime.client.sessionSpaces(login.token, serverUrl);
-      setSpaces(list.map((sp) => ({ value: sp.id, label: sp.name })));
-      setSpaceId(list[0]?.id ?? '');
-      // The password has done its one job; it is not held for a later click.
-      setPassword('');
-      setAuthorizing(true);
-    } catch (err) {
-      setError(errText(err));
-    } finally {
-      setBusy(null);
-    }
-  };
-
+  // The selectable spaces are this device's active bindings — read from the
+  // local replica, where the sync engine already keeps them. Not every space
+  // the account owns: the start page reads through a binding, and a space this
+  // browser never subscribed to is not its to display.
   useEffect(() => {
-    if (!sessionToken || !spaceId) return;
+    if (!paired) return;
     let cancelled = false;
-    void runtime.client
-      .sessionFolders(sessionToken, spaceId, serverUrl)
-      .then((rows) => {
-        if (cancelled) return;
-        const byId = new Map(rows.map((r) => [r.id, r]));
-        setFolders(
-          rows.map((row) => {
-            const trail: string[] = [];
-            for (let at = byId.get(row.parent_id ?? ''); at; at = byId.get(at.parent_id ?? '')) {
-              trail.unshift(at.title);
-              if (trail.length > rows.length) break;
-            }
-            return { ...row, trail };
-          }),
-        );
-        setPicked('');
-      })
-      .catch((err) => !cancelled && setError(errText(err)));
+    void runtime.db.bindings.toArray().then((rows) => {
+      if (cancelled) return;
+      const active = rows.filter((r) => r.state === 'active' && r.enabled !== false);
+      setSynced(
+        active.map((r) => ({
+          value: r.spaceId,
+          label: r.spaceName || r.spaceId,
+          bindingId: r.id,
+        })),
+      );
+      setSpaceId((current) => current || active[0]?.spaceId || '');
+    });
     return () => {
       cancelled = true;
     };
-  }, [sessionToken, spaceId, serverUrl]);
+  }, [paired]);
+
+  const bindingId = useMemo(
+    () => synced.find((s) => s.value === spaceId)?.bindingId ?? '',
+    [synced, spaceId],
+  );
+
+  // Reading the binding's snapshot is what makes the folder list possible. It
+  // is a settings-time read of a space this device already holds the right to
+  // read in full — not something the start page itself ever does.
+  useEffect(() => {
+    if (!bindingId) {
+      setFolders([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingTree(true);
+    setError(null);
+    void runtime.client
+      .fetchSnapshot(bindingId)
+      .then((snap) => {
+        if (cancelled) return;
+        const byId = new Map(snap.nodes.map((n) => [n.id, n]));
+        const kids = new Map<string, number>();
+        for (const n of snap.nodes) {
+          const parent = n.parent.type === 'node' ? n.parent.id ?? '' : '';
+          kids.set(parent, (kids.get(parent) ?? 0) + 1);
+        }
+        const trailOf = (node: { parent: ParentRefWire }): string[] => {
+          const out: string[] = [];
+          for (
+            let at = node.parent.type === 'node' ? byId.get(node.parent.id ?? '') : undefined;
+            at;
+            at = at.parent.type === 'node' ? byId.get(at.parent.id ?? '') : undefined
+          ) {
+            out.unshift(at.title);
+            if (out.length > snap.nodes.length) break;
+          }
+          return out;
+        };
+        setFolders(
+          snap.nodes
+            .filter((n) => n.type === 'folder')
+            .map((n) => ({
+              id: n.id,
+              title: n.title,
+              trail: trailOf(n),
+              children: kids.get(n.id) ?? 0,
+            })),
+        );
+        setPicked('');
+      })
+      .catch((err) => !cancelled && setError(errText(err)))
+      .finally(() => !cancelled && setLoadingTree(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [bindingId]);
 
   const save = async () => {
-    if (!sessionToken || !picked) return;
+    if (!picked || !spaceId) return;
     setBusy('save');
     setError(null);
     try {
-      const b = await runtime.bootstrap.get();
-      const source = await runtime.client.authorizeStartPageGrant(sessionToken, {
-        device_id: b.deviceId ?? '',
-        space_id: spaceId,
-        folder_id: picked,
-      });
-      // Read it once before the choice is saved: a source that cannot be read
-      // should not become the thing the page is configured to show (§8.2).
-      const read = await runtime.client.deviceStartPageSnapshot();
+      // Read the chosen folder once, through the same call the page will use.
+      // A source that cannot be read should not become the thing the page is
+      // configured to show (§8.2).
+      const read = await runtime.client.deviceStartPageSnapshot(spaceId, picked);
       if (typeof read.value === 'symbol') {
-        setError('来源已批准，但首次读取没有返回内容。请重试。');
+        setError('这个目录读不到内容，来源没有切换。');
         return;
       }
-      await saveSource(deps, source, read.value);
-      setSessionToken('');
-      setAuthorizing(false);
-      setFolders([]);
+      await saveSource(deps, { spaceId, folderId: picked }, read.value);
       await reload();
       onChanged?.();
     } catch (err) {
@@ -169,11 +177,10 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
     setBusy('release');
     setError(null);
     try {
-      // Releasing the display authorization is the user's decision made now,
-      // locally: the cached tree goes immediately, and the server-side grant
-      // stays for the account to revoke where it owns one.
+      // Releasing the display is the reader's decision made now, locally. The
+      // cached tree goes with it; the binding is untouched, because a start
+      // page and a sync subscription are different decisions (§5.3).
       await clearStartPage(runtime.db, config.deviceId);
-      await runtime.db.startPageConfigs.delete(config.id);
       await reload();
       onChanged?.();
     } catch (err) {
@@ -192,7 +199,7 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
   if (!paired) {
     return (
       <Alert color="blue" variant="light" title="还没有配对">
-        起始页需要一个已配对的设备：来源是针对这台设备批准的。请先在「账号管理」完成配对。
+        起始页显示的是这台设备已同步空间里的书签。请先在「账号管理」完成配对。
       </Alert>
     );
   }
@@ -204,24 +211,15 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
           <Box>
             <Text fw={600}>当前来源</Text>
             <Text size="sm" c="dimmed">
-              {config
-                ? sourceNames
-                  ? `${sourceNames.space} / ${sourceNames.folder}`
-                  : '已选择来源，但本地还没有它的快照。'
-                : '还没有选择要显示的文件夹。'}
+              {config ? `${config.spaceId} / ${config.folderId}` : '还没有选择要显示的文件夹。'}
             </Text>
             {config ? (
               <Text size="xs" c="dimmed" mt={2}>
-                授权版本 {config.grantVersion} · 更新于 {new Date(config.updatedAt).toLocaleString('zh-CN')}
+                更新于 {new Date(config.updatedAt).toLocaleString('zh-CN')}
               </Text>
             ) : null}
           </Box>
-          <Button
-            variant="light"
-            component="a"
-            href={chromeApi().runtime.getURL('start-page.html')}
-            target="_blank"
-          >
+          <Button variant="light" component="a" href={chromeApi().runtime.getURL('start-page.html')} target="_blank">
             预览起始页
           </Button>
         </Group>
@@ -235,116 +233,89 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
 
       <Divider label="选择来源" labelPosition="left" />
 
-      {authorizing ? (
-        <Stack gap="sm">
-          <Group gap="sm" align="flex-end" wrap="nowrap">
-            <Select
-              label="空间"
-              data={spaces}
-              value={spaceId}
-              onChange={(v) => setSpaceId(v ?? '')}
-              style={{ flex: '0 0 220px' }}
-            />
-            <Box style={{ flex: 1, minWidth: 0 }}>
-              <Text size="xs" fw={500} mb={4}>
-                文件夹
-              </Text>
-              <ScrollArea h={180} type="auto" className="pontis-listBox">
-                {folders.length === 0 ? (
-                  <Text size="sm" c="dimmed" p="xs">
-                    这个空间里没有可选的文件夹。
-                  </Text>
-                ) : (
-                  folders.map((f) => (
-                    <Group key={f.id} gap="xs" wrap="nowrap" px="xs">
-                      <input
-                        type="radio"
-                        name="start-page-folder"
-                        checked={picked === f.id}
-                        onChange={() => setPicked(f.id)}
-                        id={`sp-folder-${f.id}`}
-                      />
-                      <Box component="label" htmlFor={`sp-folder-${f.id}`} style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}>
-                        <Text size="sm" truncate>
-                          {f.trail.length ? `${f.trail.join(' / ')} / ${f.title}` : f.title}
-                        </Text>
-                      </Box>
-                    </Group>
-                  ))
-                )}
-              </ScrollArea>
-            </Box>
-          </Group>
-          <Group justify="space-between">
-            <Text size="xs" c="dimmed">
-              这里读取的是账户自己的目录树；起始页运行时使用的设备凭据不会因此获得更广的范围。
-            </Text>
-            <Group>
-              <Button
-                variant="default"
-                onClick={() => {
-                  setAuthorizing(false);
-                  setSessionToken('');
-                }}
-              >
-                取消
-              </Button>
-              <Button disabled={!picked} loading={busy === 'save'} onClick={() => void save()}>
-                批准并保存
-              </Button>
-            </Group>
-          </Group>
-        </Stack>
+      {synced.length === 0 ? (
+        <Alert color="amber" variant="light" title="这台设备还没有已同步的空间">
+          起始页只显示这台浏览器已经同步的空间里的目录。请先在「同步管理」绑定一个空间并完成初始化。
+        </Alert>
       ) : (
         <Stack gap="sm">
-          <Group gap="sm" align="flex-end" wrap="nowrap">
-            <TextInput
-              label="账户"
-              description="用于确认这次来源变更，凭据不会被保存。"
-              value={username}
-              onChange={(e) => setUsername(e.currentTarget.value)}
-              style={{ flex: '0 0 220px' }}
-            />
-            <PasswordInput
-              label="密码"
-              value={password}
-              onChange={(e) => setPassword(e.currentTarget.value)}
-              style={{ flex: '0 0 220px' }}
-            />
-            <Button
-              disabled={!username || !password}
-              loading={busy === 'authorize'}
-              onClick={() => void begin()}
-            >
-              读取目录
-            </Button>
-          </Group>
-          {config ? (
-            <Group gap="md">
+          <Select
+            label="空间"
+            description="只显示这台设备已建立同步绑定的空间。"
+            data={synced.map((s) => ({ value: s.value, label: s.label }))}
+            value={spaceId}
+            onChange={(v) => setSpaceId(v ?? '')}
+          />
+
+          <Box>
+            <Group gap="xs" mb="xs">
+              <Text size="xs" fw={500}>
+                文件夹
+              </Text>
+              {loadingTree ? <Loader size="xs" /> : null}
+            </Group>
+            <ScrollArea h={240} type="auto" className="pontis-listBox">
+              {loadingTree ? (
+                <Text size="sm" c="dimmed" p="sm">
+                  正在读取目录……
+                </Text>
+              ) : folders.length === 0 ? (
+                // "This space has no folders" is a claim about the account;
+                // it must not be shown while the read is still running (§8.2).
+                <Text size="sm" c="dimmed" p="sm">
+                  这个空间里还没有文件夹。
+                </Text>
+              ) : (
+                folders.map((f) => (
+                  <Group key={f.id} gap="xs" wrap="nowrap" px="sm">
+                    <Radio
+                      name="start-page-folder"
+                      checked={picked === f.id}
+                      onChange={() => setPicked(f.id)}
+                      aria-label={f.title}
+                    />
+                    <Box style={{ minWidth: 0, flex: 1 }}>
+                      <Text size="sm" truncate>
+                        {f.trail.length ? `${f.trail.join(' / ')} / ${f.title}` : f.title}
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        {f.children} 个直接子项
+                      </Text>
+                    </Box>
+                  </Group>
+                ))
+              )}
+            </ScrollArea>
+          </Box>
+
+          <Group justify="space-between">
+            {config ? (
               <Button variant="subtle" color="red" size="xs" loading={busy === 'release'} onClick={() => void release()}>
                 解除来源
               </Button>
-              <Text size="xs" c="dimmed">
-                解除只停止起始页的显示，不会解除该空间的同步绑定。
-              </Text>
-            </Group>
-          ) : null}
+            ) : (
+              <span />
+            )}
+            <Button disabled={!picked} loading={busy === 'save'} onClick={() => void save()}>
+              设为来源
+            </Button>
+          </Group>
         </Stack>
       )}
 
       <Divider label="显示" labelPosition="left" />
 
-      {authorizing || !config ? null : (
-        <Group gap="lg">
+      {config ? (
+        <Group grow>
           <Select
             label="打开方式"
+            description="也用于网页搜索结果。"
             data={[
               { value: 'current-tab', label: '当前标签页' },
               { value: 'new-tab', label: '新标签页' },
             ]}
             value={config.openTarget}
             onChange={(v) => void patch({ openTarget: (v as 'current-tab' | 'new-tab') ?? 'current-tab' })}
-            style={{ flex: '0 0 200px' }}
           />
           <Select
             label="密度"
@@ -354,31 +325,9 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
             ]}
             value={config.density}
             onChange={(v) => void patch({ density: (v as 'standard' | 'compact') ?? 'standard' })}
-            style={{ flex: '0 0 200px' }}
           />
-        </Group>
-      )}
-
-      {authorizing ? (
-        <Group gap="xs">
-          <Loader size="xs" />
-          <Text size="xs" c="dimmed">
-            正在读取账户目录……
-          </Text>
         </Group>
       ) : null}
     </Stack>
   );
-}
-
-/** Ask for the paired server's origin, the way pairing does. */
-async function requestOriginPermission(serverUrl: string): Promise<boolean> {
-  const chrome = chromeApi();
-  const pattern = `${new URL(serverUrl).protocol}//${new URL(serverUrl).hostname}${
-    new URL(serverUrl).port ? `:${new URL(serverUrl).port}` : ''
-  }/*`;
-  if (await chrome.permissions.contains({ origins: [pattern] })) return true;
-  return new Promise((resolve) => {
-    chrome.permissions.request({ origins: [pattern] }, (granted) => resolve(granted));
-  });
 }

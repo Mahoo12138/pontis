@@ -6,9 +6,13 @@
 // no binding, writes no pending operation, and advances no watermark — the
 // projection is allowed to look at the tree, not to take a position in it
 // (§11.1).
+//
+// The source lives here and nowhere else. A device may display a folder of a
+// space it already syncs, which is a capability it has by virtue of that
+// binding, so choosing a source needs no approval and no account credentials.
 
-import { ApiError, NOT_MODIFIED } from '../transport/client';
-import type { StartPageSnapshotWire, StartPageSourceWire } from './wire';
+import { ApiError, NOT_MODIFIED, type StartPageTransport } from '../transport/client';
+import type { StartPageSnapshotWire } from './wire';
 import {
   logDiagnostic,
   type PontisDB,
@@ -16,7 +20,6 @@ import {
   type StartPageSnapshotRecord,
 } from '../store/db';
 import type { BootstrapData } from '../store/bootstrap';
-import type { StartPageTransport } from '../transport/client';
 
 /** How stale the on-screen copy may be before a load asks again (§14.2). */
 export const REVALIDATE_AFTER_MS = 60_000;
@@ -25,11 +28,11 @@ export type StartPagePhase =
   | 'not-paired'
   | 'unconfigured'
   | 'ready'
-  /** The approved folder is gone or no longer a folder. Never falls back to
-   * the space (§5.2). */
+  /** The folder is gone or is no longer a folder. Never falls back to the
+   * space (§5.2). */
   | 'source-unavailable'
-  /** The grant was withdrawn, or the account/device may not be used. */
-  | 'permission-required'
+  /** The device does not sync the space the folder lives in, any more. */
+  | 'space-not-synced'
   | 'source-too-large'
   /** A body arrived that this build refuses to install. */
   | 'snapshot-invalid'
@@ -52,7 +55,7 @@ export interface StartPageDeps {
   /** Only the read half of the pairing record is needed here, and naming it
    * that way keeps a test able to hand over a plain object. */
   bootstrap: { get(): Promise<BootstrapData> };
-  client: Pick<StartPageTransport, 'deviceStartPage' | 'deviceStartPageSnapshot'>;
+  client: Pick<StartPageTransport, 'deviceStartPageSnapshot'>;
 }
 
 export function configIdFor(instanceId: string, deviceId: string): string {
@@ -68,32 +71,10 @@ export function snapshotIdFor(
   instanceId: string,
   userId: string,
   deviceId: string,
-  grantId: string,
-  grantVersion: number,
   spaceId: string,
   folderId: string,
 ): string {
-  return [instanceId, userId, deviceId, grantId, grantVersion, spaceId, folderId].join(':');
-}
-
-/** The values a read is bound to. Re-checked before anything is written, so a
- * response to an obsolete request cannot become the current view (§14.3). */
-interface ReadBinding {
-  configId: string;
-  configGeneration: number;
-  deviceId: string;
-  grantId: string;
-  grantVersion: number;
-}
-
-function bindingOf(config: StartPageConfigRecord): ReadBinding {
-  return {
-    configId: config.id,
-    configGeneration: config.configGeneration,
-    deviceId: config.deviceId,
-    grantId: config.grantId,
-    grantVersion: config.grantVersion,
-  };
+  return [instanceId, userId, deviceId, spaceId, folderId].join(':');
 }
 
 /**
@@ -109,7 +90,7 @@ export async function loadStartPage(deps: StartPageDeps): Promise<StartPageView>
   if (!identity) return { phase: 'not-paired', config: null, snapshot: null, fromCache: false };
 
   const config = await deps.db.startPageConfigs.get(identity.configId);
-  if (!config) return { phase: 'unconfigured', config: null, snapshot: null, fromCache: false };
+  if (!isConfigured(config)) return { phase: 'unconfigured', config: null, snapshot: null, fromCache: false };
 
   const snapshot = await readSnapshot(deps.db, config);
   if (snapshot && Date.now() - snapshot.verifiedAt < REVALIDATE_AFTER_MS) {
@@ -119,10 +100,9 @@ export async function loadStartPage(deps: StartPageDeps): Promise<StartPageView>
   const result = await refresh(deps, identity, config);
   if (result.view.phase === 'ready') return result.view;
   // A refresh that failed over a good copy keeps the copy on screen: the
-  // reader's bookmarks did not go anywhere because this request did not land
-  // (§14.4). A refusal that took the copy with it must not be answered by
-  // handing back the object read before the refresh — that would keep showing
-  // a tree the server has just said may not be shown.
+  // reader's bookmarks did not go anywhere because this request did not land.
+  // A refusal that took the copy with it must not be answered by handing back
+  // the object read before the refresh (§14.4).
   if (snapshot && !stopsDisplay(result.view.phase)) {
     return {
       phase: 'ready',
@@ -135,16 +115,6 @@ export async function loadStartPage(deps: StartPageDeps): Promise<StartPageView>
   return result.view;
 }
 
-/** Phases that mean private content may no longer be drawn, as opposed to
- * "could not find out right now". */
-function stopsDisplay(phase: StartPagePhase): boolean {
-  return (
-    phase === 'source-unavailable' ||
-    phase === 'permission-required' ||
-    phase === 'unconfigured'
-  );
-}
-
 /** Re-check the server. Safe to call on a timer, on focus, or on a manual
  * press of 刷新; concurrent callers each get their own answer, and the last
  * write still has to pass the generation check. */
@@ -152,7 +122,7 @@ export async function refreshStartPage(deps: StartPageDeps): Promise<StartPageVi
   const identity = await identityOf(deps);
   if (!identity) return { phase: 'not-paired', config: null, snapshot: null, fromCache: false };
   const config = await deps.db.startPageConfigs.get(identity.configId);
-  if (!config) return { phase: 'unconfigured', config: null, snapshot: null, fromCache: false };
+  if (!isConfigured(config)) return { phase: 'unconfigured', config: null, snapshot: null, fromCache: false };
   const result = await refresh(deps, identity, config);
   if (result.installed) return result.view;
   // Re-read after the refresh rather than reusing anything from before it: a
@@ -164,22 +134,26 @@ export async function refreshStartPage(deps: StartPageDeps): Promise<StartPageVi
   return result.view;
 }
 
+/** Phases that mean private content may no longer be drawn, as opposed to
+ * "could not find out right now". */
+function stopsDisplay(phase: StartPagePhase): boolean {
+  return phase === 'source-unavailable' || phase === 'space-not-synced' || phase === 'unconfigured';
+}
+
+function isConfigured(config: StartPageConfigRecord | undefined): config is StartPageConfigRecord {
+  return Boolean(config && config.spaceId && config.folderId);
+}
+
 interface Identity {
   configId: string;
   instanceId: string;
   deviceId: string;
-  deviceToken: string;
 }
 
 async function identityOf(deps: StartPageDeps): Promise<Identity | null> {
   const b = await deps.bootstrap.get();
   if (!b.serverUrl || !b.deviceToken || !b.deviceId || !b.instanceId) return null;
-  return {
-    configId: configIdFor(b.instanceId, b.deviceId),
-    instanceId: b.instanceId,
-    deviceId: b.deviceId,
-    deviceToken: b.deviceToken,
-  };
+  return { configId: configIdFor(b.instanceId, b.deviceId), instanceId: b.instanceId, deviceId: b.deviceId };
 }
 
 async function readSnapshot(
@@ -187,15 +161,7 @@ async function readSnapshot(
   config: StartPageConfigRecord,
 ): Promise<StartPageSnapshotRecord | null> {
   const row = await db.startPageSnapshots.get(
-    snapshotIdFor(
-      config.instanceId,
-      config.userId,
-      config.deviceId,
-      config.grantId,
-      config.grantVersion,
-      config.spaceId,
-      config.folderId,
-    ),
+    snapshotIdFor(config.instanceId, config.userId, config.deviceId, config.spaceId, config.folderId),
   );
   return row ?? null;
 }
@@ -211,23 +177,21 @@ async function refresh(
   identity: Identity,
   config: StartPageConfigRecord,
 ): Promise<RefreshResult> {
-  const bound = bindingOf(config);
-
   let read;
   try {
     // The cached tag is what makes an unchanged folder cheap; it is only ever
     // the tag this copy was installed with, so a stale row cannot claim to be
     // current.
     const cached = await readSnapshot(deps.db, config);
-    read = await deps.client.deviceStartPageSnapshot(cached?.etag);
+    read = await deps.client.deviceStartPageSnapshot(config.spaceId, config.folderId, cached?.etag);
   } catch (error) {
     return { installed: false, view: await failureView(deps, config, error) };
   }
 
   if (read.value === NOT_MODIFIED) {
     // Nothing changed — but the server only says that after it has checked the
-    // account, the device and the grant, so this is also the revalidation.
-    if (!(await stillCurrent(deps, bound))) {
+    // account, the device and its binding, so this is also the revalidation.
+    if (!(await stillCurrent(deps, config))) {
       return { installed: false, view: await viewOf(deps, identity) };
     }
     const existing = await readSnapshot(deps.db, config);
@@ -244,29 +208,24 @@ async function refresh(
   }
 
   const snapshot = read.value;
-  // A body that describes a different source than the one this read was
-  // started for is not this page's content, whatever else is true of it.
-  if (
-    snapshot.source.folder_id !== config.folderId ||
-    snapshot.source.space_id !== config.spaceId ||
-    snapshot.source.grant_version !== config.grantVersion ||
-    snapshot.source.grant_id !== config.grantId
-  ) {
+  // A body describing a different folder than the one this read named is not
+  // this page's content, whatever else is true of it.
+  if (snapshot.source.folder_id !== config.folderId || snapshot.source.space_id !== config.spaceId) {
     await logDiagnostic(deps.db, 'warn', 'start-page', 'snapshot identity did not match the request', {
       deviceId: config.deviceId,
-      grantVersion: config.grantVersion,
-      returnedGrantVersion: snapshot.source.grant_version,
+      asked: config.folderId,
+      returned: snapshot.source.folder_id,
     });
     return { installed: false, view: await viewOf(deps, identity) };
   }
 
   // Re-read the guard before writing: the user may have chosen another source,
   // signed out, or moved to another account while this request was in flight.
-  if (!(await stillCurrent(deps, bound))) {
+  if (!(await stillCurrent(deps, config))) {
     return { installed: false, view: await viewOf(deps, identity) };
   }
 
-  const record = toRecord(snapshot, identity, read.etag);
+  const record = toRecord(snapshot, identity);
   try {
     await install(deps.db, record);
   } catch (error) {
@@ -288,18 +247,18 @@ async function refresh(
 }
 
 /**
- * Still the same configuration and approval as when the read left?
+ * Still the same configuration and source as when the read left?
  *
  * The stored row is the authority: it is what a new source write replaces and
  * what a sign-out deletes, so comparing against it catches every way the page
  * can have moved on underneath an in-flight request (§14.3).
  */
-async function stillCurrent(deps: StartPageDeps, bound: ReadBinding): Promise<boolean> {
-  const current = await deps.db.startPageConfigs.get(bound.configId);
+async function stillCurrent(deps: StartPageDeps, bound: StartPageConfigRecord): Promise<boolean> {
+  const current = await deps.db.startPageConfigs.get(bound.id);
   if (!current) return false;
   if (current.configGeneration !== bound.configGeneration) return false;
   if (current.deviceId !== bound.deviceId) return false;
-  if (current.grantId !== bound.grantId || current.grantVersion !== bound.grantVersion) return false;
+  if (current.spaceId !== bound.spaceId || current.folderId !== bound.folderId) return false;
   const identity = await deps.bootstrap.get();
   // Re-pairing swapped the credential underneath this read; whatever comes
   // back now belongs to a device the reader is no longer looking at.
@@ -323,32 +282,18 @@ async function install(db: PontisDB, record: StartPageSnapshotRecord): Promise<v
   });
 }
 
-function toRecord(
-  snapshot: StartPageSnapshotWire,
-  identity: Identity,
-  etag: string,
-): StartPageSnapshotRecord {
+function toRecord(snapshot: StartPageSnapshotWire, identity: Identity): StartPageSnapshotRecord {
   const s = snapshot.source;
   return {
-    id: snapshotIdFor(
-      snapshot.instance_id,
-      snapshot.user_id,
-      s.device_id || identity.deviceId,
-      s.grant_id,
-      s.grant_version,
-      s.space_id,
-      s.folder_id,
-    ),
+    id: snapshotIdFor(snapshot.instance_id, snapshot.user_id, identity.deviceId, s.space_id, s.folder_id),
     instanceId: snapshot.instance_id,
     userId: snapshot.user_id,
-    deviceId: s.device_id || identity.deviceId,
+    deviceId: identity.deviceId,
     spaceId: s.space_id,
     folderId: s.folder_id,
-    grantId: s.grant_id,
-    grantVersion: s.grant_version,
     epoch: snapshot.snapshot.epoch,
     revision: snapshot.snapshot.revision,
-    etag,
+    etag: '',
     capturedAt: snapshot.snapshot.captured_at,
     verifiedAt: Date.now(),
     spaceName: s.space_name,
@@ -360,11 +305,10 @@ function toRecord(
 /**
  * A refusal the server stated plainly.
  *
- * Two of these clear the local copy and two do not. A source that is gone or a
- * grant that is withdrawn means the content may no longer be shown, so it is
- * deleted; a folder that is simply too large, or a body that failed to
- * validate, says nothing about the copy already held, which stays usable
- * (§13.3, §14.4).
+ * Some of these clear the local copy and some do not. A source that is gone or
+ * a space the device no longer syncs means the content may not be shown, so it
+ * goes; a folder that is simply too large, or a body that failed to validate,
+ * says nothing about the copy already held, which stays usable (§13.3, §14.4).
  */
 async function failureView(
   deps: StartPageDeps,
@@ -374,21 +318,21 @@ async function failureView(
   const code = error instanceof ApiError ? error.code : 'NETWORK_ERROR';
   const status = error instanceof ApiError ? error.status : 0;
 
-  const clearsContent =
-    code === 'START_PAGE_NOT_CONFIGURED' ||
-    code === 'START_PAGE_SOURCE_UNAVAILABLE' ||
-    code === 'START_PAGE_PERMISSION_REQUIRED' ||
-    code === 'DEVICE_CREDENTIAL_INVALID' ||
-    code === 'ACCOUNT_DISABLED';
+  // The codes that mean "you may not read this any more", as opposed to "this
+  // one read did not work". A revoked device and a dropped binding both land
+  // here: either way the space is no longer this device's to display.
+  const stops = new Set([
+    'START_PAGE_SOURCE_UNAVAILABLE',
+    'START_PAGE_PERMISSION_REQUIRED',
+    'DEVICE_CREDENTIAL_INVALID',
+    'ACCOUNT_DISABLED',
+    'BINDING_NOT_FOUND',
+    'NOT_BINDING_OWNER',
+    'SPACE_OUT_OF_SCOPE',
+  ]);
 
-  if (clearsContent) {
+  if (stops.has(code)) {
     await dropSnapshotsFor(deps.db, config.deviceId);
-    // A revoked grant is not a reason to forget what the user chose — the
-    // settings entry has to stay reachable so they can choose again. But the
-    // private tree it was showing goes now.
-    if (code === 'START_PAGE_NOT_CONFIGURED') {
-      await deps.db.startPageConfigs.delete(config.id);
-    }
     await logDiagnostic(deps.db, 'warn', 'start-page', 'source stopped being readable', {
       code,
       deviceId: config.deviceId,
@@ -396,12 +340,10 @@ async function failureView(
   }
 
   const phase: StartPagePhase =
-    code === 'START_PAGE_SOURCE_UNAVAILABLE' || code === 'START_PAGE_NOT_CONFIGURED'
+    code === 'START_PAGE_SOURCE_UNAVAILABLE'
       ? 'source-unavailable'
-      : code === 'START_PAGE_PERMISSION_REQUIRED' ||
-          code === 'DEVICE_CREDENTIAL_INVALID' ||
-          code === 'ACCOUNT_DISABLED'
-        ? 'permission-required'
+      : stops.has(code)
+        ? 'space-not-synced'
         : code === 'START_PAGE_SOURCE_TOO_LARGE'
           ? 'source-too-large'
           : status === 0
@@ -417,7 +359,7 @@ async function dropSnapshotsFor(db: PontisDB, deviceId: string): Promise<void> {
 
 async function viewOf(deps: StartPageDeps, identity: Identity): Promise<StartPageView> {
   const config = await deps.db.startPageConfigs.get(identity.configId);
-  if (!config) return { phase: 'unconfigured', config: null, snapshot: null, fromCache: false };
+  if (!isConfigured(config)) return { phase: 'unconfigured', config: null, snapshot: null, fromCache: false };
   const snapshot = await readSnapshot(deps.db, config);
   return snapshot
     ? { phase: 'ready', config, snapshot, fromCache: true }
@@ -425,15 +367,14 @@ async function viewOf(deps: StartPageDeps, identity: Identity): Promise<StartPag
 }
 
 /**
- * Record the source this browser shows, after the server confirmed it.
+ * Point this browser at a folder of a space it already syncs.
  *
- * The caller passes the source it just read successfully; writing the config
- * and the first snapshot together is what makes "configured" mean "there is
- * something to show" rather than "a choice was saved" (§8.2).
+ * The caller has read the folder successfully first, so "configured" always
+ * means "there is something to show" rather than "a choice was saved" (§8.2).
  */
 export async function saveSource(
   deps: StartPageDeps,
-  source: StartPageSourceWire,
+  source: { spaceId: string; folderId: string },
   snapshot: StartPageSnapshotWire,
 ): Promise<StartPageConfigRecord> {
   const identity = await identityOf(deps);
@@ -444,10 +385,8 @@ export async function saveSource(
     instanceId: identity.instanceId,
     deviceId: identity.deviceId,
     userId: snapshot.user_id,
-    spaceId: source.space_id,
-    folderId: source.folder_id,
-    grantId: source.grant_id,
-    grantVersion: source.grant_version,
+    spaceId: source.spaceId,
+    folderId: source.folderId,
     searchMode: existing?.searchMode ?? 'web',
     openTarget: existing?.openTarget ?? 'current-tab',
     density: existing?.density ?? 'standard',
@@ -456,7 +395,7 @@ export async function saveSource(
   };
   await deps.db.transaction('rw', [deps.db.startPageConfigs, deps.db.startPageSnapshots], async () => {
     await deps.db.startPageConfigs.put(record);
-    await install(deps.db, toRecord(snapshot, identity, ''));
+    await install(deps.db, toRecord(snapshot, identity));
   });
   return record;
 }
@@ -476,7 +415,7 @@ export async function patchConfig(
 }
 
 /**
- * Forget this device's start page entirely.
+ * Forget this device's start page.
  *
  * Called when the source is released and when the device is unpaired: both
  * leave no reader behind who is entitled to the cached tree. Sync state is not

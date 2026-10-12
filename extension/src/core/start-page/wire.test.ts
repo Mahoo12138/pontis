@@ -100,15 +100,22 @@ describe('parseStartPageSnapshot', () => {
 });
 
 describe('parseStartPageSource', () => {
-  it('keeps the version that expires a cache', () => {
+  it('names the source a snapshot describes', () => {
     const source = parseStartPageSource(body().source);
-    expect(source.grant_version).toBe(1);
-    expect(source.folder_id).toBe('folder-1');
+    expect(source).toEqual({
+      space_id: 'space-1',
+      space_name: '个人',
+      folder_id: 'folder-1',
+      folder_title: '日常入口',
+    });
   });
 
-  it('refuses a source description with a string version', () => {
-    expect(() => parseStartPageSource({ ...(body().source as object), grant_version: '1' })).toThrow(
-      /grant_version must be a number/,
+  it('refuses a source missing either half of its identity', () => {
+    // A folder id with no space id could not be re-read: the next request
+    // would have to guess which space the device means.
+    expect(() => parseStartPageSource({ space_name: 'a', folder_title: 'b' })).toThrow(/space_id must be a string/);
+    expect(() => parseStartPageSource({ space_id: 's', space_name: 'a', folder_title: 'b' })).toThrow(
+      /folder_id must be a string/,
     );
   });
 });

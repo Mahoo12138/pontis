@@ -89,8 +89,6 @@ export type {
   ScheduleView,
   ScheduleRequest,
   StartPageSource,
-  StartPageGrantListResponse,
-  AuthorizeStartPageGrantRequest,
   StartPageSnapshotNode,
   StartPageSnapshotMeta,
   StartPageSnapshot,

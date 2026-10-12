@@ -230,18 +230,6 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/v1/devices", s.handleRegisterDevice)
 	})
 
-	// Start page (start-page doc §11.2, §13.1): the account approves one
-	// source folder per device, and the web page reads folders the visitor
-	// owns. Approving is a session action on purpose — see
-	// requireStartPageAdmin.
-	r.Group(func(r chi.Router) {
-		r.Use(s.requireStartPageAdmin, s.requireSession)
-		r.Get("/api/v1/start-page-grants", s.handleListStartPageGrants)
-		r.Post("/api/v1/start-page-grants", s.handleAuthorizeStartPageGrant)
-		r.Delete("/api/v1/start-page-grants/{grantID}", s.handleRevokeStartPageGrant)
-		r.Get("/api/v1/start-page/snapshot", s.handleWebStartPageSnapshot)
-	})
-
 	// Device-scoped API (device credential).
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireDevice)
@@ -254,10 +242,9 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/v1/sync/bindings/{bindingID}/snapshot", s.handleSnapshot)
 		r.Post("/api/v1/sync/transfers", s.handleDeviceTransfer)
 
-		// Start page reads (§13.1). Which folder is named by the grant the
-		// account approved, never by anything on this request, so the device
-		// credential cannot aim itself at another part of the tree.
-		r.Get("/api/v1/device/start-page", s.handleDeviceStartPageSource)
+		// Start page read: one folder's subtree, inside a space this device
+		// already syncs. Entitlement comes from the binding, so no second
+		// approval and no account re-authentication is involved (§11.2).
 		r.Get("/api/v1/device/start-page/snapshot", s.handleDeviceStartPageSnapshot)
 
 		// Reconciliation lifecycle (doc 08 §9-§14): the only way a
