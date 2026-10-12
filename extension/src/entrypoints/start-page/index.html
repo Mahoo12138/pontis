@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- A normal extension page, opened from the popup or the settings tab.
+         It is deliberately not a `newtab` entrypoint: WXT turns that into a
+         chrome_url_overrides declaration in every build, and a sync extension
+         must not start owning the new tab because it gained a preview page
+         (start-page doc §9.1, §9.2). -->
+    <meta name="manifest.open_in_tab" content="true" />
+    <title>Pontis 起始页</title>
+  </head>
+  <body style="margin: 0">
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

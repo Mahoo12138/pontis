@@ -166,6 +166,20 @@ export function App() {
             page — a row that says "目录缺失" with nothing to click just sends
             the person to close the popup and find it themselves. The hash puts
             them on 同步管理 instead of on a tab they then have to leave. */}
+        {/* Two different destinations, so two links: the start page is a page
+            to open, and its source is approved on the settings tab. Merging
+            them would make "打开起始页" mean "change what it shows". */}
+        <Anchor size="xs" ta="center" href={chromeApi().runtime.getURL('start-page.html')} target="_blank">
+          打开起始页
+        </Anchor>
+        <Anchor
+          size="xs"
+          ta="center"
+          href={`${chromeApi().runtime.getURL('options.html')}#start-page`}
+          target="_blank"
+        >
+          起始页设置
+        </Anchor>
         <Anchor
           size="xs"
           ta="center"

@@ -287,3 +287,155 @@ html[data-mantine-color-scheme='dark'] {
   outline: 2px solid var(--pontis-accent);
   outline-offset: 2px;
 }
+
+/* ─── Start page ───────────────────────────────────────────────────────────
+   Sparser than the sync tables but the same tool: no hero, no card borders,
+   hover is a background change and nothing else (start-page doc §10). */
+
+.pontis-spShell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.pontis-spHead {
+  padding: 14px 28px;
+  border-bottom: 1px solid var(--mantine-color-gray-2);
+}
+
+html[data-mantine-color-scheme='dark'] .pontis-spHead {
+  border-bottom-color: var(--mantine-color-dark-4);
+}
+
+.pontis-spBody {
+  flex: 1;
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 24px 28px 40px;
+}
+
+.pontis-spCrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--mantine-color-gray-6);
+}
+
+.pontis-spCrumbGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pontis-spSep {
+  color: var(--mantine-color-gray-4);
+}
+
+.pontis-spCrumb {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font: inherit;
+  color: inherit;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pontis-spCrumb:hover {
+  background: var(--mantine-color-gray-1);
+  color: var(--mantine-color-text);
+}
+
+html[data-mantine-color-scheme='dark'] .pontis-spCrumb:hover {
+  background: var(--mantine-color-dark-5);
+}
+
+.pontis-spCrumbNow {
+  color: var(--mantine-color-text);
+  font-weight: 600;
+  cursor: default;
+}
+
+.pontis-spGrid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
+  gap: 12px;
+}
+
+.pontis-spGrid > li {
+  min-width: 0;
+}
+
+.pontis-spEntry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 68px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  overflow: hidden;
+  cursor: pointer;
+  transition: background-color 100ms;
+}
+
+.pontis-spEntry:hover {
+  background: var(--mantine-color-gray-1);
+}
+
+html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
+  background: var(--mantine-color-dark-6);
+}
+
+.pontis-spEntryIcon {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mantine-color-gray-6);
+}
+
+.pontis-spEntryText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pontis-spEntryTitle {
+  font-size: 14px;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pontis-spEntryMeta {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--mantine-color-gray-6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

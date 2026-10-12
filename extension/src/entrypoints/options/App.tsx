@@ -47,6 +47,7 @@ import { BindForm, type SpaceOption } from '../../ui/BindForm';
 import { listMountFolders, type FolderOption } from '../../ui/mountFolders';
 import { PairingForm } from '../../ui/PairingForm';
 import { createRuntime, errText, wakeWorker } from '../../ui/runtime';
+import { StartPageSettings } from '../../ui/StartPageSettings';
 import { bindingStatus, relTime, sortBindings } from '../../ui/bindingStatus';
 import { chromeApi } from '../../runtime/chromeApi';
 
@@ -55,7 +56,7 @@ import { chromeApi } from '../../runtime/chromeApi';
 // activated by the worker, so ask it for a round instead of waiting on an alarm.
 const runtime = createRuntime(() => wakeWorker(chromeApi()));
 
-type Tab = 'account' | 'sync' | 'log';
+type Tab = 'account' | 'sync' | 'start-page' | 'log';
 
 /**
  * Where the page opens. The guide and the popup each mean a particular tab when
@@ -64,7 +65,8 @@ type Tab = 'account' | 'sync' | 'log';
  */
 function initialTab(): Tab {
   const h = window.location.hash.slice(1);
-  return h === 'sync' || h === 'log' ? h : 'account';
+  if (h === 'sync' || h === 'log' || h === 'start-page') return h;
+  return 'account';
 }
 
 export function App() {
@@ -351,6 +353,7 @@ export function App() {
             >
               同步管理
             </Tabs.Tab>
+            <Tabs.Tab value="start-page">起始页</Tabs.Tab>
             <Tabs.Tab value="log">本地日志</Tabs.Tab>
           </Tabs.List>
 
@@ -689,6 +692,15 @@ export function App() {
                 })()}
               </Section>
             </Box>
+          </Tabs.Panel>
+
+          <Tabs.Panel value="start-page">
+            <Section
+              title="起始页来源"
+              hint="起始页是这套书签的快速访问视图，不是另一套收藏：它读取工作台中已有的内容，不创建第二棵树，也不改变同步范围。"
+            >
+              <StartPageSettings onChanged={refresh} />
+            </Section>
           </Tabs.Panel>
 
           <Tabs.Panel value="log">
