@@ -292,6 +292,7 @@ export class PontisDB extends Dexie {
   diagnostics!: Table<DiagnosticEvent, number>;
   startPageConfigs!: Table<StartPageConfigRecord, string>;
   startPageSnapshots!: Table<StartPageSnapshotRecord, string>;
+  startPageAppearance!: Table<StartPageAppearanceRecord, string>;
 
   constructor(name = 'pontis-replica') {
     super(name);
@@ -328,6 +329,14 @@ export class PontisDB extends Dexie {
       // device rather than by one known row.
       startPageSnapshots: 'id, deviceId, [deviceId+spaceId], verifiedAt',
     });
+    this.version(5).stores({
+      // Appearance is its own row rather than three more columns on the
+      // config: a background image is a few hundred kilobytes, and the config
+      // is read on every revalidation and every generation check. Keeping it
+      // apart also means saveSource, which rebuilds the config record, cannot
+      // quietly drop what the page looks like.
+      startPageAppearance: 'id',
+    });
   }
 }
 
@@ -356,6 +365,22 @@ export interface StartPageConfigRecord {
   /** Rises on every write, so an in-flight read can be recognised as
    * belonging to a configuration the user has since replaced (§14.3). */
   configGeneration: number;
+  updatedAt: number;
+}
+
+/** What this browser's start page looks like.
+ *
+ * Keyed by the same id as the config, and stored apart from it: an appearance
+ * is a local preference with a payload measured in hundreds of kilobytes, and
+ * nothing about it can invalidate a snapshot. */
+export interface StartPageAppearanceRecord {
+  id: string;
+  /** Empty means "say the time-of-day greeting instead". */
+  titleText: string;
+  /** A canvas-encoded data URL, or null for no image. */
+  background: string | null;
+  /** 0–1. How much of the image is allowed through the page's own colour. */
+  backgroundOpacity: number;
   updatedAt: number;
 }
 

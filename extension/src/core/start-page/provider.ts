@@ -422,8 +422,14 @@ export async function patchConfig(
  * touched — a start page and a binding are different decisions (§5.3).
  */
 export async function clearStartPage(db: PontisDB, deviceId: string): Promise<void> {
-  await db.transaction('rw', [db.startPageConfigs, db.startPageSnapshots], async () => {
-    await db.startPageSnapshots.where('deviceId').equals(deviceId).delete();
-    await db.startPageConfigs.where('deviceId').equals(deviceId).delete();
-  });
+  await db.transaction(
+    'rw',
+    [db.startPageConfigs, db.startPageSnapshots, db.startPageAppearance],
+    async () => {
+      const ids = await db.startPageConfigs.where('deviceId').equals(deviceId).primaryKeys();
+      await db.startPageSnapshots.where('deviceId').equals(deviceId).delete();
+      await db.startPageAppearance.bulkDelete(ids);
+      await db.startPageConfigs.where('deviceId').equals(deviceId).delete();
+    },
+  );
 }

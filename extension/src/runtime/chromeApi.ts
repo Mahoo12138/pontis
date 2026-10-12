@@ -15,6 +15,13 @@ export interface ChromeStorageArea {
   remove(keys: string[]): Promise<void>;
 }
 
+/** `chrome.storage.onChanged` hands over the keys that moved and which area
+ * they came from. */
+export type StorageChangeHandler = (
+  changes: Record<string, { oldValue?: unknown; newValue?: unknown }>,
+  areaName: string,
+) => void;
+
 export interface ChromeAlarmsApi {
   create(name: string, alarmInfo: { periodInMinutes?: number }): void;
   onAlarm: { addListener(cb: (alarm: { name: string }) => void): void };
@@ -50,7 +57,13 @@ export interface ChromeGlobal {
   search?: ChromeSearchApi;
   /** Only `create` is used: the guide and the settings page open as tabs. */
   tabs: { create(props: { url: string }): Promise<unknown> };
-  storage: { local: ChromeStorageArea };
+  storage: {
+    local: ChromeStorageArea;
+    /** The one cross-document signal an extension has. IndexedDB writes reach no
+     * event bus, so a settings tab changing something an open page renders has
+     * to be announced through here. */
+    onChanged: { addListener(cb: StorageChangeHandler): void; removeListener(cb: StorageChangeHandler): void };
+  };
   alarms: ChromeAlarmsApi;
   runtime: ChromeRuntimeApi;
   /**

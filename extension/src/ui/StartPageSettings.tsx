@@ -17,13 +17,24 @@ import {
   Radio,
   ScrollArea,
   Select,
+  Slider,
   Stack,
   Text,
+  TextInput,
 } from '@mantine/core';
 import { createRuntime, errText } from './runtime';
 import { chromeApi } from '../runtime/chromeApi';
 import { clearStartPage, patchConfig, saveSource } from '../core/start-page/provider';
-import type { StartPageConfigRecord } from '../core/store/db';
+import {
+  BACKGROUND_ERROR_TEXT,
+  defaultAppearance,
+  greetingFor,
+  loadAppearance,
+  prepareBackground,
+  publishAppearanceChange,
+  saveAppearance,
+} from '../core/start-page/appearance';
+import type { StartPageAppearanceRecord, StartPageConfigRecord } from '../core/store/db';
 import type { ParentRefWire } from '../core/protocol/types';
 
 const runtime = createRuntime();
@@ -52,6 +63,10 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
   const [picked, setPicked] = useState('');
   const [loadingTree, setLoadingTree] = useState(false);
 
+  const [appearance, setAppearance] = useState<StartPageAppearanceRecord>(() => defaultAppearance(''));
+  const [titleDraft, setTitleDraft] = useState('');
+  const [opacityDraft, setOpacityDraft] = useState(0);
+
   const reload = useCallback(async () => {
     const b = await runtime.bootstrap.get();
     setPaired(Boolean(b.serverUrl && b.deviceToken && b.instanceId && b.deviceId));
@@ -62,6 +77,10 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
     const row = (await runtime.db.startPageConfigs.get(`${b.instanceId}:${b.deviceId}`)) ?? null;
     setConfig(row);
     if (row?.spaceId) setSpaceId(row.spaceId);
+    const look = row ? await loadAppearance(runtime.db, row.id) : defaultAppearance('');
+    setAppearance(look);
+    setTitleDraft(look.titleText);
+    setOpacityDraft(Math.round(look.backgroundOpacity * 100));
   }, []);
 
   useEffect(() => {
@@ -196,6 +215,47 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
     onChanged?.();
   };
 
+  // Appearance writes go straight to the row the start page reads, and announce
+  // themselves through chrome.storage so an already-open page repaints. Nothing
+  // here touches the source or the cached tree.
+  const applyAppearance = async (
+    patch: Partial<Pick<StartPageAppearanceRecord, 'titleText' | 'background' | 'backgroundOpacity'>>,
+  ) => {
+    if (!config) return null;
+    const next = await saveAppearance(runtime.db, config.id, patch);
+    setAppearance(next);
+    await publishAppearanceChange(chromeApi().storage.local, config.id);
+    return next;
+  };
+
+  const saveTitle = async (text: string) => {
+    if (!config || text === appearance.titleText) return;
+    const next = await applyAppearance({ titleText: text.slice(0, 60) });
+    if (next) setTitleDraft(next.titleText);
+  };
+
+  const chooseBackground = async (file: File | undefined) => {
+    if (!config || !file) return;
+    setBusy('background');
+    setError(null);
+    try {
+      const prepared = await prepareBackground(file);
+      if ('error' in prepared) {
+        setError(BACKGROUND_ERROR_TEXT[prepared.error]);
+        return;
+      }
+      await applyAppearance({ background: prepared.dataUrl });
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const removeBackground = () => void applyAppearance({ background: null });
+
+  const saveOpacity = (percent: number) => void applyAppearance({ backgroundOpacity: percent / 100 });
+
   if (!paired) {
     return (
       <Alert color="blue" variant="light" title="还没有配对">
@@ -303,16 +363,90 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
         </Stack>
       )}
 
-      <Divider label="新标签页" labelPosition="left" />
+      <Divider label="外观" labelPosition="left" />
 
-      {/* Which artifact is installed is not visible from the icon and cannot be
-          changed from inside the extension, so the page says it plainly rather
-          than offering a toggle that would lie (§8.3). */}
-      <Text size="sm" c="dimmed">
-        {typeof __PONTIS_NEWTAB_BUILD__ !== 'undefined' && __PONTIS_NEWTAB_BUILD__
-          ? '当前安装的是接管版本：新标签页会显示 Pontis 起始页。要恢复浏览器原来的新标签页，停用或卸载本扩展即可；扩展内没有这个开关。若新标签页仍是浏览器原来的样子，多半是浏览器在装入或更新时把它停用了——到扩展管理页点「启用」即可，每次更新后可能需要再点一次。'
-          : '当前安装的是标准同步版本，不会接管新标签页。想让新标签页显示 Pontis 起始页，请另行安装「Pontis (起始页)」构建；停用本扩展不会影响浏览器原有的新标签页。'}
-      </Text>
+      {config ? (
+        <Stack gap="sm">
+          <TextInput
+            label="标题"
+            maw={360}
+            maxLength={60}
+            placeholder={greetingFor(new Date())}
+            description={`留空则按时间显示问候语，现在是「${greetingFor(new Date())}」。`}
+            value={titleDraft}
+            onChange={(e) => setTitleDraft(e.currentTarget.value)}
+            onBlur={() => void saveTitle(titleDraft)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                void saveTitle(titleDraft);
+              }
+            }}
+          />
+
+          <Box>
+            <Text size="sm" fw={500} mb={6}>
+              背景图片
+            </Text>
+            <Group gap="sm" wrap="nowrap" align="flex-start">
+              {appearance.background ? (
+                <img className="pontis-spBgThumb" src={appearance.background} alt="当前背景预览" />
+              ) : (
+                <Box className="pontis-spBgThumb pontis-spBgThumbEmpty" />
+              )}
+              <Stack gap={4}>
+                <Group gap="xs">
+                  <Button size="xs" variant="light" loading={busy === 'background'} component="label">
+                    选择图片
+                    <input
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      onChange={(e) => {
+                        void chooseBackground(e.currentTarget.files?.[0]);
+                        // So picking the same file again still fires a change.
+                        e.currentTarget.value = '';
+                      }}
+                    />
+                  </Button>
+                  {appearance.background ? (
+                    <Button size="xs" variant="subtle" color="gray" onClick={() => void removeBackground()}>
+                      移除
+                    </Button>
+                  ) : null}
+                </Group>
+                <Text size="xs" c="dimmed">
+                  图片只保存在这台浏览器里，不会上传到 Server。
+                </Text>
+              </Stack>
+            </Group>
+          </Box>
+
+          {appearance.background ? (
+            <Box maw={300}>
+              <Text size="sm" fw={500} mb={6}>
+                背景不透明度
+              </Text>
+              <Slider
+                min={0}
+                max={100}
+                step={5}
+                value={opacityDraft}
+                onChange={setOpacityDraft}
+                onChangeEnd={saveOpacity}
+                label={(v: number) => `${v}%`}
+              />
+              <Text size="xs" c="dimmed" mt={4}>
+                数值越低背景越淡，文字越容易读。
+              </Text>
+            </Box>
+          ) : null}
+        </Stack>
+      ) : (
+        <Text size="sm" c="dimmed">
+          选好来源后这里可以设置标题和背景。
+        </Text>
+      )}
 
       <Divider label="显示" labelPosition="left" />
 
@@ -339,6 +473,18 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
           />
         </Group>
       ) : null}
+
+      <Divider label="新标签页" labelPosition="left" />
+
+      {/* Which artifact is installed is not visible from the icon and cannot be
+          changed from inside the extension, so the page says it plainly rather
+          than offering a toggle that would lie (§8.3). It is last because it is
+          a fact about the packaging, not something set here. */}
+      <Text size="sm" c="dimmed">
+        {typeof __PONTIS_NEWTAB_BUILD__ !== 'undefined' && __PONTIS_NEWTAB_BUILD__
+          ? '当前安装的是接管版本：新标签页会显示 Pontis 起始页。要恢复浏览器原来的新标签页，停用或卸载本扩展即可；扩展内没有这个开关。若新标签页仍是浏览器原来的样子，多半是浏览器在装入或更新时把它停用了——到扩展管理页点「启用」即可，每次更新后可能需要再点一次。'
+          : '当前安装的是标准同步版本，不会接管新标签页。想让新标签页显示 Pontis 起始页，请另行安装「Pontis (起始页)」构建；停用本扩展不会影响浏览器原有的新标签页。'}
+      </Text>
     </Stack>
   );
 }

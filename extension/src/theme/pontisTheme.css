@@ -302,8 +302,53 @@ html[data-mantine-color-scheme='dark'] {
 }
 
 .pontis-spHead {
+  /* Stays put while the folder scrolls, so the title and the "how fresh is
+     this" line are never off-screen on a long list. */
+  position: sticky;
+  top: 0;
+  z-index: 2;
   padding: 14px 28px;
   border-bottom: 1px solid var(--mantine-color-gray-2);
+  /* Translucent rather than solid: the background image belongs to the window,
+     and an opaque bar would cut it in half. The blur carries the text over the
+     rows that scroll beneath it. */
+  background: color-mix(in srgb, var(--pontis-workspace-bg) 82%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+@supports not (backdrop-filter: blur(2px)) {
+  .pontis-spHead {
+    background: var(--pontis-workspace-bg);
+  }
+}
+
+.pontis-spTitle {
+  /* A custom title is user text of unknown length; it must not push the status
+     line out of the bar. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The settings page's preview of the chosen background. */
+.pontis-spBgThumb {
+  display: block;
+  width: 96px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--pontis-subtle-border);
+}
+
+.pontis-spBgThumbEmpty {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--pontis-hover-bg),
+    var(--pontis-hover-bg) 6px,
+    transparent 6px,
+    transparent 12px
+  );
 }
 
 html[data-mantine-color-scheme='dark'] .pontis-spHead {

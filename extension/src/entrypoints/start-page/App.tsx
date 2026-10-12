@@ -1,12 +1,12 @@
 // The extension's start page: a read-only view of one approved folder.
 //
-// It opens from the popup or the settings tab. Owning the browser's new tab is
-// a separate, opt-in decision this build does not make (§9.2), which is why the
-// entrypoint is a plain page rather than a `newtab` entrypoint.
+// It opens from the popup or the settings tab. Which browser page this one is
+// allowed to become is a packaging decision, not a setting (§9.2), which is why
+// the entrypoint here is a plain page and `newtab` re-uses it.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Box, Button, Group, Loader, Stack, Text, Title } from '@mantine/core';
-import { chromeApi } from '../../runtime/chromeApi';
+import { chromeApi, type StorageChangeHandler } from '../../runtime/chromeApi';
 import { createRuntime, errText } from '../../ui/runtime';
 import {
   REVALIDATE_AFTER_MS,
@@ -15,10 +15,18 @@ import {
   refreshStartPage,
   type StartPageView,
 } from '../../core/start-page/provider';
+import {
+  APPEARANCE_SIGNAL_KEY,
+  backgroundLayers,
+  defaultAppearance,
+  loadAppearance,
+  titleFor,
+} from '../../core/start-page/appearance';
 import { buildSourceTree, resolveCurrentFolder } from '../../core/start-page/tree';
 import { navigableUrl, openNavigable, urlKind } from '../../core/start-page/url';
 import { createSearchAdapter } from '../../core/start-page/search';
 import { SearchArea } from './SearchArea';
+import type { StartPageAppearanceRecord } from '../../core/store/db';
 import type { StartPageSnapshotNodeWire } from '../../core/start-page/wire';
 
 const runtime = createRuntime();
@@ -43,6 +51,9 @@ export function App() {
   const [folderId, setFolderId] = useState('');
   const [movedBack, setMovedBack] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // Appearance lives in its own row and its own state: changing the title or
+  // the background neither touches the snapshot nor asks for one.
+  const [appearance, setAppearance] = useState<StartPageAppearanceRecord>(() => defaultAppearance(''));
 
   const snapshot = view?.snapshot ?? null;
 
@@ -68,6 +79,30 @@ export function App() {
       cancelled = true;
     };
   }, [apply]);
+
+  const configId = view?.config?.id ?? '';
+
+  useEffect(() => {
+    let cancelled = false;
+    const read = () =>
+      void loadAppearance(runtime.db, configId).then((next) => {
+        if (!cancelled) setAppearance(next);
+      });
+    read();
+    // A settings tab and a start page are separate documents over one
+    // IndexedDB, which announces nothing when it changes. The settings page
+    // publishes a signal through chrome.storage; this is the other half.
+    const onSignal: StorageChangeHandler = (changes, area) => {
+      const moved = area === 'local' ? changes[APPEARANCE_SIGNAL_KEY]?.newValue : undefined;
+      if (moved && (moved as { id?: string }).id === configId) read();
+    };
+    const storage = chromeApi().storage;
+    storage.onChanged.addListener(onSignal);
+    return () => {
+      cancelled = true;
+      storage.onChanged.removeListener(onSignal);
+    };
+  }, [configId]);
 
   const doRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -127,9 +162,12 @@ export function App() {
 
   const settingsHref = `${chromeApi().runtime.getURL('options.html')}#start-page`;
 
+  const headTitle = titleFor(appearance, new Date());
+  const headBackground = backgroundLayers(appearance);
+
   if (loading) {
     return (
-      <Shell>
+      <Shell title={headTitle} background={headBackground}>
         <Group justify="center" mt="xl">
           <Loader size="sm" />
           <Text size="sm" c="dimmed">
@@ -145,7 +183,7 @@ export function App() {
   if (phase === 'not-paired' || phase === 'unconfigured') {
     const unpaired = phase === 'not-paired';
     return (
-      <Shell>
+      <Shell title={headTitle} background={headBackground}>
         <Emptyish
           icon={<FolderGlyph />}
           title={unpaired ? '还没有连接 Server' : '还没有选择要显示的文件夹'}
@@ -170,7 +208,7 @@ export function App() {
 
   if (phase !== 'ready' || !snapshot || !tree) {
     return (
-      <Shell>
+      <Shell title={headTitle} background={headBackground}>
         <Refusal
           phase={phase}
           errorCode={view?.errorCode}
@@ -206,6 +244,8 @@ export function App() {
 
   return (
     <Shell
+      title={headTitle}
+      background={headBackground}
       status={
         <Group gap="sm" wrap="nowrap">
           {movedBack ? (
@@ -285,12 +325,22 @@ function workbenchUrl(serverUrl: string, spaceId: string): string {
   return `${serverUrl.replace(/\/+$/, '')}/spaces/${spaceId}`;
 }
 
-function Shell({ children, status }: { children: React.ReactNode; status?: React.ReactNode }) {
+function Shell({
+  children,
+  status,
+  title,
+  background,
+}: {
+  children: React.ReactNode;
+  status?: React.ReactNode;
+  title: string;
+  background?: Record<string, string>;
+}) {
   return (
-    <Box className="pontis-page pontis-spShell">
+    <Box className="pontis-page pontis-spShell" style={background as React.CSSProperties | undefined}>
       <Group justify="space-between" wrap="nowrap" className="pontis-spHead">
-        <Title order={4} fw={600}>
-          Pontis 起始页
+        <Title order={4} fw={600} className="pontis-spTitle" title={title}>
+          {title}
         </Title>
         {status}
       </Group>
