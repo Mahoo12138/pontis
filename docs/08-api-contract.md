@@ -247,6 +247,7 @@ pending_initial，因此那之后设备上的第一个可用 session 只能是 `
 后续：
 
 ```text
+GET  /api/v1/sync/bindings/{binding}/reconciliation
 GET  /api/v1/sync/reconciliations/{id}
 POST /api/v1/sync/reconciliations/{id}/plan
 PUT  /api/v1/sync/reconciliations/{id}/decisions
@@ -258,6 +259,14 @@ POST /api/v1/sync/reconciliations/{id}/complete
 `bindings/{binding}/reconciliations` 与 `bindings/{binding}/client-snapshots`
 按 binding id 定位（它属于调用方 Device）；`reconciliations/{id}` 与
 `server-snapshots/{id}` 按资源 id 定位，Server 先解析其归属再判权限。
+
+`GET bindings/{binding}/reconciliation` 返回该 binding 当前未结束的
+session（ envelope 与 `GET reconciliations/{id}` 同形），没有时
+`404 RECONCILIATION_NOT_FOUND`。它是为"创建请求已被 Server 处理、回包却丢了"
+准备的：Client 手里没有 session id，而一个 binding 只允许一个 active
+reconciliation，于是之后每次创建都被自己的孤儿挡在
+`409 RECONCILIATION_IN_PROGRESS`。Client 只在拿到这个 session 的类型与自己请求的
+类型一致时接管它；不一致就报错，不去接管别人的流程。
 
 `{id}` 不是授权凭证（`22-security-model.md` D.6）：属于别的 Device 时返回
 `403 NOT_BINDING_OWNER`，不存在时返回 `404 RECONCILIATION_NOT_FOUND` /

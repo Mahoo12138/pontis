@@ -78,6 +78,12 @@ export interface TransferTransport {
  */
 export interface ReconciliationTransport {
   createReconciliation(bindingId: string, type: ReconciliationType, reason: string): Promise<ReconciliationEnvelopeWire>;
+  /**
+   * The binding's one open reconciliation, for the resume-after-a-lost-answer
+   * case: a create that reached the server but not the client leaves an id
+   * nobody here can name, and every later create is refused.
+   */
+  getActiveReconciliation(bindingId: string): Promise<ReconciliationEnvelopeWire>;
   submitClientSnapshot(bindingId: string, snapshot: ClientSnapshotWire): Promise<ReconciliationEnvelopeWire>;
   createServerSnapshot(bindingId: string): Promise<ServerSnapshotWire>;
   listServerSnapshotNodes(snapshotId: string, cursor?: string, limit?: number): Promise<ServerSnapshotPageWire>;
@@ -181,6 +187,12 @@ export class ApiClient implements SyncTransport, SnapshotTransport, TransferTran
     return this.request<ReconciliationEnvelopeWire>(`/api/v1/sync/bindings/${bindingId}/reconciliations`, {
       method: 'POST',
       body: { type, reason },
+      validate: parseReconciliationEnvelope,
+    });
+  }
+
+  getActiveReconciliation(bindingId: string): Promise<ReconciliationEnvelopeWire> {
+    return this.request<ReconciliationEnvelopeWire>(`/api/v1/sync/bindings/${bindingId}/reconciliation`, {
       validate: parseReconciliationEnvelope,
     });
   }

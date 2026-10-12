@@ -738,3 +738,72 @@ func TestUnbindThenRebind(t *testing.T) {
 		t.Fatalf("reconciliation after the second unbind = %v, want a fresh session", second)
 	}
 }
+
+// A device whose create-response never came back holds no session id, and its
+// binding now refuses every further create with its own orphaned session. The
+// binding's open reconciliation is what unblocks it (doc 08 §11) — and it is
+// readable only by the device that owns the binding.
+func TestDeviceFindsBackTheReconciliationItAlreadyCreated(t *testing.T) {
+	ts, sessionToken, spaceID, _ := bootstrapInstance(t)
+	auth, bindingID := pairDevice(t, ts, sessionToken, spaceID, "Edge@Home")
+	otherAuth, _ := pairDevice(t, ts, sessionToken, spaceID, "Edge@Work")
+	base := ts.URL + "/api/v1/sync"
+	open := base + "/bindings/" + bindingID + "/reconciliation"
+
+	if code, body := doJSON(t, "GET", open, auth, nil); code != http.StatusNotFound {
+		t.Fatalf("open session before any create = %d %v, want 404", code, body)
+	}
+
+	created := mustCall(t, "POST", base+"/bindings/"+bindingID+"/reconciliations", auth,
+		map[string]string{"type": "initial", "reason": "first synchronization"})
+	sessionID := fieldString(sessionOf(t, created), "id")
+
+	// The answer is lost. The retry is refused, and the lookup finds the session
+	// this device already paid for.
+	code, body := doJSON(t, "POST", base+"/bindings/"+bindingID+"/reconciliations", auth,
+		map[string]string{"type": "initial", "reason": "first synchronization"})
+	if code != http.StatusConflict || errCode(t, body) != "RECONCILIATION_IN_PROGRESS" {
+		t.Fatalf("second create = %d %v, want 409 RECONCILIATION_IN_PROGRESS", code, body)
+	}
+	resumed := mustCall(t, "GET", open, auth, nil)
+	if got := fieldString(sessionOf(t, resumed), "id"); got != sessionID {
+		t.Fatalf("resumed session = %s, want the orphaned %s", got, sessionID)
+	}
+	if phase := fieldString(sessionOf(t, resumed), "phase"); phase != reconcile.PhaseCollecting {
+		t.Fatalf("resumed phase = %s, want %s", phase, reconcile.PhaseCollecting)
+	}
+
+	// Another device cannot read it, even though it shares the space.
+	if code, body = doJSON(t, "GET", open, otherAuth, nil); code != http.StatusForbidden {
+		t.Fatalf("other device reads the session = %d %v, want 403", code, body)
+	}
+
+	// The resumed session is the real one: the lifecycle finishes on it and the
+	// binding activates, which is the whole point of finding it back.
+	mustCall(t, "POST", base+"/bindings/"+bindingID+"/client-snapshots", auth, emptyBrowserSnapshot())
+	mustCall(t, "POST", base+"/bindings/"+bindingID+"/server-snapshots", auth, nil)
+	planned := mustCall(t, "POST", base+"/reconciliations/"+sessionID+"/plan", auth, nil)
+	if fieldString(sessionOf(t, planned), "state") == string(reconcile.StateWaitingUser) {
+		t.Fatalf("an empty browser meeting an empty space has nothing to ask: %v", planned)
+	}
+	committed := mustCall(t, "POST", base+"/reconciliations/"+sessionID+"/commit", auth, nil)
+	revision := fieldInt(t, sessionOf(t, committed), "commit_revision")
+	mustCall(t, "POST", base+"/reconciliations/"+sessionID+"/complete", auth, nil)
+
+	if code, body = doJSON(t, "GET", open, auth, nil); code != http.StatusNotFound {
+		t.Fatalf("open session after complete = %d %v, want 404", code, body)
+	}
+	bindings := mustCall(t, "GET", ts.URL+"/api/v1/device/bindings", auth, nil)
+	for _, raw := range bindings["bindings"].([]any) {
+		b := raw.(map[string]any)
+		if fieldString(b, "id") != bindingID {
+			continue
+		}
+		if fieldString(b, "state") != "active" {
+			t.Fatalf("binding after the resumed lifecycle = %v, want active", b["state"])
+		}
+		if fieldInt(t, b, "applied_revision") != revision {
+			t.Fatalf("binding revision = %v, want the committed %d", b["applied_revision"], revision)
+		}
+	}
+}

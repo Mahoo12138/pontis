@@ -385,6 +385,33 @@ func (s *Server) deviceSnapshot(w http.ResponseWriter, r *http.Request, snapshot
 	return snap, true
 }
 
+// handleActiveReconciliation returns the binding's open reconciliation. A
+// device that created one and lost the answer has no id to come back with,
+// and every later create is refused by RECONCILIATION_IN_PROGRESS — its own
+// orphaned session is the only thing that can finish the initialization
+// (doc 08 §11). Ownership is the binding's, same as every other call.
+func (s *Server) handleActiveReconciliation(w http.ResponseWriter, r *http.Request) {
+	binding, ok := s.deviceBinding(w, r, chi.URLParam(r, "bindingID"))
+	if !ok {
+		return
+	}
+	sess, found, err := s.Reconcile.ActiveSession(r.Context(), binding.ID)
+	if err != nil {
+		s.writeReconcileError(w, r, err)
+		return
+	}
+	if !found {
+		s.writeError(w, r, http.StatusNotFound, "RECONCILIATION_NOT_FOUND", "this binding has no open reconciliation")
+		return
+	}
+	_, issues, err := s.Reconcile.GetSessionWithIssues(r.Context(), sess.ID)
+	if err != nil {
+		s.writeReconcileError(w, r, err)
+		return
+	}
+	s.writeSessionWithIssues(w, r, sess, issues)
+}
+
 // handleGetReconciliation returns the session, its issues and the plan
 // preview when one exists.
 func (s *Server) handleGetReconciliation(w http.ResponseWriter, r *http.Request) {

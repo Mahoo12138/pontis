@@ -243,6 +243,7 @@ func (s *Server) Router() http.Handler {
 		// Reconciliation lifecycle (doc 08 §9-§14): the only way a
 		// pending_initial binding becomes active.
 		r.Post("/api/v1/sync/bindings/{bindingID}/reconciliations", s.handleCreateReconciliation)
+		r.Get("/api/v1/sync/bindings/{bindingID}/reconciliation", s.handleActiveReconciliation)
 		r.Post("/api/v1/sync/bindings/{bindingID}/client-snapshots", s.handleSubmitClientSnapshot)
 		r.Post("/api/v1/sync/bindings/{bindingID}/server-snapshots", s.handleCreateServerSnapshot)
 		r.Get("/api/v1/sync/server-snapshots/{snapshotID}", s.handleGetServerSnapshot)

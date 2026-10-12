@@ -125,6 +125,11 @@ class FakeLifecycle implements ReconciliationTransport {
     return Promise.resolve(this.envelope());
   }
 
+  getActiveReconciliation(): Promise<ReconciliationEnvelopeWire> {
+    this.calls.push('active-session');
+    return Promise.resolve(this.envelope());
+  }
+
   submitClientSnapshot(_bindingId: string, snapshot: ClientSnapshotWire): Promise<ReconciliationEnvelopeWire> {
     this.calls.push('client-snapshot');
     this.submitted = snapshot;

@@ -36,6 +36,20 @@ import { applyReconcileSteps, verifyAppliedSteps, type StepScope } from './recon
 /** Round budget for one run(); each round advances exactly one server phase. */
 const MAX_LIFECYCLE_ROUNDS = 16;
 
+/** The server-side reconciliation kind a local session stands for (doc 08 §11). */
+function sessionTypeOf(type: ReconSessionRecord['type']): ReconciliationType {
+  if (type === 'INITIAL') return 'initial';
+  if (type === 'FULL_RESYNC') return 'full_resync';
+  return 'recovery';
+}
+
+/** Why the session exists, as the server records it (doc 06 §7/§12). */
+function reasonFor(type: ReconSessionRecord['type']): string {
+  if (type === 'INITIAL') return 'first synchronization';
+  if (type === 'FULL_RESYNC') return 'history expired';
+  return 'mapping lost';
+}
+
 export type LifecycleOutcome = 'waiting_user' | 'completed';
 
 /** The mount as a root-slot → browser-root map (doc 03). */
@@ -323,9 +337,31 @@ export class InitialReconciler {
     // A pending binding can only be finished by an `initial` reconciliation;
     // anything else is a recovery against a binding the server still calls
     // active (doc 08 §11).
-    const type: ReconciliationType = session.type === 'INITIAL' ? 'initial' : 'recovery';
-    const reason = type === 'initial' ? 'first synchronization' : 'mapping lost';
-    const env = await this.transport.createReconciliation(binding.id, type, reason);
+    const type: ReconciliationType = sessionTypeOf(session.type);
+    const reason = reasonFor(session.type);
+    let env: ReconciliationEnvelopeWire;
+    try {
+      env = await this.transport.createReconciliation(binding.id, type, reason);
+    } catch (err) {
+      // The session can exist server-side while its answer never arrived —
+      // a lost response, or a worker killed before the id was stored. One
+      // binding runs at most one reconciliation, so the refusal is the sound
+      // of that orphan: pick it back up, or initialization never advances.
+      if (!(err instanceof ApiError) || err.code !== 'RECONCILIATION_IN_PROGRESS') throw err;
+      env = await this.transport.getActiveReconciliation(binding.id);
+      if (env.session.type !== type) {
+        // Not ours to resume: a different kind of session is open on this
+        // binding, and silently joining it would re-plan someone else's work.
+        throw new Error(
+          `initialReconcile: binding ${binding.id} already runs a ${env.session.type} reconciliation, not a ${type}`,
+        );
+      }
+      await logDiagnostic(this.db, 'warn', 'initial-reconcile', 'adopted the binding orphaned reconciliation session', {
+        bindingId: binding.id,
+        sessionId: env.session.id,
+        type,
+      });
+    }
     session.serverSessionId = env.session.id;
     await this.touch(session);
     return env;
