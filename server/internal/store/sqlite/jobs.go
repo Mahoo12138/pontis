@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"pontis/internal/jobs"
@@ -103,6 +104,13 @@ func (s *JobStore) Claim(ctx context.Context, workerID string, leaseUntil time.T
 		RETURNING `+jobColumns,
 		workerID, formatTime(leaseUntil), formatTime(now), formatTime(now), id)
 	j, err := scanJob(res)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Another worker took this job between the SELECT and the UPDATE, which
+		// is the guard's whole purpose. Report it as "nothing for me": the
+		// worker loop treats any other error as a store outage, so a contended
+		// poll would look like a failure every time two workers are running.
+		return jobs.Job{}, jobs.ErrNotFound
+	}
 	if err != nil {
 		return jobs.Job{}, err
 	}

@@ -2,8 +2,11 @@ package httpapi
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
+	"sync"
 	"testing"
+	"time"
 
 	"pontis/internal/canonical"
 	"pontis/internal/jobs"
@@ -231,4 +234,154 @@ func TestCancelMyJobOwnerScoped(t *testing.T) {
 		t.Fatalf("unknown cancel = %d %v", code, body)
 	}
 	close(release)
+}
+
+// A schedule is a plan; the work it started is history. Pausing the plan must
+// not pretend to cancel a job that is running right now, and deleting the plan
+// must not delete the record that it ran — otherwise the task page rewrites
+// itself every time someone edits a schedule, and an operator loses the only
+// evidence of what happened at 03:00.
+func TestPausingAndDeletingAScheduleKeepsItsWork(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	h := map[string]string{"Authorization": "Bearer " + f.sessionToken}
+	release := make(chan struct{})
+	var once sync.Once
+	done := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(done)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	f.srv.Jobs.Start(ctx)
+	defer f.srv.Jobs.Stop()
+
+	if err := f.srv.Jobs.Register(jobs.TypeBackupCreate,
+		func(ctx context.Context, _ jobs.Job, _ jobs.ReportFunc) error {
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, body := doJSON(t, "POST", f.ts.URL+"/api/v1/schedules", h, map[string]any{
+		"type": "backup.create", "kind": "daily", "time_of_day": "02:00",
+		"timezone": "Asia/Shanghai", "space_id": f.spaceID,
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("create schedule = %d %v", code, body)
+	}
+	scheduleID := body["id"].(string)
+
+	// The occurrence the scheduler would have queued at 02:00: Tick takes the
+	// clock as an argument, so "the plan came due" is driven rather than slept
+	// through. This is the path that records which plan a run belongs to.
+	if err := f.srv.Schedules.Tick(ctx, time.Now().UTC().Add(48*time.Hour)); err != nil {
+		t.Fatalf("scheduler tick: %v", err)
+	}
+	jobID := occurrenceOf(t, f.db, scheduleID)
+
+	if !awaitJobStatus(t, f.db, jobID, jobs.StatusRunning) {
+		t.Fatalf("job %s never started running; the worker did not claim it", jobID)
+	}
+
+	// Pause the plan.
+	code, body = doJSON(t, "PATCH", f.ts.URL+"/api/v1/schedules/"+scheduleID, h,
+		map[string]any{"enabled": false})
+	if code != http.StatusOK {
+		t.Fatalf("pause = %d %v", code, body)
+	}
+	if got := jobStatus(t, f.db, jobID); got != jobs.StatusRunning {
+		t.Fatalf("pausing the schedule moved its running job to %s, want it left alone", got)
+	}
+	if jobCancelRequested(t, f.db, jobID) {
+		t.Fatal("pausing the schedule asked the running job to cancel")
+	}
+
+	// Delete the plan while the work is still in flight.
+	code, body = doJSON(t, "DELETE", f.ts.URL+"/api/v1/schedules/"+scheduleID, h, nil)
+	if code != http.StatusNoContent && code != http.StatusOK {
+		t.Fatalf("delete schedule = %d %v", code, body)
+	}
+	if got := jobStatus(t, f.db, jobID); got != jobs.StatusRunning {
+		t.Fatalf("deleting the schedule moved its running job to %s, want it left alone", got)
+	}
+
+	done()
+	if !awaitJobStatus(t, f.db, jobID, jobs.StatusSucceeded) {
+		t.Fatalf("job %s did not finish after it was released", jobID)
+	}
+
+	// The finished run is still attributable: the row survives its plan, keeps
+	// the schedule id it came from, and still shows on the owner's task page.
+	if got := jobScheduleID(t, f.db, jobID); got != scheduleID {
+		t.Errorf("the finished job's schedule_id = %q, want %q", got, scheduleID)
+	}
+	code, body = doJSON(t, "GET", f.ts.URL+"/api/v1/tasks", h, nil)
+	if code != http.StatusOK {
+		t.Fatalf("tasks = %d %v", code, body)
+	}
+	seen := false
+	for _, j := range body["jobs"].([]any) {
+		if m := j.(map[string]any); m["id"] == jobID {
+			seen = true
+			if m["status"] != string(jobs.StatusSucceeded) {
+				t.Errorf("the task page shows the run as %v", m["status"])
+			}
+		}
+	}
+	if !seen {
+		t.Error("the run of a deleted schedule disappeared from the user's task page")
+	}
+}
+
+// occurrenceOf finds the job a schedule's tick enqueued for it.
+func occurrenceOf(t *testing.T, db *sql.DB, scheduleID string) string {
+	t.Helper()
+	var id string
+	if err := db.QueryRow(`SELECT id FROM jobs WHERE schedule_id = ?`, scheduleID).Scan(&id); err != nil {
+		t.Fatalf("no occurrence job for schedule %s: %v", scheduleID, err)
+	}
+	return id
+}
+
+func jobRowOf(t *testing.T, db *sql.DB, id string) map[string]any {
+	t.Helper()
+	var status string
+	var worker, scheduleID, cancel any
+	if err := db.QueryRow(`
+		SELECT status, worker_id, schedule_id, cancel_requested_at FROM jobs WHERE id = ?`, id).
+		Scan(&status, &worker, &scheduleID, &cancel); err != nil {
+		t.Fatalf("read job %s: %v", id, err)
+	}
+	return map[string]any{"status": status, "schedule_id": scheduleID, "cancel": cancel}
+}
+
+func awaitJobStatus(t *testing.T, db *sql.DB, id string, want jobs.Status) bool {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		if jobs.Status(jobRowOf(t, db, id)["status"].(string)) == want {
+			return true
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return false
+}
+
+func jobStatus(t *testing.T, db *sql.DB, id string) jobs.Status {
+	t.Helper()
+	return jobs.Status(jobRowOf(t, db, id)["status"].(string))
+}
+
+func jobCancelRequested(t *testing.T, db *sql.DB, id string) bool {
+	t.Helper()
+	return jobRowOf(t, db, id)["cancel"] != nil
+}
+
+func jobScheduleID(t *testing.T, db *sql.DB, id string) string {
+	t.Helper()
+	s, _ := jobRowOf(t, db, id)["schedule_id"].(string)
+	return s
 }
