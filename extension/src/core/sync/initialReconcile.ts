@@ -17,9 +17,12 @@ import {
   acquireRunLock,
   activeReconSession,
   emptyReconProgress,
+  isUnsettledOp,
   logDiagnostic,
   releaseRunLock,
+  writeEmergencySnapshot,
   type BindingRecord,
+  type BindingState,
   type PontisDB,
   type ReconSessionRecord,
   type ReconType,
@@ -67,12 +70,17 @@ export function mountRoots(binding: BindingRecord): Record<string, string> {
  * Refs are session-local (`l_1` is the first root) and a first-time device
  * declares no canonical ids — the server refuses them for a pending binding,
  * because it has nothing to check the claim against.
+ *
+ * `canonicalIdOf` is what a full resync passes: its premise is a mapping the
+ * device still trusts (doc 06 §7), and declaring it is how the server matches
+ * the tree node by node instead of guessing.
  */
 export async function buildClientSnapshot(
   adapter: BrowserAdapter,
   binding: BindingRecord,
   epoch: number,
   revision: number,
+  canonicalIdOf?: (browserId: string) => Promise<string | undefined>,
 ): Promise<{ snapshot: ClientSnapshotWire; refs: Record<string, string> }> {
   const roots: ClientSnapshotWire['roots'] = [];
   const nodes: ClientSnapshotWire['nodes'] = [];
@@ -98,12 +106,14 @@ export async function buildClientSnapshot(
     while (level.length > 0) {
       const { node, parentRef } = level.shift()!;
       const localRef = ref(node.id);
+      const canonicalId = canonicalIdOf ? await canonicalIdOf(node.id) : undefined;
       nodes.push({
         local_ref: localRef,
         parent_local_ref: parentRef,
         type: node.type,
         title: node.title,
         url: node.url ?? '',
+        ...(canonicalId ? { canonical_id: canonicalId } : {}),
       });
       if (node.type === 'folder') {
         for (const child of await adapter.getChildren(node.id)) {
@@ -139,6 +149,22 @@ export class InitialReconciler {
 
       if (sess.state === 'completed') return this.finish(binding, session, env);
       if (sess.state === 'failed') {
+        // The server closed this session — a backup restore superseded the
+        // baseline it was planned against, or the binding was revoked. Nothing
+        // resumed from it can ever succeed, so the local record goes with it
+        // and the binding asks for recovery, which opens a fresh session
+        // against the baseline the server actually holds now.
+        session.state = 'FAILED';
+        session.error = 'the server closed this reconciliation';
+        await this.touch(session);
+        await this.db.bindings.update(binding.id, {
+          state: 'needs_recovery',
+          recovery: { code: 'RECONCILIATION_SUPERSEDED', message: 'the space baseline was replaced' },
+        });
+        await logDiagnostic(this.db, 'warn', 'initial-reconcile', 'server session is closed, binding needs recovery', {
+          bindingId: binding.id,
+          sessionId: sess.id,
+        });
         throw new Error(`initialReconcile: server session ${sess.id} failed`);
       }
       if (sess.state === 'waiting_user') {
@@ -210,7 +236,24 @@ export class InitialReconciler {
     if (binding.state !== 'active') {
       throw new Error(`initialReconcile: mapping recovery needs an active binding, got ${binding.state}`);
     }
-    const session = await this.openSession(binding, 'MAPPING_LOST');
+    return this.driveRecovery(bindingId, 'MAPPING_LOST');
+  }
+
+  /**
+   * Open the binding's recovery session and drive it. Kept separate from the
+   * eligibility checks above because a remount is a recovery too — with a
+   * different reason and a different state in front of it.
+   */
+  private async driveRecovery(bindingId: string, type: ReconType): Promise<LifecycleOutcome | 'idle'> {
+    // A session already open on this binding IS the recovery in progress — from
+    // an earlier attempt of this same request, or from the worker before a
+    // kill. Join it; asking the server for a second one is refused anyway, and
+    // the state the binding sits in has nothing to do with which attempt is
+    // allowed to finish the work.
+    const resumed = await this.resumeRecovery(bindingId);
+    if (resumed !== 'idle') return resumed;
+    const binding = await this.mustGetBinding(bindingId);
+    const session = await this.openSession(binding, type);
     await this.db.bindings.update(bindingId, { state: 'initializing' });
     return this.run({ ...binding, state: 'initializing' }, session);
   }
@@ -219,6 +262,11 @@ export class InitialReconciler {
    * mount_missing recovery (doc 03 §5): re-point a partial binding at another
    * browser folder. The mapping belonged to the folder that is gone, so the
    * replica state goes with it and the tree is matched again from scratch.
+   *
+   * Nothing is destroyed before the new mount is proven to exist, and what is
+   * destroyed is copied to an emergency snapshot first: a remount that fails
+   * half way must not leave a binding with a new folder, no mapping and no
+   * recovery running (doc 06 §9).
    */
   async remount(bindingId: string, folderBrowserId: string): Promise<LifecycleOutcome | 'idle'> {
     const binding = await this.mustGetBinding(bindingId);
@@ -226,7 +274,12 @@ export class InitialReconciler {
       throw new Error('initialReconcile: remount only supported for partial bindings');
     }
     if (!folderBrowserId) throw new Error('initialReconcile: remount needs a mount folder');
+    const target = await this.adapter.getNode(folderBrowserId);
+    if (!target || target.type !== 'folder') {
+      throw new Error(`initialReconcile: remount target ${folderBrowserId} is not a browser folder`);
+    }
 
+    await writeEmergencySnapshot(this.db, binding, 'remount: mapping replaced');
     await this.db.transaction(
       'rw',
       [this.db.bindings, this.db.localNodes, this.db.pendingOps, this.db.expectedMutations, this.db.remoteChanges],
@@ -246,14 +299,97 @@ export class InitialReconciler {
       bindingId,
       folderBrowserId,
     });
-    return this.recoverMapping(bindingId);
+    return this.driveRecovery(bindingId, 'MAPPING_LOST');
+  }
+
+  /**
+   * Full Resync entry (doc 06 §7): the Canonical ↔ Browser mapping is still
+   * trusted, but the incremental history cannot be continued any more, so the
+   * browser is converged onto the whole canonical projection and the baseline
+   * moves to the revision that projection was taken at.
+   *
+   * This is a reconciliation, not a watermark edit. A node whose CREATE has
+   * been garbage collected is in no journal the client will ever be served
+   * again — only a full snapshot still carries it, and only a plan computed
+   * against that snapshot can put it back.
+   */
+  async resyncFromServer(bindingId: string): Promise<LifecycleOutcome | 'idle'> {
+    const binding = await this.mustGetBinding(bindingId);
+    if (binding.state !== 'needs_recovery' && binding.state !== 'resyncing') {
+      throw new Error(`initialReconcile: full resync needs a stalled binding, got ${binding.state}`);
+    }
+    const session = await this.openSession(binding, 'FULL_RESYNC');
+    await this.db.bindings.update(bindingId, { state: 'resyncing' });
+    try {
+      return await this.run({ ...binding, state: 'resyncing' }, session);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'CLIENT_SNAPSHOT_INVALID') {
+        // The snapshot this resync declared carries a mapping the server cannot
+        // accept — the same canonical id on two browser nodes is the usual
+        // cause. That is not a resync any more: the mapping itself is what has
+        // to be rebuilt, from a snapshot that claims nothing.
+        session.state = 'FAILED';
+        session.error = 'the declared mapping was refused; re-matching from scratch';
+        await this.touch(session);
+        await logDiagnostic(this.db, 'warn', 'initial-reconcile', 'resync mapping refused, falling back to re-matching', {
+          bindingId,
+          message: err.message,
+        });
+        return this.driveRecovery(bindingId, 'MAPPING_LOST');
+      }
+      // A backup restore moved the space back to a fresh baseline: the server
+      // will not run a resync against a binding that owes its first
+      // reconciliation, and the session we just opened is dead with it.
+      if (err instanceof ApiError && err.code === 'BINDING_NOT_ELIGIBLE') {
+        session.state = 'FAILED';
+        session.error = 'the binding owes a first reconciliation';
+        await this.touch(session);
+        await this.db.bindings.update(bindingId, { state: 'pending_initial' });
+        await logDiagnostic(this.db, 'info', 'initial-reconcile', 'resync deferred to a first reconciliation', {
+          bindingId,
+        });
+        return 'idle';
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Resume the reconciliation this binding is already running, if a trigger
+   * can no longer reach it by name. Returns 'idle' when there is nothing to
+   * pick up — no session, or one that belongs to a lifecycle the driver
+   * entries above own. Never opens a session, so it is safe to call on every
+   * trigger for every stalled binding.
+   */
+  async resumeRecovery(bindingId: string): Promise<LifecycleOutcome | 'idle'> {
+    const binding = await this.mustGetBinding(bindingId);
+    const session = await activeReconSession(this.db, bindingId);
+    if (session?.driver !== 'server') return 'idle';
+    if (session.state === 'WAITING_USER') return 'waiting_user';
+    await logDiagnostic(this.db, 'info', 'initial-reconcile', 'resuming the interrupted reconciliation', {
+      bindingId,
+      sessionType: session.type,
+      bindingState: binding.state,
+    });
+    // The binding follows the session, not the other way round: whatever parked
+    // it, the reconciliation was mid-flight and only it can decide the state
+    // this ends in.
+    await this.db.bindings.update(bindingId, {
+      state: session.type === 'FULL_RESYNC' ? 'resyncing' : 'initializing',
+    });
+    return this.run({ ...binding, state: session.type === 'FULL_RESYNC' ? 'resyncing' : 'initializing' }, session);
   }
 
   private async driveBinding(bindingId: string): Promise<LifecycleOutcome | 'idle'> {
     const binding = await this.mustGetBinding(bindingId);
     // A waiting_user session is driven by `answer`, not by a sync trigger: the
     // server will not move until the user picks a candidate.
-    if (binding.state !== 'pending_initial' && binding.state !== 'initializing') return 'idle';
+    // 'resyncing' belongs in this list: it is the same lifecycle with a
+    // different reason, and a worker killed in the middle of one has to be
+    // picked up by the next trigger like any other session.
+    if (binding.state !== 'pending_initial' && binding.state !== 'initializing' && binding.state !== 'resyncing') {
+      return 'idle';
+    }
     const found = await activeReconSession(this.db, bindingId);
     // A session this lifecycle did not open stays someone else's — but one it
     // opened stays ours even when the first server call failed before an id
@@ -322,8 +458,11 @@ export class InitialReconciler {
     session.state = 'RUNNING';
     session.issues = undefined;
     await this.touch(session);
-    await this.db.bindings.update(binding.id, { state: 'initializing' });
-    return this.run(binding, session);
+    // The answer resumes whichever lifecycle asked the question: a resync
+    // parks at 'resyncing', an initialization at 'initializing'.
+    const state: BindingState = session.type === 'FULL_RESYNC' ? 'resyncing' : 'initializing';
+    await this.db.bindings.update(binding.id, { state });
+    return this.run({ ...binding, state }, session);
   }
 
   // --- phases ---
@@ -376,16 +515,26 @@ export class InitialReconciler {
     binding: BindingRecord,
     session: ReconSessionRecord,
   ): Promise<void> {
+    // A full resync is the one lifecycle whose premise is a trusted mapping, so
+    // it is the one that declares it: the server matches the tree by canonical
+    // id and the client keeps its browser nodes instead of duplicating them.
+    const declareIds = session.type === 'FULL_RESYNC';
     const { snapshot, refs } = await buildClientSnapshot(
       this.adapter,
       binding,
       binding.epoch,
       binding.appliedRevision,
+      declareIds ? (browserId) => this.mappedCanonicalId(binding.id, browserId) : undefined,
     );
     session.localRefs = refs;
     session.progress.localOnly = snapshot.nodes.length;
     await this.touch(session);
     await this.transport.submitClientSnapshot(binding.id, snapshot);
+  }
+
+  private async mappedCanonicalId(bindingId: string, browserId: string): Promise<string | undefined> {
+    const mirror = await this.db.localNodes.get([bindingId, browserId]);
+    return mirror?.canonicalId ?? undefined;
   }
 
   /**
@@ -502,9 +651,9 @@ export class InitialReconciler {
    */
   private async settleAdoptedCreates(bindingId: string): Promise<number> {
     const queued = await this.db.pendingOps
-      .where('[bindingId+status]')
-      .equals([bindingId, 'QUEUED'])
-      .filter((o) => o.type === 'create')
+      .where('bindingId')
+      .equals(bindingId)
+      .filter((o) => o.type === 'create' && isUnsettledOp(o))
       .toArray();
     let settled = 0;
     for (const op of queued) {

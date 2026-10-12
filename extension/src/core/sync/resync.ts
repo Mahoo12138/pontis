@@ -6,28 +6,35 @@
 //     never replayed as-is (doc 06 §10). resolveIntents() executes the
 //     per-op review: apply → a brand-new op against the current baseline.
 //   - No unsynced intent (or intents already reviewed) → Full Resync: keep
-//     the (still trusted) Canonical ↔ Browser mapping, re-anchor the
-//     watermarks to the server's journal floor / current epoch, and
-//     replay — ensure-state idempotency converges the browser without
-//     duplicates.
+//     the (still trusted) Canonical ↔ Browser mapping and converge the
+//     browser onto the server's whole canonical projection, then take that
+//     projection's revision as the new baseline (doc 06 §7/§8).
+//
+// The projection comes from the server as a reconciliation, not from the
+// journal. Re-anchoring the watermarks to the journal floor instead — the way
+// this used to work — silently accepts the retained history as the whole tree:
+// a node whose CREATE was garbage collected is in no page the client will ever
+// be served again, and a scan of browser-vs-mirror cannot see what neither
+// holds. So the missing bookmark stayed missing, and recovery still reported
+// success.
 
 import { uuidv7 } from '../util/ids';
-import type { ApiClient } from '../transport/client';
 import type { BootstrapStore } from '../store/bootstrap';
 import {
   activeReconSession,
   emptyReconProgress,
+  isUnsettledOp,
   logDiagnostic,
-  type BindingRecord,
+  writeEmergencySnapshot,
   type PontisDB,
   type ReconSessionRecord,
 } from '../store/db';
-import { isQuiescent, type ReplicaVerifier } from './verifyReplica';
-import type { SyncCoordinator } from './syncCoordinator';
+import type { ReplicaVerifier } from './verifyReplica';
 
-const MAX_QUIESCE_ROUNDS = 64;
-
-export type RecoveryOutcome = 'resynced' | 'waiting' | 'noop';
+/** The part of the reconciliation engine a full resync drives. */
+export interface FullResyncDriver {
+  resyncFromServer(bindingId: string): Promise<'waiting_user' | 'completed' | 'idle'>;
+}
 
 /** One user decision from the intent review UI (doc 06 §11). */
 export interface IntentDecision {
@@ -35,12 +42,13 @@ export interface IntentDecision {
   decision: 'apply' | 'discard';
 }
 
+export type RecoveryOutcome = 'resynced' | 'waiting' | 'noop';
+
 export class ResyncService {
   constructor(
     private db: PontisDB,
-    private client: ApiClient,
     private bootstrap: BootstrapStore,
-    private coordinator: SyncCoordinator,
+    private reconciler: FullResyncDriver,
     private verifier: ReplicaVerifier,
   ) {}
 
@@ -51,18 +59,21 @@ export class ResyncService {
 
     // Recovery Intent policy (doc 06 §11): new data auto-protect, stale
     // destructive intent requires explicit review. Once the review is
-    // done (resolveIntents), the re-created ops replay through resync.
+    // done (resolveIntents), the re-created ops converge through resync.
     const session = await activeReconSession(this.db, bindingId);
     if (session?.intentReviewed) {
       return this.runFullResync(bindingId, true);
     }
 
+    // Anything the server has not answered for is still the user's unsent
+    // intent, whether it ever left the device or not (doc 06 §11).
     const queued = await this.db.pendingOps
-      .where('[bindingId+status]')
-      .equals([bindingId, 'QUEUED'])
+      .where('bindingId')
+      .equals(bindingId)
+      .filter(isUnsettledOp)
       .count();
     if (queued > 0) {
-      await this.writeEmergencySnapshot(binding, 'unsynced intent pending recovery review');
+      await writeEmergencySnapshot(this.db, binding, 'unsynced intent pending recovery review');
       await this.db.bindings.update(bindingId, { state: 'waiting_user' });
       await this.recordSession(bindingId, {
         state: 'WAITING_USER',
@@ -81,9 +92,9 @@ export class ResyncService {
 
   /**
    * Execute the intent review decisions (doc 06 §10/§11): every kept
-   * intent becomes a brand-new pending op (fresh op_id / client_seq /
-   * base_revision) — the old op is never replayed as-is. Then the binding
-   * returns to needs_recovery and the normal resync path converges it.
+   * intent becomes a brand-new pending op (fresh op_id / client_seq) — the
+   * old op is never replayed as-is. Then the binding returns to
+   * needs_recovery and the normal resync path converges it.
    */
   async resolveIntents(bindingId: string, decisions: IntentDecision[]): Promise<RecoveryOutcome> {
     const binding = await this.db.bindings.get(bindingId);
@@ -117,7 +128,7 @@ export class ResyncService {
           opId: uuidv7(),
           bindingId,
           clientSeq: b.clientSeq,
-          // Re-based to the journal floor by the resync re-anchor below.
+          // Re-based to the new baseline once the resync has one (below).
           baseRevision: 0,
           status: 'QUEUED',
           type: old.type,
@@ -155,81 +166,52 @@ export class ResyncService {
     const binding = await this.db.bindings.get(bindingId);
     if (!binding) return 'noop';
 
-    await this.writeEmergencySnapshot(binding, keepIntent ? 'resync after intent review' : 'full resync');
+    await writeEmergencySnapshot(this.db, binding, keepIntent ? 'resync after intent review' : 'full resync');
     const { deviceToken } = await this.bootstrap.get();
     if (!deviceToken) {
       await logDiagnostic(this.db, 'warn', 'resync', 'cannot resync: device token missing', { bindingId });
       return 'waiting';
     }
-    const { spaces } = await this.client.deviceSpaces(deviceToken);
-    const space = spaces.find((s) => s.id === binding.spaceId);
-    if (!space) {
-      await this.recordSession(bindingId, {
-        state: 'FAILED',
-        phase: 'prepare',
-        error: 'space not found for resync',
-      });
-      return 'waiting';
-    }
-
-    // Re-anchor: fresh epoch + journal floor baseline. The mapping stays;
-    // replaying the journal from the floor is a no-op for already-applied
-    // nodes (ensure-state) and repairs anything that drifted.
-    const baseline = Math.max(0, space.journal_floor_revision);
-    await this.db.transaction(
-      'rw',
-      [this.db.bindings, this.db.pendingOps, this.db.expectedMutations, this.db.remoteChanges],
-      async () => {
-        const b = await this.db.bindings.get(bindingId);
-        if (!b) return;
-        b.epoch = space.epoch;
-        b.appliedRevision = baseline;
-        b.receivedRevision = baseline;
-        b.state = 'resyncing';
-        b.recovery = null;
-        await this.db.bindings.put(b);
-        if (keepIntent) {
-          // Reviewed intents are fresh ops (doc 06 §10); re-base them to
-          // the new baseline instead of dropping them.
-          const queuedOps = await this.db.pendingOps
-            .where('[bindingId+status]')
-            .equals([bindingId, 'QUEUED'])
-            .toArray();
-          for (const op of queuedOps) {
-            op.baseRevision = baseline;
-            await this.db.pendingOps.put(op);
-          }
-        } else {
-          await this.db.pendingOps.where('bindingId').equals(bindingId).delete();
-        }
-        await this.db.expectedMutations.where('bindingId').equals(bindingId).delete();
-        await this.db.remoteChanges.where('bindingId').equals(bindingId).delete();
-      },
-    );
 
     // Close the stale review session so exactly one active session remains.
+    // A lifecycle session is not stale: it is the same resync, and a worker
+    // that came back mid-flight is meant to resume it.
     const stale = await activeReconSession(this.db, bindingId);
-    if (stale) {
+    if (stale && stale.driver !== 'server') {
       stale.state = 'COMPLETED';
       stale.phase = 'done';
       await this.touch(stale);
     }
-    const session = await this.recordSession(bindingId, { state: 'RUNNING', phase: 'apply' });
 
-    for (let i = 0; i < MAX_QUIESCE_ROUNDS; i++) {
-      await this.coordinator.syncBinding(bindingId);
-      if (await isQuiescent(this.db, bindingId)) break;
+    let outcome: 'waiting_user' | 'completed' | 'idle';
+    try {
+      outcome = await this.reconciler.resyncFromServer(bindingId);
+    } catch (err) {
+      await this.db.bindings.update(bindingId, {
+        state: 'needs_recovery',
+        recovery: { code: 'RESYNC_FAILED', message: String(err) },
+      });
+      await logDiagnostic(this.db, 'warn', 'resync', 'full resync round failed, will retry', {
+        bindingId,
+        error: String(err),
+      });
+      return 'waiting';
     }
+    // The server wants an answer before it commits anything (the binding is
+    // parked at waiting_user by the lifecycle itself), or the baseline moved
+    // out from under us and a first reconciliation is now owed.
+    if (outcome !== 'completed') return 'waiting';
+
+    // Reviewed intents are fresh ops against the *new* baseline (doc 06 §10):
+    // one they were written against no longer exists.
+    if (keepIntent) await this.rebaseIntents(bindingId);
 
     // Verify is mandatory before returning to ACTIVE (doc 06 §14).
     const report = await this.verifier.verifyAndRepair(bindingId);
     if (!report.ok) {
-      session.state = 'FAILED';
-      session.error = `verify failed: ${report.problems.map((p) => p.kind).join(',')}`;
-      await this.touch(session);
       await this.db.bindings.update(bindingId, {
         state: 'needs_recovery',
-        recovery: { code: 'VERIFY_FAILED', message: session.error ?? 'verify failed' },
+        recovery: { code: 'VERIFY_FAILED', message: report.problems.map((p) => p.kind).join(',') },
       });
       await logDiagnostic(this.db, 'error', 'resync', 'full resync verification failed', {
         bindingId,
@@ -238,37 +220,35 @@ export class ResyncService {
       return 'waiting';
     }
 
-    session.state = 'COMPLETED';
-    session.phase = 'done';
-    await this.touch(session);
-    await this.db.bindings.update(bindingId, { state: 'active', lastSyncAt: Date.now() });
-    // The emergency snapshot has served its purpose (doc 06 §9).
+    const settled = await this.db.bindings.get(bindingId);
     await this.db.emergencySnapshots.where('bindingId').equals(bindingId).delete();
-    await logDiagnostic(this.db, 'info', 'resync', 'full resync completed', {
+    await logDiagnostic(this.db, 'info', 'resync', 'full resync completed against the server snapshot', {
       bindingId,
-      baseline,
-      epoch: space.epoch,
+      epoch: settled?.epoch ?? null,
+      baselineRevision: settled?.appliedRevision ?? null,
     });
     return 'resynced';
   }
 
   // --- helpers ---
 
-  private async writeEmergencySnapshot(binding: BindingRecord, reason: string): Promise<void> {
-    const mirrors = await this.db.localNodes.where('bindingId').equals(binding.id).toArray();
-    const pending = await this.db.pendingOps.where('bindingId').equals(binding.id).toArray();
-    await this.db.emergencySnapshots.add({
-      bindingId: binding.id,
-      ts: Date.now(),
-      reason,
-      data: {
-        mirrors,
-        pending,
-        epoch: binding.epoch,
-        appliedRevision: binding.appliedRevision,
-        receivedRevision: binding.receivedRevision,
-        clientSeq: binding.clientSeq,
-      },
+  /**
+   * Stamp every unsent intent with the baseline the resync just adopted. An
+   * op left at the old revision reads as an expired request the moment the
+   * server sees it (doc 04 §12).
+   */
+  private async rebaseIntents(bindingId: string): Promise<void> {
+    const binding = await this.db.bindings.get(bindingId);
+    if (!binding) return;
+    await this.db.transaction('rw', [this.db.pendingOps], async () => {
+      const queued = await this.db.pendingOps
+        .where('[bindingId+status]')
+        .equals([bindingId, 'QUEUED'])
+        .toArray();
+      for (const op of queued) {
+        op.baseRevision = binding.appliedRevision;
+        await this.db.pendingOps.put(op);
+      }
     });
   }
 

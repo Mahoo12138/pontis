@@ -84,6 +84,9 @@
 16. Operation 的 epoch / floor / client_seq 判定读取自它写入的那个事务；事务外的读取只能提前拒绝，不能放行写入。
 17. `max_client_seq` 与 Receipt 同一事务消费；水位写回不携带它。
 18. 一个回包的 head、floor 与 Change 页，以及 Snapshot 的 revision 标签与树，各自来自同一个读快照。
+19. Operation 一旦发出，其 payload 即不可变（含响应丢失后的重试）；之后的编辑是新的 Operation，按 client_seq 排在它之后。只确定从未发送过的 Operation 可以原地合并。
+20. 恢复成功必须证明 Browser 达到了 Server 要求的状态：来自完整 Snapshot/Plan 的 Verify，而不是"本地两张表互相一致"或"队列为空"。
+21. Epoch 换代（备份恢复）后，旧 epoch 的 Reconciliation Session 一律失效；commit/complete 在写事务内复核 session 的 target epoch 与 binding epoch，不能只靠恢复入口清理。
 
 ## C. Domain Invariants
 

@@ -28,6 +28,13 @@ const BUSY_RETRY_MS = 3000;
 export interface ReconcileDriver {
   runBinding(bindingId: string): Promise<unknown>;
   recoverMapping(bindingId: string): Promise<unknown>;
+  /**
+   * Pick up a session the trigger ordering can otherwise strand: a worker
+   * killed between "the binding is driving a reconciliation" and "the
+   * reconciliation was resumed". It resumes the open session and never starts
+   * one, so it stays idempotent however often a trigger lands.
+   */
+  resumeRecovery(bindingId: string): Promise<unknown>;
 }
 
 export interface WorkerDeps {
@@ -63,14 +70,34 @@ export class WorkerLoop {
     try {
       const pending = await db.bindings
         .where('state')
-        .anyOf(['pending_initial', 'initializing'])
+        .anyOf(['pending_initial', 'initializing', 'resyncing'])
         .toArray();
       for (const b of pending) {
         if (!isSyncEnabled(b)) continue;
         try {
           await reconciler.runBinding(b.id);
         } catch (err) {
-          await logDiagnostic(db, 'warn', 'background', 'initial reconciliation round failed', {
+          await logDiagnostic(db, 'warn', 'background', 'reconciliation round failed', {
+            bindingId: b.id,
+            error: String(err),
+          });
+        }
+      }
+
+      // A binding parked by a failure can still hold the session that was
+      // running when it failed — a mapping recovery interrupted by a worker
+      // kill, or a resync that stopped answering. Nothing else in this sequence
+      // picks those up: the round gate wants an active binding, the recovery
+      // entry wants needs_recovery, and the lifecycle was already started. So
+      // the session would sit open, blocking every later reconciliation on the
+      // binding while its steps went unfinished.
+      const stalled = await db.bindings.where('state').anyOf(['needs_recovery', 'mount_missing']).toArray();
+      for (const b of stalled) {
+        if (!isSyncEnabled(b)) continue;
+        try {
+          await reconciler.resumeRecovery(b.id);
+        } catch (err) {
+          await logDiagnostic(db, 'warn', 'background', 'interrupted reconciliation not resumed', {
             bindingId: b.id,
             error: String(err),
           });

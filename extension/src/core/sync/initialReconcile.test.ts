@@ -634,4 +634,75 @@ describe('mapping-lost recovery over the server engine (doc 06 §12)', () => {
     // The snapshot the server matched came from the new folder.
     expect(lifecycle.submitted?.nodes.map((n) => n.title)).toEqual(['Only']);
   });
+
+
+  it('remounts from mount_missing, which is the state the recovery is for', async () => {
+    // The mount root is what went away, so a remount always arrives with the
+    // binding parked in mount_missing. Going through the active-only mapping
+    // recovery used to throw *after* the transaction that replaced the folder
+    // and cleared the mapping — a binding with a new mount, no mapping and no
+    // recovery running.
+    await seedBinding({ state: 'mount_missing', appliedRevision: 121, receivedRevision: 121 });
+    adapter.seed({ id: 'f2', parentId: '0', title: 'Sync 2' });
+    adapter.seed({ id: 'c1', parentId: 'f2', title: 'Only', url: 'https://only.example.com' });
+    lifecycle.steps = [{ kind: 'assign_identity', local_ref: 'l_2', canonical_id: 'n9' }];
+
+    expect(await reconciler.remount(bindingId, 'f2')).toBe('completed');
+
+    const fresh = await db.bindings.get(bindingId);
+    expect(fresh?.state).toBe('active');
+    expect(fresh?.mount.folderBrowserId).toBe('f2');
+    expect((await db.localNodes.get([bindingId, 'c1']))?.canonicalId).toBe('n9');
+  });
+
+  it('refuses a remount to a folder that is not there without touching the replica', async () => {
+    await seedBinding({ state: 'mount_missing', appliedRevision: 121, receivedRevision: 121 });
+    await db.localNodes.put({
+      bindingId, browserId: 'b1', canonicalId: 'n1', type: 'bookmark', title: 'Home',
+      url: 'https://home.example.com', parentBrowserId: 'f1', position: 0,
+    } as never);
+    await db.pendingOps.put({
+      opId: 'op-stale', bindingId, clientSeq: 1, baseRevision: 121, status: 'QUEUED',
+      type: 'update_title', nodeId: 'n1', title: 'renamed by the lost folder',
+    } as never);
+
+    await expect(reconciler.remount(bindingId, 'gone')).rejects.toThrow(/not a browser folder/);
+
+    // Nothing was destroyed and nothing was half-started.
+    expect((await db.bindings.get(bindingId))?.mount.folderBrowserId).toBe('f1');
+    expect(await db.localNodes.count()).toBe(1);
+    expect(await db.pendingOps.count()).toBe(1);
+    expect(lifecycle.calls).toEqual([]);
+  });
+
+  it('joins the recovery a previous remount attempt left running', async () => {
+    // The worker went down between the cleanup and the lifecycle finishing.
+    // Re-mounting is the user's way of saying "do it again", and the session
+    // that is already open is the work in progress — not a foreign session.
+    await seedBinding({ state: 'mount_missing', appliedRevision: 121, receivedRevision: 121 });
+    await db.reconSessions.put({
+      id: 'sess-remount',
+      bindingId,
+      type: 'MAPPING_LOST',
+      state: 'RUNNING',
+      phase: 'prepare',
+      driver: 'server',
+      serverSessionId: 'srv-1',
+      localRefs: { l_1: 'f2', l_2: 'c1' },
+      journalFloor: 0,
+      serverRevision: 0,
+      progress: emptyReconProgress(),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    adapter.seed({ id: 'f2', parentId: '0', title: 'Sync 2' });
+    adapter.seed({ id: 'c1', parentId: 'f2', title: 'Only', url: 'https://only.example.com' });
+    lifecycle.steps = [{ kind: 'assign_identity', local_ref: 'l_2', canonical_id: 'n9' }];
+
+    expect(await reconciler.remount(bindingId, 'f2')).toBe('completed');
+    // Resumed by id: the lifecycle never asks the server to open a second one.
+    expect(lifecycle.calls).toContain('get');
+    expect(lifecycle.calls).not.toContain('create');
+    expect((await db.localNodes.get([bindingId, 'c1']))?.canonicalId).toBe('n9');
+  });
 });

@@ -154,6 +154,14 @@ Local safety snapshot
 
 Full Resync 不使用 URL/title identity guessing，依赖已有 Canonical Mapping。
 
+实现上 Full Resync 就是一条 `full_resync` 类型的 Reconciliation：Client 快照带上自己可信的
+Canonical Mapping，Server 冻结完整 Canonical Snapshot，算出把 Browser 收敛到那棵树所需的
+steps，Baseline 取该 Snapshot 的 revision（见 `08-api-contract.md` §11-§13）。
+
+把水位直接抬到 `journal_floor_revision` 不算 Full Resync：Journal 被裁剪掉的那段永远不会再
+出现在任何 Change 页里，那个区间内创建的 Node 也就没人补；而 Browser↔Mirror 的 Verify 看不见
+双方同时缺失的东西。抬水位只改变"以后还收不收得到"，不改变"现在缺不缺"。
+
 ## 8. Snapshot Revision
 
 Server Snapshot 必须绑定明确：

@@ -371,6 +371,34 @@ export async function releaseRunLock(db: PontisDB, bindingId: string, token: str
   });
 }
 
+/**
+ * Keep a copy of what is about to be thrown away (doc 06 §9): the mirrors,
+ * the unsent intents and the watermarks they were written against. Recovery
+ * paths delete replica state, and an emergency snapshot is the only thing
+ * that makes a half-finished recovery re-runnable rather than terminal.
+ */
+export async function writeEmergencySnapshot(
+  db: PontisDB,
+  binding: BindingRecord,
+  reason: string,
+): Promise<void> {
+  const mirrors = await db.localNodes.where('bindingId').equals(binding.id).toArray();
+  const pending = await db.pendingOps.where('bindingId').equals(binding.id).toArray();
+  await db.emergencySnapshots.add({
+    bindingId: binding.id,
+    ts: Date.now(),
+    reason,
+    data: {
+      mirrors,
+      pending,
+      epoch: binding.epoch,
+      appliedRevision: binding.appliedRevision,
+      receivedRevision: binding.receivedRevision,
+      clientSeq: binding.clientSeq,
+    },
+  });
+}
+
 /** Ring-buffer diagnostic log (doc 16 direction; local only). */
 export async function logDiagnostic(
   db: PontisDB,

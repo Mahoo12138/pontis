@@ -30,8 +30,8 @@ export default defineBackground(() => {
   });
   const coordinator = new SyncCoordinator(db, new RemoteChangeApplier(db, adapter), client, client);
   const verifier = new ReplicaVerifier(db, adapter, coordinator);
-  const resync = new ResyncService(db, client, bootstrap, coordinator, verifier);
   const reconciler = new InitialReconciler(db, adapter, client);
+  const resync = new ResyncService(db, bootstrap, reconciler, verifier);
   const loop = new WorkerLoop({ db, adapter, coordinator, reconciler, resync, verifier });
 
   // A fresh install has nothing paired and no way to know where to start.

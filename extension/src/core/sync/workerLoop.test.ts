@@ -4,7 +4,13 @@
 // single collaborator, so it is the part this file tests.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { acquireRunLock, PontisDB, type BindingRecord, type PendingOpRecord } from './../store/db';
+import {
+  acquireRunLock,
+  emptyReconProgress,
+  PontisDB,
+  type BindingRecord,
+  type PendingOpRecord,
+} from './../store/db';
 import { FakeBrowserAdapter } from '../browser/fakeAdapter';
 import type { BrowserNode } from '../browser/types';
 import { RemoteChangeApplier } from './remoteChangeApplier';
@@ -14,7 +20,7 @@ import { SyncCoordinator } from './syncCoordinator';
 import { WorkerLoop, type ReconcileDriver } from './workerLoop';
 import { FakeServerTransport } from '../../testing/fakeServer';
 import { BootstrapStore } from '../store/bootstrap';
-import type { ApiClient, SyncTransport } from '../transport/client';
+import type { SyncTransport } from '../transport/client';
 import type { SyncRequestWire, SyncResponseWire } from '../protocol/types';
 
 let db: PontisDB;
@@ -26,6 +32,14 @@ let verifier: ReplicaVerifier;
 let resync: ResyncService;
 let reconciler: StubReconciler;
 let loop: WorkerLoop;
+/** The reconciliation entry a full resync drives; recorded, never run for real. */
+const resyncDriver = {
+  calls: [] as string[],
+  resyncFromServer: async (id: string): Promise<'waiting_user' | 'completed' | 'idle'> => {
+    resyncDriver.calls.push(id);
+    return 'idle';
+  },
+};
 
 const bindingId = 'binding-1';
 const otherBinding = 'binding-2';
@@ -46,6 +60,7 @@ class SpyTransport implements SyncTransport {
 class StubReconciler implements ReconcileDriver {
   run: string[] = [];
   recovered: string[] = [];
+  resumed: string[] = [];
   failsFor = '';
   /** Whether finishing a round leaves the binding active. Off by default so a
    *  test can tell "the loop waited for the mapping" from "the loop synced it". */
@@ -62,6 +77,11 @@ class StubReconciler implements ReconcileDriver {
   recoverMapping(id: string): Promise<unknown> {
     this.recovered.push(id);
     return Promise.resolve('completed');
+  }
+
+  resumeRecovery(id: string): Promise<unknown> {
+    this.resumed.push(id);
+    return Promise.resolve('idle');
   }
 
   private async activate(id: string): Promise<string> {
@@ -136,8 +156,8 @@ beforeEach(() => {
     set: async () => undefined,
     remove: async (keys: string[]) => undefined,
   });
-  const client = { deviceSpaces: async () => ({ spaces: [] }) } as unknown as ApiClient;
-  resync = new ResyncService(db, client, kv, coordinator, verifier);
+  resyncDriver.calls = [];
+  resync = new ResyncService(db, kv, resyncDriver, verifier);
   reconciler = new StubReconciler();
   loop = new WorkerLoop({ db, adapter, coordinator, reconciler, resync, verifier });
   adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
@@ -208,7 +228,7 @@ describe('what each trigger is allowed to touch', () => {
     await expect(loop.runSync('alarm')).resolves.toBeUndefined();
 
     expect(reconciler.run).toEqual([bindingId, otherBinding]);
-    expect(await messages('background')).toContain('initial reconciliation round failed');
+    expect(await messages('background')).toContain('reconciliation round failed');
   });
 
   it('attempts recovery for a stuck binding without failing the round', async () => {
@@ -240,10 +260,38 @@ describe('what each trigger is allowed to touch', () => {
     // stuck binding stays where it is — but it was attempted, and the healthy
     // binding still got its round.
     expect((await db.bindings.get(bindingId))?.state).toBe('needs_recovery');
-    const sessions = await db.reconSessions.where('bindingId').equals(bindingId).toArray();
-    expect(sessions.some((x) => x.type === 'FULL_RESYNC' && x.state === 'FAILED')).toBe(true);
+    expect(resyncDriver.calls).toEqual([bindingId]);
     expect(transport.calls.map((c) => c.bindingId)).toEqual([otherBinding]);
     expect(await messages('background')).not.toContain('recovery attempt failed');
+  });
+
+  it('resumes a recovery the trigger ordering would otherwise strand', async () => {
+    // The mapping recovery was running when the worker was replaced, and the
+    // binding was moved on by the event pipeline. No entry point of this
+    // sequence reaches that session any more: the round gate wants an active
+    // binding, the recovery entry wants needs_recovery with no session, and a
+    // second recovery on the same binding is refused by the server. Left alone,
+    // the binding keeps the empty mapping forever.
+    await seedBinding(bindingId, { state: 'needs_recovery', appliedRevision: 0, receivedRevision: 0 });
+    await db.reconSessions.put({
+      id: 'orphan-session',
+      bindingId,
+      type: 'MAPPING_LOST',
+      state: 'RUNNING',
+      phase: 'apply',
+      driver: 'server',
+      journalFloor: 0,
+      serverRevision: 0,
+      progress: emptyReconProgress(),
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    await loop.runSync('wake');
+
+    expect(reconciler.resumed).toEqual([bindingId]);
+    // The healthy binding still got its round, so this pass costs nothing.
+    expect(transport.calls).toEqual([]);
   });
 
   it('retries a round that lost the run lock instead of waiting for the alarm', async () => {
