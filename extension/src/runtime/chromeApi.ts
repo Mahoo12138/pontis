@@ -22,6 +22,10 @@ export interface ChromeAlarmsApi {
 
 export interface ChromeRuntimeApi {
   onStartup: { addListener(cb: () => void): void };
+  /** Fires after the extension is installed or updated. */
+  onInstalled: {
+    addListener(cb: (details: { reason: 'install' | 'update' | string }) => void): void;
+  };
   onMessage: {
     addListener(cb: (msg: unknown, sender: unknown, sendResponse: (resp?: unknown) => void) => boolean | void): void;
   };
@@ -31,6 +35,8 @@ export interface ChromeRuntimeApi {
 
 export interface ChromeGlobal {
   bookmarks: ChromeBookmarksApi;
+  /** Only `create` is used: the guide and the settings page open as tabs. */
+  tabs: { create(props: { url: string }): Promise<unknown> };
   storage: { local: ChromeStorageArea };
   alarms: ChromeAlarmsApi;
   runtime: ChromeRuntimeApi;
@@ -47,7 +53,7 @@ export interface ChromeGlobal {
 
 export function chromeApi(): ChromeGlobal {
   const c = (globalThis as { chrome?: Partial<ChromeGlobal> }).chrome;
-  if (!c?.bookmarks || !c.storage || !c.alarms || !c.runtime || !c.permissions) {
+  if (!c?.bookmarks || !c.storage || !c.alarms || !c.runtime || !c.permissions || !c.tabs) {
     throw new Error('Pontis: chrome APIs unavailable in this context');
   }
   return c as ChromeGlobal;

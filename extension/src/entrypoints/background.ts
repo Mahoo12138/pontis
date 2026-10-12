@@ -34,6 +34,20 @@ export default defineBackground(() => {
   const reconciler = new InitialReconciler(db, adapter, client);
   const loop = new WorkerLoop({ db, adapter, coordinator, reconciler, resync, verifier });
 
+  // A fresh install has nothing paired and no way to know where to start.
+  // Opening the guide is the only moment the extension puts a window in front of
+  // a person; after that everything is theirs to reopen. An update never does
+  // this — interrupting someone mid-sync to show them a changelog is not ours to
+  // decide.
+  chrome.runtime.onInstalled.addListener((details) => {
+    if (details.reason !== 'install') return;
+    void (async () => {
+      const b = await bootstrap.get();
+      if (b.serverUrl && b.deviceToken) return; // reinstalled over a kept profile
+      await chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
+    })();
+  });
+
   chrome.alarms.create('pontis-sync', { periodInMinutes: 5 });
   chrome.alarms.create('pontis-integrity', { periodInMinutes: 24 * 60 });
   chrome.alarms.onAlarm.addListener((alarm) => {

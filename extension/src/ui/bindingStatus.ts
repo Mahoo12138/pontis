@@ -49,6 +49,54 @@ export function relTime(ts: number | null | undefined): string {
   if (secs < 60) return `${secs} 秒前`;
   if (secs < 3600) return `${Math.round(secs / 60)} 分钟前`;
   if (secs < 86400) return `${Math.round(secs / 3600)} 小时前`;
-  // A clock time alone would read as "today" for a sync from last month.
-  return new Date(ts).toLocaleDateString();
+  const days = Math.round(secs / 86400);
+  if (days < 30) return `${days} 天前`;
+  // Past a month the relative number stops telling anything, so show a date —
+  // a zh-CN one, because "10/11/2026" is two different days depending on who
+  // reads it, and a clock time alone would read as today for a stale sync.
+  return new Date(ts).toLocaleDateString('zh-CN');
+}
+
+/**
+ * What a person should be shown first. A binding that cannot continue on its
+ * own is the reason the popup was opened; one that is merely catching up is
+ * not, and a switched-off binding is quiet on purpose.
+ */
+export function attentionRank(binding: BindingRecord): number {
+  if (binding.enabled === false) return 4;
+  switch (binding.state) {
+    case 'needs_recovery':
+    case 'mount_missing':
+    case 'waiting_user':
+      return 0;
+    case 'pending_initial':
+    case 'initializing':
+    case 'resyncing':
+      return 1;
+    default:
+      break;
+  }
+  return binding.receivedRevision > binding.appliedRevision ? 2 : 3;
+}
+
+/**
+ * Both surfaces list bindings in the same order, so a row sits in the same
+ * place on either screen. Ties fall back to the order the bindings were made:
+ * predictable, and independent of how the platform collates a space name —
+ * `localeCompare('zh-CN')` sorts by pinyin where available and by code point
+ * where it is not, which would reshuffle the list between machines.
+ */
+export function sortBindings<T extends BindingRecord>(bindings: T[]): T[] {
+  return [...bindings].sort(
+    (a, b) => attentionRank(a) - attentionRank(b) || a.createdAt - b.createdAt,
+  );
+}
+
+/**
+ * The recovery note a person can act on. The code is for the log and the
+ * options page: `MOUNT_MISSING` in a popup tells you nothing the badge did not
+ * already say, and repeating it twice reads like two separate faults.
+ */
+export function recoveryNote(binding: BindingRecord): string {
+  return binding.recovery?.message || binding.recovery?.code || '';
 }

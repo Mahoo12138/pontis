@@ -1,33 +1,37 @@
-// Options: pairing (server → login → device registration), binding
-// (partial mount folder selection) and a local diagnostics view.
+// Settings: three tabs — 账号管理 (this device's pairing), 同步管理 (bindings)
+// and 本地日志 (diagnostics written by the worker).
+//
+// Deliberately not a wizard. The numbered steps live in onboarding.html, which
+// a first-time user lands on; by the time someone reaches this page the pairing
+// is done, so it reads as an admin panel: state first, actions next to the
+// thing they act on, and a repair path only where one exists. The one thing
+// this page still has to offer cold is the unpaired account tab, because
+// re-pairing after a server move is an edit here, not a trip back to the guide.
 
 import { useCallback, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   Alert,
   Badge,
   Box,
   Button,
-  Card,
   Code,
-  Container,
   Divider,
   Group,
   List,
-  PasswordInput,
+  Modal,
   Select,
   Stack,
   Switch,
   Table,
+  Tabs,
   Text,
   TextInput,
   Title,
   Tooltip,
 } from '@mantine/core';
-import { createChromiumAdapter } from '../../core/browser/chromium';
 import { countScopeBookmarks } from '../../core/browser/scopeCount';
 import type { ReconciliationIssueWire } from '../../core/protocol/types';
-import { ApiClient } from '../../core/transport/client';
-import { BootstrapStore } from '../../core/store/bootstrap';
 import {
   isSyncEnabled,
   PontisDB,
@@ -37,38 +41,40 @@ import {
   type ReconSessionRecord,
 } from '../../core/store/db';
 import type { IntentDecision } from '../../core/sync/resync';
-import { PairingService, originPatternFor } from '../../core/pairing/pairing';
-import { chromeApi, kvArea } from '../../runtime/chromeApi';
-import { bindingStatus, relTime } from '../../ui/bindingStatus';
+import { originPatternFor } from '../../core/pairing/pairing';
+import { BindForm, type SpaceOption } from '../../ui/BindForm';
+import { listMountFolders, type FolderOption } from '../../ui/mountFolders';
+import { PairingForm } from '../../ui/PairingForm';
+import { createRuntime, errText, wakeWorker } from '../../ui/runtime';
+import { bindingStatus, relTime, sortBindings } from '../../ui/bindingStatus';
+import { chromeApi } from '../../runtime/chromeApi';
 
-interface FolderOption {
-  value: string;
-  label: string;
+// Built once for the page: a Dexie handle, an ApiClient and a PairingService
+// per render would be rebuilt on every tab switch. A binding written here is
+// activated by the worker, so ask it for a round instead of waiting on an alarm.
+const runtime = createRuntime(() => wakeWorker(chromeApi()));
+
+type Tab = 'account' | 'sync' | 'log';
+
+/**
+ * Where the page opens. The guide and the popup each mean a particular tab when
+ * they send someone here, so making them click out of 账号管理 to get there
+ * undoes the link.
+ */
+function initialTab(): Tab {
+  const h = window.location.hash.slice(1);
+  return h === 'sync' || h === 'log' ? h : 'account';
 }
 
 export function App() {
-  const chrome = chromeApi();
-  const db = new PontisDB();
-  const bootstrap = new BootstrapStore(kvArea(chrome.storage.local));
-  const client = new ApiClient(async () => {
-    const b = await bootstrap.get();
-    return { serverUrl: b.serverUrl ?? '', token: b.deviceToken };
-  });
-  const adapter = createChromiumAdapter(chrome.bookmarks);
-  const pairing = new PairingService(client, bootstrap, db, async () => {
-    // This page wrote the binding; the worker is what activates it. Ask for a
-    // round now instead of leaving 待初始化 on screen until the next alarm.
-    await chrome.runtime.sendMessage({ type: 'pontis/manual-sync' });
-  });
+  const { chrome, db, bootstrap, adapter, pairing } = runtime;
 
+  const [tab, setTab] = useState<Tab>(initialTab);
+  const [unpairOpen, setUnpairOpen] = useState(false);
   const [paired, setPaired] = useState(false);
   const [serverHost, setServerHost] = useState('');
   /** The registered device name, read back from storage for the header. */
   const [deviceLabel, setDeviceLabel] = useState('');
-  const [serverUrl, setServerUrl] = useState('');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [deviceName, setDeviceName] = useState('');
   /** Which action is running: only its own button spins. */
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -77,10 +83,10 @@ export function App() {
   /** Pairing collapses into the header once it is done; the form is for setup. */
   const [editPairing, setEditPairing] = useState(false);
 
-  const [spaces, setSpaces] = useState<{ id: string; name: string }[]>([]);
+  const [spaces, setSpaces] = useState<SpaceOption[]>([]);
   const [folders, setFolders] = useState<FolderOption[]>([]);
-  const [selectedSpace, setSelectedSpace] = useState<string | null>(null);
-  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  /** The 绑定新空间 disclosure inside 同步管理. */
+  const [addBinding, setAddBinding] = useState(false);
 
   const [bindings, setBindings] = useState<BindingRecord[]>([]);
   const [sessions, setSessions] = useState<ReconSessionRecord[]>([]);
@@ -94,17 +100,16 @@ export function App() {
   const [issueChoices, setIssueChoices] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
-    setBindings(await db.bindings.toArray());
+    const rows = await db.bindings.toArray();
+    setBindings(rows);
+    setFolders(await listMountFolders(adapter));
     setSessions(await db.reconSessions.toArray());
     setIntents((await db.pendingOps.filter((o) => o.status === 'QUEUED').toArray()));
     setDiagnostics((await db.diagnostics.orderBy('id').reverse().limit(30).toArray()).reverse());
     const b = await bootstrap.get();
     setPaired(Boolean(b.serverUrl && b.deviceToken));
     setDeviceLabel(b.deviceName ?? '');
-    if (b.serverUrl) {
-      setServerUrl(b.serverUrl);
-      setServerHost(hostOf(b.serverUrl));
-    }
+    if (b.serverUrl) setServerHost(hostOf(b.serverUrl));
     if (b.deviceToken) {
       try {
         setSpaces(await pairing.listSpaces());
@@ -129,7 +134,6 @@ export function App() {
 
   useEffect(() => {
     void refresh();
-    void loadFolders();
     void refreshCounts();
     // Reconciliation progress and decisions update asynchronously.
     const id = setInterval(() => void refresh(), 2000);
@@ -141,21 +145,6 @@ export function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  async function loadFolders() {
-    // Flatten the browser folder tree for mount selection.
-    const options: FolderOption[] = [];
-    const walk = async (parentId: string, depth: number, prefix: string) => {
-      const children = await adapter.getChildren(parentId);
-      for (const c of children.filter((n) => n.type === 'folder')) {
-        const label = `${prefix}${c.title || '(未命名)'}`;
-        options.push({ value: c.id, label: `${' '.repeat(depth * 2)}${label}` });
-        await walk(c.id, depth + 1, `${label} / `);
-      }
-    };
-    await walk('0', 0, '');
-    setFolders(options);
-  }
 
   /** Run one action: spin only that control, and surface its failure. */
   async function run(key: string, fn: () => Promise<void>, then?: () => void) {
@@ -172,33 +161,40 @@ export function App() {
     }
   }
 
-  const doPair = () =>
-    run('pair', async () => {
-      // Granted inside the click gesture, before any other await: the server
-      // sends no CORS headers on purpose, so without this origin permission the
-      // first pairing fetch is a blocked cross-origin request.
-      const origin = originPatternFor(serverUrl.trim());
-      const granted = await new Promise<boolean>((resolve) => {
-        chrome.permissions.request({ origins: [origin] }, resolve);
-      });
-      if (!granted) throw new Error(`需要允许扩展访问 ${origin}`);
-      await pairing.pair({
-        serverUrl: serverUrl.trim(),
-        username,
-        password,
-        deviceName: deviceName.trim() || '浏览器插件',
-        browser: 'chromium',
-        platform: navigator.platform,
-      });
-      setPaired(true);
-      setPassword('');
-    }, () => setEditPairing(false));
+  const doPair = (params: {
+    serverUrl: string;
+    username: string;
+    password: string;
+    deviceName: string;
+  }) =>
+    void run(
+      'pair',
+      async () => {
+        // Granted inside the click gesture, before any other await: the server
+        // sends no CORS headers on purpose, so without this origin permission
+        // the first pairing fetch is a blocked cross-origin request.
+        const origin = originPatternFor(params.serverUrl);
+        const granted = await new Promise<boolean>((resolve) => {
+          chrome.permissions.request({ origins: [origin] }, resolve);
+        });
+        if (!granted) throw new Error(`需要允许扩展访问 ${origin}`);
+        await pairing.pair({
+          serverUrl: params.serverUrl,
+          username: params.username,
+          password: params.password,
+          deviceName: params.deviceName || '浏览器插件',
+          browser: 'chromium',
+          platform: navigator.platform,
+        });
+        setPaired(true);
+      },
+      () => setEditPairing(false),
+    );
 
-  const doBind = () =>
-    run('bind', async () => {
-      if (!selectedSpace || !selectedFolder) return;
-      const space = spaces.find((s) => s.id === selectedSpace);
-      await pairing.bindSpace(selectedSpace, space?.name ?? selectedSpace, selectedFolder);
+  const doBind = (spaceId: string, folderId: string, spaceName: string) =>
+    void run('bind', async () => {
+      await pairing.bindSpace(spaceId, spaceName, folderId);
+      setAddBinding(false);
     });
 
   const doUnbind = (bindingId: string) => run(`unbind:${bindingId}`, () => pairing.unbind(bindingId));
@@ -289,472 +285,536 @@ export function App() {
   );
   const showPairForm = !paired || editPairing;
 
+  const unbindTarget = bindings.find((b) => b.id === confirmUnbind);
+  const unbindPending = unbindTarget
+    ? Math.max(0, unbindTarget.receivedRevision - unbindTarget.appliedRevision)
+    : 0;
+
   return (
     <div className="pontis-page">
-      <Container size={760} py="lg">
-        <Stack gap="md">
-          <Group justify="space-between" align="flex-end" wrap="nowrap">
-            <Stack gap={2}>
-              <Title order={1} size={18} fw={600} lh={1.4}>
-                Pontis 设置
-              </Title>
-              <Text size="sm" c="dimmed">
-                {paired
-                  ? `本机已配对到 ${serverHost}${deviceLabel ? ` · ${deviceLabel}` : ''}`
-                  : '尚未配对：先登录服务器并注册本设备'}
+      <header className="pontis-pageHead">
+        <Group gap="xs" wrap="nowrap">
+          <Text className="pontis-pageTitle">Pontis</Text>
+          <Text size="md" fw={600}>
+            设置
+          </Text>
+        </Group>
+        <Text size="xs" c="dimmed">
+          {paired ? `${serverHost}${deviceLabel ? ` · ${deviceLabel}` : ''}` : '尚未配对'}
+        </Text>
+      </header>
+
+      <div className="pontis-pagePad">
+        {error && (
+          <Alert color="errorRed" title="操作失败" withCloseButton onClose={() => setError(null)} mb="md">
+            {error}
+          </Alert>
+        )}
+        {!paired && (
+          <Alert color="accentBlue" title="这台浏览器还没有配对" mb="md">
+            <Stack gap="xs">
+              <Text size="sm">
+                登录后注册本设备，再选择要同步的空间和书签目录。
               </Text>
-            </Stack>
-            {paired && (
-              <Button size="compact-xs" variant="subtle" color="gray" onClick={() => setEditPairing((v) => !v)}>
-                {editPairing ? '收起' : '修改'}
-              </Button>
-            )}
-          </Group>
-
-          {error && (
-            <Alert color="errorRed" title="操作失败" withCloseButton onClose={() => setError(null)}>
-              {error}
-            </Alert>
-          )}
-
-          <Section
-            title="1. 配对服务器"
-            right={
-              paired ? (
-                <Badge color="healthyGreen" variant="light">
-                  已配对
-                </Badge>
-              ) : (
-                <Badge color="accentBlue" variant="light">
-                  待配对
-                </Badge>
-              )
-            }
-          >
-            {showPairForm ? (
-              <Stack gap="sm">
-                <TextInput
-                  label="服务器地址"
-                  description="扩展需要被允许访问该地址，浏览器会在点击后询问"
-                  placeholder="http://localhost:8080"
-                  value={serverUrl}
-                  onChange={(e) => setServerUrl(e.currentTarget.value)}
-                />
-                <Group grow align="flex-start">
-                  <TextInput label="用户名" value={username} onChange={(e) => setUsername(e.currentTarget.value)} />
-                  <PasswordInput
-                    label="密码"
-                    value={password}
-                    onChange={(e) => setPassword(e.currentTarget.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && void doPair()}
-                  />
-                </Group>
-                <TextInput
-                  label="设备名称"
-                  placeholder="例如:工作电脑 Edge"
-                  value={deviceName}
-                  onChange={(e) => setDeviceName(e.currentTarget.value)}
-                />
-                <Group gap="xs" wrap="nowrap">
-                  <Button loading={busy === 'pair'} onClick={() => void doPair()}>
-                    登录并注册设备
-                  </Button>
-                  {paired && (
-                    <Button variant="subtle" color="errorRed" onClick={() => void doUnpair()}>
-                      解除配对
-                    </Button>
-                  )}
-                </Group>
-              </Stack>
-            ) : (
-              <Group justify="space-between" wrap="nowrap">
-                <Text size="sm">
-                  本机以「{deviceLabel || '当前设备'}」身份连接 <Code>{serverHost}</Code>
-                </Text>
-                <Button size="compact-xs" variant="subtle" color="errorRed" onClick={() => void doUnpair()}>
-                  解除配对
+              <Group gap="xs" wrap="nowrap">
+                <Button
+                  size="xs"
+                  component="a"
+                  href={chrome.runtime.getURL('onboarding.html')}
+                  target="_blank"
+                >
+                  打开初始设置
                 </Button>
-              </Group>
-            )}
-          </Section>
-
-          <Section
-            title="2. 绑定同步空间(Partial Sync)"
-            hint="选择一个空间,再选择浏览器中作为挂载点的书签目录。挂载目录内的书签将与该空间保持同步;目录本身不会上传。"
-            right={
-              !paired ? (
                 <Text size="xs" c="dimmed">
-                  完成第 1 步后可用
+                  或者直接在「账号管理」里登录
                 </Text>
-              ) : undefined
-            }
-          >
-            <Group grow align="flex-start" wrap="wrap">
-              <Select
-                label="同步空间"
-                placeholder="选择空间"
-                data={spaces.map((s) => ({ value: s.id, label: s.name }))}
-                value={selectedSpace}
-                onChange={setSelectedSpace}
-                disabled={!paired}
-                style={{ minWidth: 240 }}
-              />
-              <Select
-                label="挂载目录"
-                placeholder="选择书签目录"
-                data={folders}
-                value={selectedFolder}
-                onChange={setSelectedFolder}
-                searchable
-                style={{ minWidth: 240 }}
-              />
-            </Group>
-            {paired && spaces.length === 0 && (
-              <Text size="xs" c="dimmed">
-                这个账号在服务器上还没有空间，请先在 Web 端创建一个。
-              </Text>
-            )}
-            <Group gap="xs">
-              <Button
-                loading={busy === 'bind'}
-                disabled={!paired || !selectedSpace || !selectedFolder}
-                onClick={() => void doBind()}
-              >
-                创建绑定
-              </Button>
-            </Group>
-          </Section>
+              </Group>
+            </Stack>
+          </Alert>
+        )}
 
-          <Section title="绑定列表" right={<Text size="xs" c="dimmed">{`${bindings.length} 个绑定`}</Text>}>
-            {bindings.length === 0 ? (
-              <Text size="sm" c="dimmed">
-                暂无绑定。
-              </Text>
-            ) : (
-              <Stack gap="xs">
-                {bindings.map((b) => {
-                  const st = bindingStatus(b);
-                  return (
-                    <Box key={b.id} className="pontis-block">
-                      <Group justify="space-between" wrap="wrap">
-                        <Group gap="xs" wrap="nowrap">
-                          <Text fw={600} truncate maw={280}>
-                            {b.spaceName}
-                          </Text>
-                          <Badge color={st.color} variant="light">
-                            {st.label}
-                          </Badge>
-                          {b.recovery && (
-                            <Tooltip label={b.recovery.message}>
-                              <Badge color="errorRed" variant="outline">
-                                {b.recovery.code}
-                              </Badge>
-                            </Tooltip>
-                          )}
-                        </Group>
-                        <Group gap="xs" wrap="nowrap">
-                          <Tooltip label={isSyncEnabled(b) ? '暂停这个空间的同步' : '恢复这个空间的同步'}>
-                            <Switch
-                              size="xs"
-                              checked={isSyncEnabled(b)}
-                              disabled={busy === `toggle:${b.id}`}
-                              aria-label={`${b.spaceName} 的同步开关`}
-                              onChange={(e) => void toggleSync(b.id, e.currentTarget.checked)}
-                            />
-                          </Tooltip>
-                          <Text size="xs" c="dimmed">
-                            {relTime(b.lastSyncAt)}
-                          </Text>
-                          <Button
-                            size="compact-xs"
-                            variant="light"
-                            disabled={b.state !== 'active'}
-                            loading={busy === `integrity:${b.id}`}
-                            onClick={() => void doIntegrityCheck(b.id)}
-                          >
-                            完整性检查
-                          </Button>
-                          {confirmUnbind === b.id ? (
+        <Tabs value={tab} onChange={(v) => setTab((v as typeof tab) ?? 'account')}>
+          <Tabs.List mb="md">
+            <Tabs.Tab value="account">
+              账号管理
+            </Tabs.Tab>
+            <Tabs.Tab
+              value="sync"
+              rightSection={
+                attention.length > 0 ? (
+                  <Badge size="xs" color="warningAmber" variant="filled" circle>
+                    {attention.length}
+                  </Badge>
+                ) : undefined
+              }
+            >
+              同步管理
+            </Tabs.Tab>
+            <Tabs.Tab value="log">本地日志</Tabs.Tab>
+          </Tabs.List>
+
+          <Tabs.Panel value="account">
+            <Section
+              title="这台浏览器"
+              hint="服务器上的设备身份。撤销它会让所有绑定失效，书签本身不受影响。"
+              right={
+                paired ? (
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    color="coolGray"
+                    onClick={() => setEditPairing((v) => !v)}
+                  >
+                    {editPairing ? '收起' : '修改配对'}
+                  </Button>
+                ) : undefined
+              }
+            >
+              <Box className="pontis-listBox" p="md">
+                {paired && !editPairing ? (
+                  <Stack gap={8}>
+                    <MetaRow label="服务器">
+                      <Text size="sm" className="pontis-mono">
+                        {serverHost}
+                      </Text>
+                    </MetaRow>
+                    <MetaRow label="设备名称">
+                      <Text size="sm">{deviceLabel || '当前设备'}</Text>
+                    </MetaRow>
+                    <MetaRow label="状态">
+                      <Group gap="xs" wrap="nowrap">
+                        <Badge color="healthyGreen" variant="light">
+                          已配对
+                        </Badge>
+                        <Text size="xs" c="dimmed">
+                          {`${bindings.length} 个空间绑定在这台设备上`}
+                        </Text>
+                      </Group>
+                    </MetaRow>
+                    <Group gap="xs" mt="xs">
+                      <Button size="xs" variant="subtle" color="errorRed" onClick={() => setUnpairOpen(true)}>
+                        解除配对
+                      </Button>
+                      <Text size="xs" c="dimmed">
+                        会撤销本机所有绑定并清空本地副本
+                      </Text>
+                    </Group>
+                  </Stack>
+                ) : (
+                  <Stack gap="sm">
+                    <PairingForm
+                      initialServerUrl={serverHost ? `http://${serverHost}` : ''}
+                      busy={busy === 'pair'}
+                      submitLabel={paired ? '重新登录并注册' : '登录并注册设备'}
+                      onPair={doPair}
+                    />
+                    {paired && (
+                      <Text size="xs" c="dimmed">
+                        重新配对会换掉本设备的凭据，已有的绑定需要重新建立。
+                      </Text>
+                    )}
+                  </Stack>
+                )}
+              </Box>
+            </Section>
+          </Tabs.Panel>
+
+          <Tabs.Panel value="sync">
+            {/* No Stack gap: .pontis-section + .pontis-section already puts 24px
+                between sections, and both together read as a broken column. */}
+            <Box>
+              <Section
+                title="绑定列表"
+                right={
+                  <Group gap="sm" wrap="nowrap">
+                    <Text size="xs" c="dimmed">
+                      {`${bindings.length} 个绑定`}
+                    </Text>
+                    <Button
+                      size="compact-xs"
+                      variant="light"
+                      disabled={!paired}
+                      onClick={() => setAddBinding((v) => !v)}
+                    >
+                      {addBinding ? '收起' : '绑定新空间'}
+                    </Button>
+                  </Group>
+                }
+              >
+                {addBinding && (
+                  <Box className="pontis-listBox" p="md" mb="sm">
+                    <BindForm
+                      spaces={spaces}
+                      folders={folders}
+                      boundSpaceIds={bindings.map((b) => b.spaceId)}
+                      busy={busy === 'bind'}
+                      onBind={doBind}
+                    />
+                  </Box>
+                )}
+                {bindings.length === 0 ? (
+                  <Text size="sm" c="dimmed">
+                    暂无绑定。
+                  </Text>
+                ) : (
+                  <Box className="pontis-listBox">
+                    {sortBindings(bindings).map((b) => {
+                      const st = bindingStatus(b);
+                      return (
+                        <Box key={b.id} className="pontis-block">
+                          <Group justify="space-between" wrap="wrap">
                             <Group gap="xs" wrap="nowrap">
-                              <Text size="xs" c="errorRed">
-                                {st.pending > 0
-                                  ? `未同步的 ${st.pending} 项会被丢弃`
-                                  : '本机副本会被清空'}
-                                ，浏览器书签不动
+                              <Text fw={600} truncate maw={280}>
+                                {b.spaceName}
+                              </Text>
+                              <Badge color={st.color} variant="light">
+                                {st.label}
+                              </Badge>
+                              {b.recovery && (
+                                <Tooltip label={b.recovery.message}>
+                                  <Badge color="errorRed" variant="outline">
+                                    {b.recovery.code}
+                                  </Badge>
+                                </Tooltip>
+                              )}
+                            </Group>
+                            <Group gap="xs" wrap="nowrap">
+                              <Group gap={6} wrap="nowrap">
+                                <Text size="xs" c="dimmed">
+                                  同步
+                                </Text>
+                                <Switch
+                                  size="xs"
+                                  checked={isSyncEnabled(b)}
+                                  disabled={busy === `toggle:${b.id}`}
+                                  aria-label={`${b.spaceName} 的同步开关`}
+                                  title={isSyncEnabled(b) ? '暂停这个空间的同步' : '恢复这个空间的同步'}
+                                  onChange={(e) => void toggleSync(b.id, e.currentTarget.checked)}
+                                />
+                              </Group>
+                              <Text size="xs" c="dimmed">
+                                {relTime(b.lastSyncAt)}
                               </Text>
                               <Button
                                 size="compact-xs"
-                                color="errorRed"
-                                loading={busy === `unbind:${b.id}`}
-                                onClick={() =>
-                                  void doUnbind(b.id).then(() => setConfirmUnbind(null))
-                                }
+                                variant="light"
+                                disabled={b.state !== 'active'}
+                                loading={busy === `integrity:${b.id}`}
+                                onClick={() => void doIntegrityCheck(b.id)}
                               >
-                                确认解绑
+                                完整性检查
                               </Button>
                               <Button
                                 size="compact-xs"
                                 variant="subtle"
-                                color="coolGray"
-                                onClick={() => setConfirmUnbind(null)}
+                                color="errorRed"
+                                onClick={() => setConfirmUnbind(b.id)}
                               >
-                                取消
+                                解绑
                               </Button>
                             </Group>
-                          ) : (
-                            <Button
-                              size="compact-xs"
-                              variant="subtle"
-                              color="errorRed"
-                              onClick={() => setConfirmUnbind(b.id)}
-                            >
-                              解绑
-                            </Button>
-                          )}
-                        </Group>
-                      </Group>
-                      <Group gap="md" wrap="nowrap">
-                        <Text size="xs" c="dimmed" className="pontis-numerals">
-                          {counts[b.id] === null || counts[b.id] === undefined
-                            ? '读不到这个目录'
-                            : `${counts[b.id]} 个书签`}
-                        </Text>
-                        {!st.disabled && st.pending > 0 && (
-                          <Text size="xs" c="recoveryOrange">
-                            还有 {st.pending} 项远端改动没落到浏览器
-                          </Text>
-                        )}
-                        {st.disabled && (
-                          <Text size="xs" c="dimmed">
-                            同步已关闭，本机的改动会攒着
-                          </Text>
-                        )}
-                      </Group>
-                    </Box>
-                  );
-                })}
-              </Stack>
-            )}
-          </Section>
-
-          <Section
-            title="初始化与恢复"
-            right={
-              attention.length > 0 ? (
-                <Badge color="warningAmber" variant="filled">
-                  {`${attention.length} 个绑定待处理`}
-                </Badge>
-              ) : undefined
-            }
-          >
-            {(() => {
-              const active = bindings.filter((b) =>
-                ['initializing', 'resyncing', 'waiting_user', 'mount_missing'].includes(b.state),
-              );
-              if (active.length === 0) {
-                return (
-                  <Text size="sm" c="dimmed">
-                    所有绑定状态正常。
-                  </Text>
-                );
-              }
-              return active.map((b) => {
-                const session = sessions.find(
-                  (s) => s.bindingId === b.id && (s.state === 'RUNNING' || s.state === 'WAITING_USER'),
-                );
-                const st = bindingStatus(b);
-                return (
-                  <Box key={b.id} className="pontis-block">
-                    <Stack gap="sm">
-                      <Group justify="space-between" wrap="nowrap">
-                        <Title
-                          order={3}
-                          size="md"
-                          fw={600}
-                          style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                        >
-                          {b.spaceName}
-                        </Title>
-                        <Badge color={st.color} variant="light" style={{ flex: '0 0 auto' }}>
-                          {st.label}
-                        </Badge>
-                      </Group>
-
-                      {session && (
-                        <Text size="xs" c="dimmed">
-                          阶段 <Code>{session.serverPhase ?? session.phase}</Code>
-                          {session.serverSessionId ? ` · 服务端会话 ${session.serverSessionId.slice(0, 8)}` : ''}
-                          {session.error ? ` · ${session.error}` : ''}
-                        </Text>
-                      )}
-
-                      {session?.state === 'WAITING_USER' && session.type === 'FULL_RESYNC' && (
-                        <ResyncIntents
-                          intents={intents.filter((o) => o.bindingId === b.id)}
-                          chosen={(op) => intentChoices[op.opId] ?? defaultIntentDecision(op)}
-                          onChoose={setIntentChoice}
-                          onAll={(decision) =>
-                            setIntentChoices((prev) => {
-                              const next = { ...prev };
-                              for (const op of intents.filter((o) => o.bindingId === b.id)) {
-                                next[op.opId] = decision === 'default' ? defaultIntentDecision(op) : decision;
-                              }
-                              return next;
-                            })
-                          }
-                          onSubmit={() => void resolveIntents(b.id)}
-                          busy={busy === `intents:${b.id}`}
-                        />
-                      )}
-
-                      {session?.state === 'WAITING_USER' && (session.issues?.length ?? 0) > 0 && (
-                        <Stack gap="xs">
-                          <Text size="sm" fw={600}>
-                            服务端在提交合并前有几处身份要你确认:
-                          </Text>
-                          {session.issues!.map((issue) => (
-                            <Group key={issue.id} gap="xs" wrap="wrap" justify="space-between">
-                              <Stack gap={0} style={{ flex: '1 1 220px' }}>
-                                <Text size="sm" truncate maw={280}>
-                                  {issue.payload.title || issue.payload.source_ref}
-                                </Text>
-                                {issue.payload.url && (
-                                  <Text size="xs" c="dimmed" truncate maw={280}>
-                                    {issue.payload.url}
-                                  </Text>
-                                )}
-                              </Stack>
-                              <Select
-                                size="xs"
-                                maw={260}
-                                style={{ flex: '1 1 180px' }}
-                                placeholder="沿用服务端默认"
-                                data={issue.payload.candidates.map((c) => ({ value: c, label: c }))}
-                                value={issueChoices[issue.id] || null}
-                                onChange={(v) => setIssueChoices((prev) => ({ ...prev, [issue.id]: v ?? '' }))}
-                                searchable
-                              />
-                            </Group>
-                          ))}
-                          <Divider />
-                          <Group justify="space-between" wrap="nowrap">
-                            <Text size="xs" c="dimmed">
-                              未做选择的条目按服务端安全默认处理(doc 08 §11)。
-                            </Text>
-                            <Button
-                              color="accentBlue"
-                              loading={busy === `answer:${b.id}`}
-                              onClick={() => void answerIssues(b.id, session.issues!)}
-                            >
-                              提交选择
-                            </Button>
                           </Group>
-                        </Stack>
-                      )}
-
-                      {session?.state === 'WAITING_USER' &&
-                        session.type !== 'FULL_RESYNC' &&
-                        (session.issues?.length ?? 0) === 0 && (
-                          <Text size="sm" c="dimmed">
-                            服务端正在等待这台设备完成上一次选择。
-                          </Text>
-                        )}
-
-                      {b.state === 'mount_missing' && (
-                        <Group grow wrap="nowrap">
-                          <Select
-                            placeholder="重新选择挂载目录"
-                            data={folders}
-                            searchable
-                            value={remountFolders[b.id] ?? null}
-                            onChange={(v) => setRemountFolders((prev) => ({ ...prev, [b.id]: v ?? '' }))}
-                          />
-                          <Button
-                            loading={busy === `remount:${b.id}`}
-                            disabled={!remountFolders[b.id]}
-                            onClick={() => void doRemount(b.id)}
-                          >
-                            重新挂载并重建映射
-                          </Button>
-                        </Group>
-                      )}
-                    </Stack>
+                          <Group gap="md" wrap="nowrap">
+                            <Text size="xs" c="dimmed" className="pontis-numerals">
+                              {counts[b.id] === null || counts[b.id] === undefined
+                                ? '读不到这个目录'
+                                : `${counts[b.id]} 个书签`}
+                            </Text>
+                            {!st.disabled && st.pending > 0 && (
+                              <Text size="xs" c="recoveryOrange">
+                                还有 {st.pending} 项远端改动没落到浏览器
+                              </Text>
+                            )}
+                            {st.disabled && (
+                              <Text size="xs" c="dimmed">
+                                同步已关闭，本机的改动会攒着
+                              </Text>
+                            )}
+                          </Group>
+                        </Box>
+                      );
+                    })}
                   </Box>
-                );
-              });
-            })()}
-          </Section>
+                )}
+              </Section>
+              <Section
+                title="初始化与恢复"
+                right={
+                  attention.length > 0 ? (
+                    <Badge color="warningAmber" variant="filled">
+                      {`${attention.length} 个绑定待处理`}
+                    </Badge>
+                  ) : undefined
+                }
+              >
+                {(() => {
+                  const active = bindings.filter((b) =>
+                    ['initializing', 'resyncing', 'waiting_user', 'mount_missing'].includes(b.state),
+                  );
+                  if (active.length === 0) {
+                    return (
+                      <Text size="sm" c="dimmed">
+                        所有绑定状态正常。
+                      </Text>
+                    );
+                  }
+                  const rows = active.map((b) => {
+                    const session = sessions.find(
+                      (s) => s.bindingId === b.id && (s.state === 'RUNNING' || s.state === 'WAITING_USER'),
+                    );
+                    const st = bindingStatus(b);
+                    return (
+                      <Box key={b.id} className="pontis-block">
+                        <Stack gap="sm">
+                          <Group justify="space-between" wrap="nowrap">
+                            <Title
+                              order={3}
+                              size="md"
+                              fw={600}
+                              style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                            >
+                              {b.spaceName}
+                            </Title>
+                            <Badge color={st.color} variant="light" style={{ flex: '0 0 auto' }}>
+                              {st.label}
+                            </Badge>
+                          </Group>
 
-          <Section
-            title="诊断事件(本地)"
-            right={
-              diagnostics.some((d) => d.level === 'error') ? (
-                <Badge color="errorRed" variant="light">
-                  有错误记录
-                </Badge>
-              ) : undefined
-            }
-          >
-            {diagnostics.length === 0 ? (
-              <Text size="sm" c="dimmed">
-                暂无记录。
-              </Text>
-            ) : (
-              <Box mah={280} style={{ overflowY: 'auto' }} className="pontis-stick">
-                <Table verticalSpacing="xs" highlightOnHover withTableBorder={false}>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th w={72}>时间</Table.Th>
-                    <Table.Th w={72}>级别</Table.Th>
-                    <Table.Th w={120}>范围</Table.Th>
-                    <Table.Th>消息</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {diagnostics.map((d) => (
-                    <Table.Tr key={d.id}>
-                      <Table.Td>
-                        <Text size="xs" className="pontis-numerals" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
-                          {new Date(d.ts).toLocaleTimeString('zh-CN', { hour12: false })}
-                        </Text>
-                      </Table.Td>
-                      <Table.Td>
-                        <Badge
-                          size="xs"
-                          variant="light"
-                          color={d.level === 'error' ? 'errorRed' : d.level === 'warn' ? 'warningAmber' : 'coolGray'}
-                        >
-                          {d.level}
-                        </Badge>
-                      </Table.Td>
-                      <Table.Td>
-                        <Text size="xs" c="dimmed">
-                          {d.scope}
-                        </Text>
-                      </Table.Td>
-                      <Table.Td>
-                        <Tooltip label={JSON.stringify(d.data ?? {})} maw={420} withArrow>
-                          {/* Focusable so the payload is reachable without a mouse
-                              (docs/23 §34: keyboard paths and visible focus). */}
-                          <Text size="xs" truncate tabIndex={0}>
-                            {d.message}
-                          </Text>
-                        </Tooltip>
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-                </Table>
-              </Box>
-            )}
-          </Section>
+                          {session && (
+                            <Text size="xs" c="dimmed">
+                              阶段 <Code>{session.serverPhase ?? session.phase}</Code>
+                              {session.serverSessionId ? ` · 服务端会话 ${session.serverSessionId.slice(0, 8)}` : ''}
+                              {session.error ? ` · ${session.error}` : ''}
+                            </Text>
+                          )}
+
+                          {session?.state === 'WAITING_USER' && session.type === 'FULL_RESYNC' && (
+                            <ResyncIntents
+                              intents={intents.filter((o) => o.bindingId === b.id)}
+                              chosen={(op) => intentChoices[op.opId] ?? defaultIntentDecision(op)}
+                              onChoose={setIntentChoice}
+                              onAll={(decision) =>
+                                setIntentChoices((prev) => {
+                                  const next = { ...prev };
+                                  for (const op of intents.filter((o) => o.bindingId === b.id)) {
+                                    next[op.opId] = decision === 'default' ? defaultIntentDecision(op) : decision;
+                                  }
+                                  return next;
+                                })
+                              }
+                              onSubmit={() => void resolveIntents(b.id)}
+                              busy={busy === `intents:${b.id}`}
+                            />
+                          )}
+
+                          {session?.state === 'WAITING_USER' && (session.issues?.length ?? 0) > 0 && (
+                            <Stack gap="xs">
+                              <Text size="sm" fw={600}>
+                                服务端在提交合并前有几处身份要你确认：
+                              </Text>
+                              {session.issues!.map((issue) => (
+                                <Group key={issue.id} gap="xs" wrap="wrap" justify="space-between">
+                                  <Stack gap={0} style={{ flex: '1 1 220px' }}>
+                                    <Text size="sm" truncate maw={280}>
+                                      {issue.payload.title || issue.payload.source_ref}
+                                    </Text>
+                                    {issue.payload.url && (
+                                      <Text size="xs" c="dimmed" truncate maw={280}>
+                                        {issue.payload.url}
+                                      </Text>
+                                    )}
+                                  </Stack>
+                                  <Select
+                                    size="xs"
+                                    maw={260}
+                                    style={{ flex: '1 1 180px' }}
+                                    placeholder="沿用服务端默认"
+                                    data={issue.payload.candidates.map((c) => ({ value: c, label: c }))}
+                                    value={issueChoices[issue.id] || null}
+                                    onChange={(v) => setIssueChoices((prev) => ({ ...prev, [issue.id]: v ?? '' }))}
+                                    searchable
+                                  />
+                                </Group>
+                              ))}
+                              <Divider />
+                              <Group justify="space-between" wrap="nowrap">
+                                <Text size="xs" c="dimmed">
+                                  未做选择的条目按服务端安全默认处理(doc 08 §11)。
+                                </Text>
+                                <Button
+                                  color="accentBlue"
+                                  loading={busy === `answer:${b.id}`}
+                                  onClick={() => void answerIssues(b.id, session.issues!)}
+                                >
+                                  提交选择
+                                </Button>
+                              </Group>
+                            </Stack>
+                          )}
+
+                          {session?.state === 'WAITING_USER' &&
+                            session.type !== 'FULL_RESYNC' &&
+                            (session.issues?.length ?? 0) === 0 && (
+                              <Text size="sm" c="dimmed">
+                                服务端正在等待这台设备完成上一次选择。
+                              </Text>
+                            )}
+
+                          {b.state === 'mount_missing' && (
+                            <Group grow wrap="nowrap">
+                              <Select
+                                placeholder="重新选择挂载目录"
+                                data={folders}
+                                searchable
+                                value={remountFolders[b.id] ?? null}
+                                onChange={(v) => setRemountFolders((prev) => ({ ...prev, [b.id]: v ?? '' }))}
+                              />
+                              <Button
+                                loading={busy === `remount:${b.id}`}
+                                disabled={!remountFolders[b.id]}
+                                onClick={() => void doRemount(b.id)}
+                              >
+                                重新挂载并重建映射
+                              </Button>
+                            </Group>
+                          )}
+                        </Stack>
+                      </Box>
+                    );
+                  });
+                  // Boxed like 绑定列表: these are rows that need an answer, and
+                  // loose ones read as a broken section.
+                  return <Box className="pontis-listBox">{rows}</Box>;
+                })()}
+              </Section>
+            </Box>
+          </Tabs.Panel>
+
+          <Tabs.Panel value="log">
+            <Section
+              title="诊断事件（本地）"
+              right={
+                diagnostics.some((d) => d.level === 'error') ? (
+                  <Badge color="errorRed" variant="light">
+                    有错误记录
+                  </Badge>
+                ) : undefined
+              }
+            >
+              {diagnostics.length === 0 ? (
+                <Text size="sm" c="dimmed">
+                  暂无记录。
+                </Text>
+              ) : (
+                <Box mah={280} style={{ overflowY: 'auto' }} className="pontis-stick">
+                  <Table verticalSpacing="xs" highlightOnHover withTableBorder={false}>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th w={72}>时间</Table.Th>
+                        <Table.Th w={72}>级别</Table.Th>
+                        <Table.Th w={120}>范围</Table.Th>
+                        <Table.Th>消息</Table.Th>
+                      </Table.Tr>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {diagnostics.map((d) => (
+                        <Table.Tr key={d.id}>
+                          <Table.Td>
+                            <Text size="xs" className="pontis-numerals" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+                              {new Date(d.ts).toLocaleTimeString('zh-CN', { hour12: false })}
+                            </Text>
+                          </Table.Td>
+                          <Table.Td>
+                            <Badge
+                              size="xs"
+                              variant="light"
+                              color={d.level === 'error' ? 'errorRed' : d.level === 'warn' ? 'warningAmber' : 'coolGray'}
+                            >
+                              {d.level}
+                            </Badge>
+                          </Table.Td>
+                          <Table.Td>
+                            <Text size="xs" c="dimmed">
+                              {d.scope}
+                            </Text>
+                          </Table.Td>
+                          <Table.Td>
+                            <Tooltip label={JSON.stringify(d.data ?? {})} maw={420} withArrow>
+                              {/* Focusable so the payload is reachable without a mouse
+                                  (docs/23 §34: keyboard paths and visible focus). */}
+                              <Text size="xs" truncate tabIndex={0}>
+                                {d.message}
+                              </Text>
+                            </Tooltip>
+                          </Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                </Box>
+              )}
+            </Section>
+          </Tabs.Panel>
+        </Tabs>
+      </div>
+
+      <Modal
+        opened={!!unbindTarget}
+        onClose={() => setConfirmUnbind(null)}
+        title={`解绑「${unbindTarget?.spaceName ?? ''}」`}
+      >
+        <Stack gap="md">
+          <Text size="sm">
+            {unbindPending > 0
+              ? `${unbindPending} 项还没同步的改动会被丢弃；`
+              : ''}
+            这台浏览器上的副本会被清空，服务器上的空间和其他设备都不受影响，书签也不会被删。
+          </Text>
+          <Group justify="flex-end" mt="lg">
+            <Button variant="subtle" color="coolGray" onClick={() => setConfirmUnbind(null)}>
+              取消
+            </Button>
+            <Button
+              color="errorRed"
+              loading={busy === `unbind:${unbindTarget?.id ?? ''}`}
+              onClick={() =>
+                unbindTarget && void doUnbind(unbindTarget.id).then(() => setConfirmUnbind(null))
+              }
+            >
+              确认解绑
+            </Button>
+          </Group>
         </Stack>
-      </Container>
+      </Modal>
+
+      <Modal opened={unpairOpen} onClose={() => setUnpairOpen(false)} title="解除配对">
+        <Stack gap="md">
+          <Text size="sm">
+            这台设备会向服务器撤销自己的凭据，{bindings.length} 个绑定的本地副本一并清空。
+            服务器上的空间和书签不变，重新登录即可再绑。
+          </Text>
+          <Group justify="flex-end" mt="lg">
+            <Button variant="subtle" color="coolGray" onClick={() => setUnpairOpen(false)}>
+              取消
+            </Button>
+            <Button
+              color="errorRed"
+              onClick={() => {
+                setUnpairOpen(false);
+                void doUnpair();
+              }}
+            >
+              确认解除
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </div>
   );
 }
 
-/** A setup step: title row carries status, body carries the work. */
+/** A page section in the admin app's shape: a 13/600 title, a 12px hint under
+ *  it, actions on the right. Only list bodies get boxed. */
 function Section({
   title,
   hint,
@@ -763,43 +823,23 @@ function Section({
 }: {
   title: string;
   hint?: string;
-  right?: React.ReactNode;
-  children: React.ReactNode;
+  right?: ReactNode;
+  children: ReactNode;
 }) {
   return (
-    <Card withBorder padding="md" radius="md" bg="var(--mantine-color-body)">
-      <Stack gap="sm">
-        <Group justify="space-between" wrap="nowrap" align="center">
-          <Title order={3} size="sm" fw={600} tt="uppercase" c="coolGray.6" lh={1.4}>
-            {title}
-          </Title>
-          {right}
-        </Group>
-        {hint && (
-          <Text size="xs" c="dimmed" maw="64ch">
-            {hint}
-          </Text>
-        )}
-        {children}
-      </Stack>
-    </Card>
+    <section className="pontis-section">
+      <Group justify="space-between" align="flex-start" wrap="nowrap" mb={hint ? 4 : 'sm'}>
+        <div>
+          <div className="pontis-sectionTitle">{title}</div>
+          {hint && <div className="pontis-sectionHint">{hint}</div>}
+        </div>
+        {right}
+      </Group>
+      {children}
+    </section>
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: number; tone?: string }) {
-  return (
-    <Stack gap={0}>
-      <Text size="xs" c="dimmed">
-        {label}
-      </Text>
-      <Text size="sm" fw={600} className="pontis-numerals" c={tone ?? 'default'}>
-        {value}
-      </Text>
-    </Stack>
-  );
-}
-
-/** Review the local edits that crossed a server reset (doc 06 §11). */
 function ResyncIntents({
   intents,
   chosen,
@@ -879,7 +919,6 @@ function ResyncIntents({
   );
 }
 
-/** `http://127.0.0.1:8080` → `127.0.0.1:8080` for a readable identity line. */
 function hostOf(serverUrl: string): string {
   try {
     return new URL(serverUrl).host;
@@ -888,8 +927,14 @@ function hostOf(serverUrl: string): string {
   }
 }
 
-function errText(err: unknown): string {
-  const code = (err as { code?: string }).code;
-  const message = (err as { message?: string }).message;
-  return code ? `${code}: ${message ?? ''}` : String(err);
+/** A labelled line in the account summary. */
+function MetaRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Group gap="md" wrap="nowrap" align="center">
+      <Text size="xs" c="dimmed" w={72} flex="0 0 auto">
+        {label}
+      </Text>
+      {children}
+    </Group>
+  );
 }

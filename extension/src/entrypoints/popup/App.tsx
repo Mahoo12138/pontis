@@ -1,12 +1,12 @@
 // Popup: binding status at a glance + manual sync (doc 05 §15 trigger).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Badge, Button, Card, Divider, Group, Stack, Text, Title } from '@mantine/core';
+import { Anchor, Badge, Box, Button, Group, Stack, Text, Title } from '@mantine/core';
 import { PontisDB, type BindingRecord } from '../../core/store/db';
 import { createChromiumAdapter } from '../../core/browser/chromium';
 import { countScopeBookmarks } from '../../core/browser/scopeCount';
 import { chromeApi } from '../../runtime/chromeApi';
-import { bindingStatus, relTime } from '../../ui/bindingStatus';
+import { bindingStatus, recoveryNote, relTime, sortBindings } from '../../ui/bindingStatus';
 
 export function App() {
   const [bindings, setBindings] = useState<BindingRecord[]>([]);
@@ -70,10 +70,10 @@ export function App() {
           Pontis
         </Title>
         <Text size="sm" c="dimmed">
-          尚未绑定同步空间。请先在扩展选项页完成配对与绑定。
+          还没有配对，也还没有绑定任何空间。
         </Text>
-        <Button component="a" href={chromeApi().runtime.getURL('options.html')} target="_blank" variant="light">
-          打开选项页
+        <Button component="a" href={chromeApi().runtime.getURL('onboarding.html')} target="_blank" variant="light">
+          打开初始设置
         </Button>
       </Stack>
     );
@@ -94,19 +94,20 @@ export function App() {
           </Badge>
         )}
       </Group>
-      <Divider />
 
-      <Stack gap="xs" px="md">
-        {bindings.map((b) => {
+      <Box className="pontis-listBox" mx="md">
+        {sortBindings(bindings).map((b) => {
           const st = bindingStatus(b);
           const count = counts[b.id];
           return (
-            <Card key={b.id} withBorder radius="sm" padding="xs" bg="var(--mantine-color-body)">
+            <Box key={b.id} className="pontis-block">
               <Group justify="space-between" wrap="nowrap">
-                <Text size="sm" fw={600} truncate>
+                {/* The name gives room, never the badge: a status shortened to
+                    "监…" stops telling anyone anything. */}
+                <Text size="sm" fw={600} truncate style={{ minWidth: 0 }}>
                   {b.spaceName}
                 </Text>
-                <Badge color={st.color} variant="light">
+                <Badge color={st.color} variant="light" style={{ flexShrink: 0 }}>
                   {st.label}
                 </Badge>
               </Group>
@@ -122,7 +123,7 @@ export function App() {
               </Group>
               {st.disabled && (
                 <Text size="xs" c="dimmed">
-                  同步已关闭，本机的改动会攒着，打开后一起上传
+                  同步已关闭，本机的改动会攒着
                 </Text>
               )}
               {!st.disabled && st.pending > 0 && (
@@ -132,13 +133,13 @@ export function App() {
               )}
               {b.recovery && (
                 <Text size="xs" c="errorRed">
-                  需要恢复: {b.recovery.code}
+                  {recoveryNote(b)}
                 </Text>
               )}
-            </Card>
+            </Box>
           );
         })}
-      </Stack>
+      </Box>
 
       {syncError && (
         <Text size="xs" c="errorRed" px="md">
@@ -160,6 +161,19 @@ export function App() {
             每个空间的同步都关着，这里不会上传或下载任何东西
           </Text>
         )}
+        {/* The popup can only look. Re-mounting a deleted folder, answering a
+            reconciliation and switching a space off all live on the settings
+            page — a row that says "目录缺失" with nothing to click just sends
+            the person to close the popup and find it themselves. The hash puts
+            them on 同步管理 instead of on a tab they then have to leave. */}
+        <Anchor
+          size="xs"
+          ta="center"
+          href={`${chromeApi().runtime.getURL('options.html')}#sync`}
+          target="_blank"
+        >
+          打开设置页管理绑定
+        </Anchor>
       </Stack>
     </Stack>
   );

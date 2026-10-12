@@ -8,19 +8,23 @@
 
 /* --- Surfaces ---------------------------------------------------------- */
 
+/* The extension has no sidebar, so the guide and the settings page are the
+   workspace. Both read the semantic layer below, which uses the web app's own
+   token names and values — see the note there before changing one of these. */
 .pontis-page {
   min-height: 100vh;
-  background: var(--mantine-color-coolGray-0);
+  background: var(--pontis-workspace-bg);
 }
 
 .pontis-popup {
   /* The body carries the popup's width; filling it is what stops a strip of
      unused background appearing beside the cards. */
   width: 100%;
-  background: var(--mantine-color-coolGray-0);
+  background: var(--pontis-workspace-bg);
 }
 
-/* Rows inside a section card: separated by a rule, never boxed again. */
+/* Rows separated by a rule. Inside a .pontis-listBox the box already draws a
+   line under every row, so a second one on top would read as a double rule. */
 .pontis-block + .pontis-block {
   margin-top: var(--mantine-spacing-md);
   padding-top: var(--mantine-spacing-md);
@@ -178,6 +182,108 @@ html[data-mantine-color-scheme='dark'] {
   }
 }
 
-html[data-mantine-color-scheme='dark'] .pontis-page {
-  background: var(--mantine-color-graphite-0);
+/* --- Semantic layer, shared with the web admin ------------------------- */
+
+/* The web app declares these roles once, in
+   web/src/styles/semantic-tokens.css.ts, and every component reads them by
+   name. The extension reads the SAME names with the SAME values, so a surface,
+   a hint or a border looks identical on either side and dark mode is one remap
+   instead of a per-component choice. Change a value here only after changing
+   it there, or the two halves of the product stop matching. */
+:root {
+  --pontis-workspace-bg: var(--mantine-color-white);
+  --pontis-raised-bg: var(--mantine-color-coolGray-1);
+  --pontis-subtle-border: var(--mantine-color-coolGray-2);
+  --pontis-hover-bg: var(--mantine-color-coolGray-1);
+  --pontis-text-primary: var(--mantine-color-coolGray-8);
+  --pontis-text-secondary: var(--mantine-color-coolGray-5);
+  --pontis-accent: var(--mantine-color-accentBlue-6);
+}
+
+html[data-mantine-color-scheme='dark'] {
+  --pontis-workspace-bg: var(--mantine-color-graphite-1);
+  --pontis-raised-bg: var(--mantine-color-graphite-2);
+  --pontis-subtle-border: var(--mantine-color-graphite-4);
+  --pontis-hover-bg: var(--mantine-color-graphite-3);
+  --pontis-text-primary: var(--mantine-color-graphite-8);
+  --pontis-text-secondary: var(--mantine-color-graphite-7);
+  --pontis-accent: var(--mantine-color-accentBlueDark-6);
+}
+
+/* A page is a 56px bar over a padded content column, capped at the width the
+   admin's settings page uses (860px). Nothing else about it is a "card". The
+   header insets 16px while the column insets 24px, which is how the admin
+   aligns its own headerRegion against pagePad. */
+.pontis-pageHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 56px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--pontis-subtle-border);
+  background: var(--pontis-workspace-bg);
+}
+
+.pontis-pageTitle {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--pontis-text-secondary);
+}
+
+.pontis-pagePad {
+  padding: 16px 24px 32px;
+  max-width: 860px;
+}
+
+.pontis-section + .pontis-section {
+  margin-top: 24px;
+}
+
+.pontis-sectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pontis-text-primary);
+}
+
+.pontis-sectionHint {
+  font-size: 12px;
+  color: var(--pontis-text-secondary);
+}
+
+/* Only list bodies get boxed; the section itself sits flat on the surface. */
+.pontis-listBox {
+  border: 1px solid var(--pontis-subtle-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--pontis-workspace-bg);
+}
+
+.pontis-listBox .pontis-block {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--pontis-subtle-border);
+}
+
+.pontis-listBox .pontis-block:last-child {
+  border-bottom: none;
+}
+
+.pontis-listBox .pontis-block + .pontis-block {
+  margin-top: 0;
+  padding-top: 12px;
+  border-top: none;
+}
+
+.pontis-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+/* Keyboard focus has to be visible on a surface the pointer user never
+   notices; the admin app does the same globally, through the accent role so
+   dark mode gets the dark palette's version of it. */
+.pontis-page :focus-visible,
+.pontis-popup :focus-visible {
+  outline: 2px solid var(--pontis-accent);
+  outline-offset: 2px;
 }

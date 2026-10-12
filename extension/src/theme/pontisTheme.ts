@@ -122,6 +122,10 @@ export const pontisTheme = createTheme({
       styles: { th: { color: 'var(--mantine-color-coolGray-5)', fontWeight: 500 } },
     },
     Tooltip: { defaultProps: { shadow: 'sm', openDelay: 200 } },
+    Switch: { defaultProps: { size: 'sm' } },
+    Modal: { defaultProps: { size: 420, centered: true, radius: 'lg', shadow: 'md' } },
+    // The settings page's top-level split. Web uses the same compact tab.
+    Tabs: { styles: { tab: { fontSize: '13px' } } },
   },
 
   cursorType: 'default',
