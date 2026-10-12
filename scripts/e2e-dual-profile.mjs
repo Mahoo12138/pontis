@@ -47,27 +47,83 @@ function check(ok, label, detail) {
   log(`  FAIL ${label}${detail ? ` — ${detail}` : ''}`);
   return false;
 }
+// Every process this run started. `die()` exits the process, which skips the
+// finally blocks in main(), and a Chromium left behind holds its
+// --remote-debugging-port: the next run then attaches to the *stale* browser,
+// whose profile is already paired, and fails somewhere far from the cause.
+const launched = [];
+function killGroup(proc) {
+  if (!proc || !proc.pid) return;
+  try {
+    // Every browser is spawned detached, so its pid is also a process group id:
+    // signalling the group takes Chromium's helper children with it. Killing
+    // only the parent leaves them holding the remote-debugging port.
+    process.kill(-proc.pid, 'SIGKILL');
+  } catch {
+    try {
+      proc.kill('SIGKILL');
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+function shutdownAll() {
+  for (const proc of launched.splice(0)) killGroup(proc);
+  if (serverProc) killGroup(serverProc);
+}
+
 const die = (msg) => {
   console.error(`e2e: ${msg}`);
+  shutdownAll();
   process.exit(2);
 };
 
+process.on('SIGINT', () => { shutdownAll(); process.exit(130); });
+process.on('SIGTERM', () => { shutdownAll(); process.exit(143); });
+
 // --- environment -------------------------------------------------------------
+
+// Where Playwright keeps its downloaded browsers, and what the Chromium binary
+// is called inside each build directory. The macOS bundle hides the executable
+// inside the .app; Linux and Windows put it at the top of the folder.
+const PLAYWRIGHT_LAYOUT = {
+  darwin: {
+    root: () => path.join(os.homedir(), 'Library/Caches', 'ms-playwright'),
+    dirs: ['chrome-mac', 'chrome-mac-arm64'],
+    exe: ['Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'],
+  },
+  linux: {
+    root: () => process.env.PLAYWRIGHT_BROWSERS_PATH
+      || path.join(os.homedir(), '.cache', 'ms-playwright'),
+    dirs: ['chrome-linux', 'chrome-linux64'],
+    exe: ['chrome'],
+  },
+  win32: {
+    root: () => path.join(os.homedir(), 'AppData', 'Local', 'ms-playwright'),
+    dirs: ['chrome-win', 'chrome-win-x64'],
+    exe: ['chrome.exe'],
+  },
+};
 
 function chromeExecutable() {
   if (process.env.PONTIS_E2E_CHROME) return process.env.PONTIS_E2E_CHROME;
-  const root = path.join(os.homedir(), 'Library/Caches/ms-playwright');
+  const layout = PLAYWRIGHT_LAYOUT[process.platform] || PLAYWRIGHT_LAYOUT.linux;
+  const root = layout.root();
   if (!existsSync(root)) die(`no playwright browser cache at ${root}; set PONTIS_E2E_CHROME`);
   const builds = readdirSync(root)
     .filter((d) => /^chromium-\d+$/.test(d))
     .sort()
     .reverse();
   for (const b of builds) {
-    const exe = path.join(root, b, 'chrome-mac-arm64',
-      'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing');
-    if (existsSync(exe)) return exe;
+    for (const dir of layout.dirs) {
+      for (const exe of layout.exe) {
+        const candidate = path.join(root, b, dir, exe);
+        if (existsSync(candidate)) return candidate;
+      }
+    }
   }
-  die('no Google Chrome for Testing binary found; set PONTIS_E2E_CHROME');
+  die(`no Google Chrome for Testing binary under ${root}; set PONTIS_E2E_CHROME`);
 }
 
 /** Chrome's id for an unpacked extension: sha256 of its absolute path. */
@@ -111,6 +167,7 @@ async function startServer() {
       PONTIS_LOG_LEVEL: 'warn',
     },
     stdio: DEBUG ? 'inherit' : 'ignore',
+    detached: true,
   });
   for (let i = 0; i < 100; i++) {
     try {
@@ -221,6 +278,11 @@ class Browser {
     mkdirSync(this.dir, { recursive: true });
   }
   async start() {
+    // A port already answering means a browser from an earlier run is still
+    // alive. Say so here rather than driving that one by accident.
+    const occupied = await fetch(`http://127.0.0.1:${this.debugPort}/json/version`)
+      .then((r) => r.ok).catch(() => false);
+    if (occupied) die(`debug port ${this.debugPort} is already answering; a stale browser is holding it`);
     this.proc = spawn(chromeExecutable(), [
       `--user-data-dir=${this.dir}`,
       `--load-extension=${EXT_DIR}`,
@@ -234,8 +296,13 @@ class Browser {
       // on the first cookie write and every fetch in the profile hangs behind
       // it — which reads as a pairing bug. Playwright passes the same flag.
       '--use-mock-keychain',
+      // In a container the sandbox needs user namespaces the runner may not
+      // grant; CI asks for this explicitly rather than every profile silently
+      // failing to start.
+      ...(process.env.PONTIS_E2E_NO_SANDBOX ? ['--no-sandbox'] : []),
       'about:blank',
-    ], { stdio: DEBUG ? 'inherit' : 'ignore' });
+    ], { stdio: DEBUG ? 'inherit' : 'ignore', detached: true });
+    launched.push(this.proc);
     for (let i = 0; i < 150; i++) {
       try {
         if ((await fetch(`http://127.0.0.1:${this.debugPort}/json/version`)).ok) return;
@@ -266,7 +333,7 @@ class Browser {
   }
   stop() {
     this.browserSession?.close();
-    this.proc?.kill();
+    killGroup(this.proc);
   }
 }
 
@@ -397,9 +464,27 @@ async function pairProfile(name, info) {
   await pickOption(page, '挂载目录', 'Bookmarks Bar', name);
   log(`  step ${name}: 创建绑定 → ${await clickButton(page, '创建绑定', name)}`);
 
-  await waitStep(page, 'bodyText()', '同步中', `${name}: binding reached active`, 120_000, '需要恢复');
+  // The gate is the durable state, not the badge wording. The label for an idle
+  // active binding is a product decision that has already changed once (同步中
+  // → 监测中), and a harness wired to the string fails for reasons that are not
+  // bugs. What the user is shown is still checked — by the convergence
+  // assertions below, which read the browsers themselves.
+  await waitStep(page, BINDING_STATES, 'active', `${name}: binding reached active`, 120_000, 'needs_recovery');
   return { browser, page };
 }
+
+/** The binding states this profile's replica store currently holds. */
+const BINDING_STATES = `(async () => {
+  const db = await new Promise((res, rej) => {
+    const r = indexedDB.open('pontis-replica');
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+  const rows = await new Promise((res) => {
+    const q = db.transaction('bindings').objectStore('bindings').getAll();
+    q.onsuccess = () => res(q.result || []); q.onerror = () => res([]);
+  });
+  return rows.map((b) => b.state).join(',');
+})()`;
 
 // --- the run -----------------------------------------------------------------
 
@@ -494,10 +579,16 @@ async function main() {
 
     await syncBoth();
     const want = ['From A', 'From B', 'Server One', 'Server Two'];
-    const settled = async (fn) => {
+    // `pump` runs one more sync round on every profile between reads. Nothing
+    // pushes to a device: a change the other side made lands during a round of
+    // this one's, so when both profiles push in the same round the first one to
+    // ask cannot have seen the second. Waiting without asking again just watches
+    // a stale tree until the 5-minute alarm, which is longer than this run waits.
+    const settled = async (fn, pump) => {
       for (let i = 0; i < 90; i++) {
         const got = await fn();
         if (want.every((t) => got.includes(t))) return got;
+        if (pump) await pump();
         await new Promise((r) => setTimeout(r, 1000));
       }
       return fn();
@@ -512,8 +603,10 @@ async function main() {
     await syncBoth();
 
     for (const [name, ref] of [['A', a], ['B', b]]) {
-      const titles = await settled(async () =>
-        JSON.parse(await ref.page.evaluate(treeTitles)));
+      const titles = await settled(
+        async () => JSON.parse(await ref.page.evaluate(treeTitles)),
+        syncBoth,
+      );
       check(want.every((t) => titles.includes(t)),
         `${name}: browser shows the other profile's bookmark`, titles.join(','));
       const dupes = titles.filter((t, i) => titles.indexOf(t) !== i);

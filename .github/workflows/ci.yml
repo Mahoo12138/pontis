@@ -116,3 +116,38 @@ jobs:
             -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
             -d '{"name":"CI"}' | grep -q '"name":"CI"'
 
+  # 阶段 F 的出口要求"双设备 E2E 在 CI 或明确记录的验证流程中通过"。这条
+  # 跑的就是那个流程本身:一个真服务端 + 两个真 Chromium Profile。
+  # 它需要显示环境(扩展页面是真实窗口,Xvfb 提供),所以单独成 job:
+  # 挂了要能一眼看出是收敛挂了,不是单测挂了。
+  e2e:
+    name: Two real profiles converge
+    needs: [server, client]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: true
+          cache-dependency-path: server/go.sum
+      - name: install
+        run: pnpm install --frozen-lockfile
+      # 脚本跑的是构建产物:内嵌 Web 的单个 Go 二进制,和 .e2e-output 里那份
+      # 预授权了服务端 origin 的扩展(配对时弹出的主机授权框是浏览器 UI,
+      # 没有任何自动化能点它)。
+      - name: build (server binary + e2e extension)
+        run: pnpm build
+      - name: install chromium
+        run: npx --yes playwright install --with-deps chromium
+      - name: run the two-profile convergence
+        env:
+          # 容器里 Chromium 的沙箱需要 runner 未必给的 user namespace;
+          # 脚本据此加 --no-sandbox,而不是让两个 Profile 静默起不来。
+          PONTIS_E2E_NO_SANDBOX: '1'
+        run: xvfb-run -a --server-args="-screen 0 1280x1024x24" node scripts/e2e-dual-profile.mjs
