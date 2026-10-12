@@ -28,6 +28,29 @@ import {
   parseSteps,
   parseSyncResponse,
 } from '../protocol/validate';
+import {
+  parseStartPageFolders,
+  parseStartPageSnapshot,
+  parseStartPageSource,
+  type StartPageFolderWire,
+  type StartPageSnapshotWire,
+  type StartPageSourceWire,
+} from '../start-page/wire';
+
+/** What a conditional GET answers when the bytes have not changed.
+ *
+ * A separate value rather than `null`: "not modified, keep your copy" and "the
+ * body was empty" are different instructions to a cache, and fetch reports
+ * both as a response with nothing in it. */
+export const NOT_MODIFIED = Symbol('not-modified');
+export type MaybeNotModified<T> = T | typeof NOT_MODIFIED;
+
+/** A conditional read of the source subtree: the body, or the news that the
+ * caller's copy is still current, plus the tag to ask with next time. */
+export type StartPageSnapshotRead = {
+  value: MaybeNotModified<StartPageSnapshotWire>;
+  etag: string;
+};
 
 export class ApiError extends Error {
   constructor(
@@ -47,6 +70,12 @@ export class ApiError extends Error {
 export interface ClientConfig {
   serverUrl: string;
   token?: string;
+}
+
+/** Turn an error response into the typed failure sync logic acts on. */
+function apiErrorFrom(res: Response, json: Record<string, unknown>): ApiError {
+  const err = (json as { error?: { code?: string; message?: string } }).error;
+  return new ApiError(res.status, err?.code ?? `HTTP_${res.status}`, err?.message ?? res.statusText);
 }
 
 export interface LoginResult {
@@ -95,7 +124,8 @@ export interface ReconciliationTransport {
   completeReconciliation(sessionId: string): Promise<ReconciliationEnvelopeWire>;
 }
 
-export class ApiClient implements SyncTransport, SnapshotTransport, TransferTransport, ReconciliationTransport {
+export class ApiClient
+  implements SyncTransport, SnapshotTransport, TransferTransport, ReconciliationTransport, StartPageTransport {
   constructor(private resolveConfig: () => Promise<ClientConfig>) {}
 
   private async request<T>(
@@ -109,6 +139,45 @@ export class ApiClient implements SyncTransport, SnapshotTransport, TransferTran
       validate?: (json: unknown) => T;
     } = {},
   ): Promise<T> {
+    const { res, json } = await this.send(path, init);
+    if (!res.ok) throw apiErrorFrom(res, json);
+    // A `as T` cast would let a malformed body (null where an array is
+    // required) reach the consumer; validate at the boundary instead.
+    if (init.validate) return init.validate(json);
+    return json as T;
+  }
+
+  /**
+   * One request, with the response header a conditional read needs back.
+   *
+   * A cached start-page snapshot is only useful if the next read can say "do
+   * I still have the current one?", and the answer arrives as an ETag on the
+   * response — including on the 304 that says nothing changed.
+   */
+  private async requestConditional<T>(
+    path: string,
+    init: { token?: string; ifNoneMatch?: string; validate: (json: unknown) => T },
+  ): Promise<{ value: T | typeof NOT_MODIFIED; etag: string }> {
+    const { res, json } = await this.send(path, init);
+    const etag = res.headers.get('ETag') ?? '';
+    // 304 is not `ok` in fetch terms, and it is not a failure either: it means
+    // the caller's copy is current.
+    if (res.status === 304) return { value: NOT_MODIFIED, etag };
+    if (!res.ok) throw apiErrorFrom(res, json);
+    return { value: init.validate(json), etag };
+  }
+
+  /** Send and read the body. Status is the caller's to interpret. */
+  private async send(
+    path: string,
+    init: {
+      method?: string;
+      body?: unknown;
+      token?: string;
+      serverUrl?: string;
+      ifNoneMatch?: string;
+    },
+  ): Promise<{ res: Response; json: Record<string, unknown> }> {
     const { serverUrl: stored, token } = await this.resolveConfig();
     const serverUrl = init.serverUrl ?? stored;
     if (!serverUrl) throw new ApiError(0, 'NOT_PAIRED', `no server URL to send ${path} to`);
@@ -120,6 +189,7 @@ export class ApiClient implements SyncTransport, SnapshotTransport, TransferTran
         headers: {
           'Content-Type': 'application/json',
           ...(auth ? { Authorization: `Bearer ${auth}` } : {}),
+          ...(init.ifNoneMatch ? { 'If-None-Match': init.ifNoneMatch } : {}),
         },
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
       });
@@ -128,14 +198,7 @@ export class ApiClient implements SyncTransport, SnapshotTransport, TransferTran
     }
     const text = await res.text();
     const json = text ? (JSON.parse(text) as Record<string, unknown>) : {};
-    if (!res.ok) {
-      const err = (json as { error?: { code?: string; message?: string } }).error;
-      throw new ApiError(res.status, err?.code ?? `HTTP_${res.status}`, err?.message ?? res.statusText);
-    }
-    // A `as T` cast would let a malformed body (null where an array is
-    // required) reach the consumer; validate at the boundary instead.
-    if (init.validate) return init.validate(json);
-    return json as T;
+    return { res, json };
   }
 
   meta(serverUrl?: string): Promise<MetaWire> {
@@ -264,4 +327,68 @@ export class ApiClient implements SyncTransport, SnapshotTransport, TransferTran
       validate: parseReconciliationEnvelope,
     });
   }
+
+  deviceStartPage(): Promise<StartPageSourceWire> {
+    return this.request<StartPageSourceWire>('/api/v1/device/start-page', {
+      validate: parseStartPageSource,
+    });
+  }
+
+  deviceStartPageSnapshot(ifNoneMatch?: string): Promise<StartPageSnapshotRead> {
+    return this.requestConditional<StartPageSnapshotWire>('/api/v1/device/start-page/snapshot', {
+      ifNoneMatch,
+      validate: parseStartPageSnapshot,
+    });
+  }
+
+  authorizeStartPageGrant(
+    sessionToken: string,
+    body: { device_id: string; space_id: string; folder_id: string },
+  ): Promise<StartPageSourceWire> {
+    return this.request<StartPageSourceWire>('/api/v1/start-page-grants', {
+      method: 'POST',
+      token: sessionToken,
+      body,
+      validate: parseStartPageSource,
+    });
+  }
+
+  revokeStartPageGrant(sessionToken: string, grantId: string): Promise<void> {
+    return this.request<void>(`/api/v1/start-page-grants/${grantId}`, {
+      method: 'DELETE',
+      token: sessionToken,
+    });
+  }
+
+  sessionSpaces(sessionToken: string, serverUrl?: string): Promise<SpaceWire[]> {
+    return this.request<{ spaces: SpaceWire[] }>('/api/v1/spaces', { token: sessionToken, serverUrl }).then(
+      (r) => r.spaces ?? [],
+    );
+  }
+
+  sessionFolders(sessionToken: string, spaceId: string, serverUrl?: string): Promise<StartPageFolderWire[]> {
+    return this.request<StartPageFolderWire[]>(`/api/v1/spaces/${spaceId}/nodes`, {
+      token: sessionToken,
+      serverUrl,
+      validate: parseStartPageFolders,
+    });
+  }
+}
+
+/** The start page's read side (start-page doc §13.1).
+ *
+ * Two credentials, two surfaces. The device credential reads only the source
+ * its account approved; approving, moving and revoking a source — and browsing
+ * the folders to choose one from — happen on a session token, because a
+ * standing device credential must not be able to widen what it reads. */
+export interface StartPageTransport {
+  deviceStartPage(): Promise<StartPageSourceWire>;
+  deviceStartPageSnapshot(ifNoneMatch?: string): Promise<StartPageSnapshotRead>;
+  authorizeStartPageGrant(
+    sessionToken: string,
+    body: { device_id: string; space_id: string; folder_id: string },
+  ): Promise<StartPageSourceWire>;
+  revokeStartPageGrant(sessionToken: string, grantId: string): Promise<void>;
+  sessionSpaces(sessionToken: string, serverUrl?: string): Promise<SpaceWire[]>;
+  sessionFolders(sessionToken: string, spaceId: string, serverUrl?: string): Promise<StartPageFolderWire[]>;
 }

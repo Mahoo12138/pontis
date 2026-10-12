@@ -3,6 +3,7 @@
 // fact lives here, and mirror + pending op updates share one transaction.
 
 import Dexie, { type Table } from 'dexie';
+import type { StartPageSnapshotNodeWire } from '../start-page/wire';
 import type {
   NodeType,
   OpStatus,
@@ -289,6 +290,8 @@ export class PontisDB extends Dexie {
   emergencySnapshots!: Table<EmergencySnapshotRecord, number>;
   runLocks!: Table<RunLockRecord, string>;
   diagnostics!: Table<DiagnosticEvent, number>;
+  startPageConfigs!: Table<StartPageConfigRecord, string>;
+  startPageSnapshots!: Table<StartPageSnapshotRecord, string>;
 
   constructor(name = 'pontis-replica') {
     super(name);
@@ -313,7 +316,67 @@ export class PontisDB extends Dexie {
       // binding corrupts the replica.
       runLocks: 'bindingId, takenAt',
     });
+    this.version(4).stores({
+      // The start page is a projection with its own storage on purpose: it
+      // shares a database with the replica because that is where browser-local
+      // state already lives, but no table here is read or written by the sync
+      // engine, and none of them holds a watermark it may advance (§11.1).
+      startPageConfigs: 'id, deviceId, [instanceId+deviceId]',
+      // deviceId is indexed on its own because releasing a source, clearing
+      // one device's cache after a revocation, and unpairing all delete by
+      // device rather than by one known row.
+      startPageSnapshots: 'id, deviceId, [deviceId+spaceId], verifiedAt',
+    });
   }
+}
+
+/**
+ * One browser environment's start-page setup (start-page doc §12).
+ *
+ * Keyed by instance and device rather than by the logged-in user alone: the
+ * same account in two browsers is two sources, and a server moved to another
+ * origin is not the same server.
+ */
+export interface StartPageConfigRecord {
+  id: string;
+  instanceId: string;
+  deviceId: string;
+  /** Filled from the first snapshot read: pairing keeps no account id. */
+  userId: string;
+  spaceId: string;
+  folderId: string;
+  grantId: string;
+  grantVersion: number;
+  searchMode: 'web' | 'bookmarks';
+  openTarget: 'current-tab' | 'new-tab';
+  density: 'standard' | 'compact';
+  /** Rises on every write, so an in-flight read can be recognised as
+   * belonging to a configuration the user has since replaced (§14.3). */
+  configGeneration: number;
+  updatedAt: number;
+}
+
+/** The verified copy of one source subtree, kept under every identity that is
+ * allowed to see it. */
+export interface StartPageSnapshotRecord {
+  id: string;
+  instanceId: string;
+  userId: string;
+  deviceId: string;
+  spaceId: string;
+  folderId: string;
+  grantId: string;
+  grantVersion: number;
+  epoch: number;
+  revision: number;
+  etag: string;
+  /** The instant the server read the tree. */
+  capturedAt: string;
+  /** The last time this copy was confirmed against the server. */
+  verifiedAt: number;
+  spaceName: string;
+  sourceTitle: string;
+  nodes: StartPageSnapshotNodeWire[];
 }
 
 /** A binding's exclusive right to run sync or a reconciliation. */
