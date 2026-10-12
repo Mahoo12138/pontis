@@ -87,7 +87,21 @@ export interface LocalNodeRecord {
   position: number | null;
 }
 
-export type PendingStatus = 'QUEUED' | 'RESOLVED';
+/**
+ * Outbox state. `IN_FLIGHT` means the operation has been handed to the server
+ * at least once, so its payload is frozen: a later edit becomes a new operation
+ * instead of a body the server will refuse as OP_ID_REUSED (doc 04).
+ */
+export type PendingStatus = 'QUEUED' | 'IN_FLIGHT' | 'RESOLVED';
+
+/**
+ * An operation the server has never answered for. Whether it is still queued
+ * or already in flight, the intent behind it is unsatisfied as far as this
+ * device knows, and recovery has to treat it as one.
+ */
+export function isUnsettledOp(op: Pick<PendingOpRecord, 'status'>): boolean {
+  return op.status !== 'RESOLVED';
+}
 
 /** Outbox entry (doc 05 §5). HTTP success ≠ deletable; settle rules apply. */
 export interface PendingOpRecord {

@@ -315,7 +315,7 @@ export class RemoteChangeApplier {
     const op =
       ops.find((o) => o.nodeId === change.node_id) ??
       ops.find((o) => o.result?.resultRevision === change.revision) ??
-      ops.find((o) => o.status === 'QUEUED' && o.title === payload.title && (o.url ?? '') === payload.url);
+      ops.find((o) => o.status !== 'RESOLVED' && o.title === payload.title && (o.url ?? '') === payload.url);
     if (!op?.browserId) return false;
     const local = await this.db.localNodes.get([binding.id, op.browserId]);
     if (!local || local.canonicalId != null) return false;

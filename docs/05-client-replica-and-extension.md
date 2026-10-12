@@ -133,10 +133,17 @@ Mirror + Pending 应尽量在同一个 IndexedDB Transaction 中提交。
 Pending 状态建议：
 
 ```text
-QUEUED
-RESOLVED
+QUEUED     从未发出，payload 还可以原地改
+IN_FLIGHT  至少发出过一次，payload 冻结
+RESOLVED   Server 已按 op_id 答复，等 settle 规则回收
 SETTLED
 ```
+
+`IN_FLIGHT` 之后不得再改这条 Operation 的 body：Server 对同 op_id 同 body 重放
+Receipt，对同 op_id 不同 body 直接 `OP_ID_REUSED`（`04-sync-protocol.md` §14），
+而响应丢失后的重试必须与第一次一字不差。用户在这期间的编辑另起 Operation，用新的
+op_id、排在后面的 client_seq，寻址到 Create 自己命名的那个 Canonical UUID——
+Client 是节点的命名方（`04-sync-protocol.md` §5），所以节点在 ack 之前就可寻址。
 
 HTTP 成功不代表 Pending 可以立即删除。
 

@@ -8,7 +8,7 @@
 // assembled from these three steps, not from any single one of them.
 
 import { integrityCheck, type IntegrityResult } from './integrity';
-import { EventProcessor } from './eventProcessor';
+import { capturesBindingEvents, EventProcessor } from './eventProcessor';
 import type { BrowserAdapter, BrowserEvent } from '../browser/types';
 import { isSyncEnabled, logDiagnostic, type PontisDB } from '../store/db';
 import type { ReplicaVerifier } from './verifyReplica';
@@ -142,15 +142,16 @@ export class WorkerLoop {
   }
 
   /**
-   * Capture a browser event (doc 05 §13). A round of reconciliation keeps
-   * processing so user intent formed during it is not lost; a local op it
-   * produces schedules the next sync rather than firing one per keystroke.
+   * Capture a browser event (doc 05 §13). Nothing that pauses what a device
+   * *sends* pauses what a person does: a move made while a recovery is running
+   * has to be recorded, because no later scan can tell it ever happened. The
+   * op it produces waits for the new baseline like any other intent.
    */
   dispatch(event: BrowserEvent): Promise<void> {
     const { db, adapter } = this.deps;
     this.eventsSettled = this.eventsSettled
       .then(async () => {
-        const bindings = await db.bindings.where('state').anyOf(['active', 'initializing']).toArray();
+        const bindings = await db.bindings.filter((b) => capturesBindingEvents(b.state)).toArray();
         let producedLocalOp = false;
         for (const b of bindings) {
           const disposition = await new EventProcessor(db, adapter).handleEvent(b.id, event);

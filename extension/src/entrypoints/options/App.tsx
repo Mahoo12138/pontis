@@ -34,6 +34,7 @@ import { countScopeBookmarks } from '../../core/browser/scopeCount';
 import type { ReconciliationIssueWire } from '../../core/protocol/types';
 import {
   isSyncEnabled,
+  isUnsettledOp,
   PontisDB,
   type BindingRecord,
   type DiagnosticEvent,
@@ -104,7 +105,7 @@ export function App() {
     setBindings(rows);
     setFolders(await listMountFolders(adapter));
     setSessions(await db.reconSessions.toArray());
-    setIntents((await db.pendingOps.filter((o) => o.status === 'QUEUED').toArray()));
+    setIntents((await db.pendingOps.filter((o) => isUnsettledOp(o)).toArray()));
     setDiagnostics((await db.diagnostics.orderBy('id').reverse().limit(30).toArray()).reverse());
     const b = await bootstrap.get();
     setPaired(Boolean(b.serverUrl && b.deviceToken));

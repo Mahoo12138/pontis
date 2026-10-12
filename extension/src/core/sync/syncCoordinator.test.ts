@@ -71,6 +71,60 @@ const createAt = (revision: number, nodeId: string): ChangeWire => ({
 });
 
 describe('SyncCoordinator', () => {
+  it('retries a round that never got an answer with the very same operation', async () => {
+    // Once an operation has been sent its body is frozen: the server replays
+    // its receipt for an identical request and refuses a changed one as
+    // OP_ID_REUSED (doc 04). So a retry after a lost response must carry
+    // exactly what the first attempt carried.
+    adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
+    // The user's bookmark, captured the way EventProcessor captures it: a
+    // mirror with no canonical id and the create that names one.
+    adapter.seed({ id: 'b-1', parentId: 'f1', title: 'Local Bookmark', url: 'https://local.example.com' });
+    await seedBinding();
+    await db.localNodes.put({
+      bindingId, browserId: 'b-1', canonicalId: null, type: 'bookmark',
+      title: 'Local Bookmark', url: 'https://local.example.com', parentBrowserId: 'f1', position: null,
+    });
+    await db.pendingOps.add({
+      opId: 'op-1', bindingId, clientSeq: 1, baseRevision: 100, status: 'QUEUED',
+      type: 'create', nodeId: 'n-101', nodeType: 'bookmark', title: 'Local Bookmark',
+      url: 'https://local.example.com', parent: { type: 'root', key: 'main' },
+      browserId: 'b-1', createdAt: Date.now(),
+    });
+
+    const sent: SyncRequestWire['operations'][] = [];
+    let failNext = true;
+    const transport: SyncTransport = {
+      sync: async (_id, req) => {
+        sent.push(req.operations);
+        if (failNext) {
+          failNext = false;
+          throw new ApiError(0, 'NETWORK_ERROR', 'the worker went down mid-round');
+        }
+        return response({
+          changes: [{ ...createAt(101, 'n-101'), payload: { ...createAt(101, 'n-101').payload, title: 'Local Bookmark', url: 'https://local.example.com' } }],
+          through_revision: 101,
+          server_revision: 101,
+          operation_results: [
+            { op_id: 'op-1', client_seq: 1, status: 'APPLIED', reason: '', result_revision: 101, settle_after_revision: 101 },
+          ],
+        });
+      },
+    };
+    const coordinator = new SyncCoordinator(db, applier, transport);
+
+    expect(await coordinator.syncBinding(bindingId)).toBe('error');
+    // Not queued-and-editable, not forgotten: still owed, and unmutable.
+    expect((await db.pendingOps.get('op-1'))?.status).toBe('IN_FLIGHT');
+
+    expect(await coordinator.syncBinding(bindingId)).toBe('synced');
+    expect(sent[1]).toEqual(sent[0]);
+    // The ack回流 adopted the browser node rather than creating a second one.
+    expect((await db.localNodes.get([bindingId, 'b-1']))?.canonicalId).toBe('n-101');
+    expect(await db.pendingOps.get('op-1')).toBeUndefined();
+    expect((await db.bindings.get(bindingId))?.appliedRevision).toBe(101);
+  });
+
   it('pushes queued ops, persists inbox, applies serially and settles pending', async () => {
     adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
     await seedBinding();

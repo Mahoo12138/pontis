@@ -223,4 +223,31 @@ describe('isQuiescent', () => {
     } as never);
     expect(await isQuiescent(db, bindingId)).toBe(false);
   });
+
+});
+
+describe('verification repairs the drift a missed event hides', () => {
+  it('sees a bookmark that moved, and sends the move out', async () => {
+    // The shape a missed event leaves behind: the browser holds the node under
+    // a different folder, the mirror still names the old one, and title and url
+    // agree perfectly — so a scan that reads only those two calls it synced.
+    adapter.seed({ id: 'f1', parentId: '0', title: 'Sync' });
+    adapter.seed({ id: 'dev', parentId: 'f1', title: 'Dev' });
+    adapter.seed({ id: 'b1', parentId: 'dev', title: 'Go', url: 'https://go.dev' });
+    await seedMappedNode('n-root', 'dev', 'Dev', null);
+    await seedMappedNode('n-go', 'b1', 'Go', 'https://go.dev');
+    await seedBinding();
+    server.seed({ type: 'create', node_id: 'n-root', payload: { type: 'folder', title: 'Dev', url: '', parent: ROOT, position: 0 } });
+    server.seed({ type: 'create', node_id: 'n-go', payload: { type: 'bookmark', title: 'Go', url: 'https://go.dev', parent: ROOT, position: 1 } });
+
+    const before = await verifier.verifyScan(bindingId);
+    expect(before.problems.some((pr) => pr.kind === 'parent_mismatch' && pr.browserId === 'b1')).toBe(true);
+    expect(before.ok).toBe(false);
+
+    const report = await verifier.verifyAndRepair(bindingId);
+    // Out of the mirror, onto the server, and the two sides agree again.
+    expect(server.journal.some((c) => c.type === 'move' && c.node_id === 'n-go')).toBe(true);
+    expect(report.ok).toBe(true);
+    expect(await db.pendingOps.count()).toBe(0);
+  });
 });

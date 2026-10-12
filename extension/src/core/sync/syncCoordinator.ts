@@ -219,12 +219,23 @@ export class SyncCoordinator {
 
   private async buildRequest(bindingId: string): Promise<SyncRequestWire> {
     const b = (await this.db.bindings.get(bindingId))!;
-    const queued = await this.db.pendingOps
+    // An operation that has already been sent keeps its payload forever: the
+    // server replays its receipt for the same body and refuses a different one
+    // as OP_ID_REUSED (doc 04). So the round takes the outstanding ops — queued
+    // ones and any an earlier round never got an answer for — and marks them
+    // in flight before the request leaves.
+    const outstanding = await this.db.pendingOps
       .where('[bindingId+status]')
       .equals([bindingId, 'QUEUED'])
-      .sortBy('clientSeq');
+      .toArray();
+    const inFlight = await this.db.pendingOps
+      .where('[bindingId+status]')
+      .equals([bindingId, 'IN_FLIGHT'])
+      .toArray();
+    const all = [...outstanding, ...inFlight].sort((x, y) => x.clientSeq - y.clientSeq);
     // Transfer intents never appear as /sync operations.
-    const syncOps = queued.filter((o): o is PendingOpRecord & { type: OpType } => o.type !== 'transfer');
+    const syncOps = all.filter((o): o is PendingOpRecord & { type: OpType } => o.type !== 'transfer');
+    await this.markInFlight(syncOps.map((o) => o.opId));
     return {
       protocol_version: SYNC_PROTOCOL_VERSION,
       epoch: b.epoch,
@@ -233,6 +244,18 @@ export class SyncCoordinator {
       operations: syncOps.map(toWire),
       max_changes: MAX_CHANGES_PER_ROUND,
     };
+  }
+
+  /**
+   * Freeze the ops this round is carrying. They stay in flight until the
+   * server answers for them by name, which is also what makes a retry after a
+   * lost response send exactly what the first attempt sent.
+   */
+  private async markInFlight(opIds: string[]): Promise<void> {
+    if (opIds.length === 0) return;
+    await this.db.transaction('rw', [this.db.pendingOps], async () => {
+      for (const opId of opIds) await this.db.pendingOps.update(opId, { status: 'IN_FLIGHT' });
+    });
   }
 
   /**

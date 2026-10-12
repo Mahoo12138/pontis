@@ -308,6 +308,19 @@ describe('event capture feeding the loop', () => {
     expect(transport.calls[0]?.ops).toBe(2);
   });
 
+  it('keeps capturing intent through a recovery and spends nothing on the network', async () => {
+    // A recovery pauses what the device sends, not what a person does. The op
+    // this records waits for the new baseline like any other intent (doc 05 §13).
+    await seedBinding(bindingId, { state: 'resyncing' });
+    const scheduled = vi.spyOn(loop, 'scheduleSync').mockImplementation(() => undefined);
+
+    await loop.dispatch(created('b-7', 'Made during resync'));
+
+    expect((await db.pendingOps.toArray()).map((o) => o.title)).toEqual(['Made during resync']);
+    expect(transport.calls).toEqual([]);
+    expect(scheduled).toHaveBeenCalledTimes(1);
+  });
+
   it('schedules one debounced round after a captured edit', async () => {
     await seedBinding();
     // Spied rather than waited: the point is that a captured edit arms the

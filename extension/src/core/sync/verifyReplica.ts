@@ -10,7 +10,14 @@
 // cannot name a canonical parent until its own create is acked.
 
 import { type BrowserAdapter, type BrowserNode } from '../browser/types';
-import { logDiagnostic, type BindingRecord, type LocalNodeRecord, type PendingOpRecord, type PontisDB } from '../store/db';
+import {
+  isUnsettledOp,
+  logDiagnostic,
+  type BindingRecord,
+  type LocalNodeRecord,
+  type PendingOpRecord,
+  type PontisDB,
+} from '../store/db';
 import type { ChangeWire, NodeType, ParentRefWire } from '../protocol/types';
 import { uuidv7 } from '../util/ids';
 import { snapshotBrowserTree, type BrowserSnapshotNode } from './browserSnapshot';
@@ -20,7 +27,7 @@ import type { SyncCoordinator } from './syncCoordinator';
 const MAX_QUIESCE_ROUNDS = 64;
 
 export interface VerifyProblem {
-  kind: 'missing_mirror' | 'orphan_mirror' | 'field_mismatch' | 'order_drift';
+  kind: 'missing_mirror' | 'orphan_mirror' | 'field_mismatch' | 'parent_mismatch' | 'order_drift';
   browserId?: string;
   canonicalId?: string;
   detail?: string;
@@ -76,9 +83,9 @@ export class ReplicaVerifier {
     const mirror = await this.db.localNodes.get([bindingId, browserId]);
     if (mirror?.canonicalId) return true;
     const pending = await this.db.pendingOps
-      .where('[bindingId+status]')
-      .equals([bindingId, 'QUEUED'])
-      .filter((o) => o.browserId === browserId)
+      .where('bindingId')
+      .equals(bindingId)
+      .filter((o) => o.browserId === browserId && isUnsettledOp(o))
       .first();
     return pending != null || mirror != null;
   }
@@ -111,7 +118,7 @@ export class ReplicaVerifier {
 
   /**
    * Rescan the managed scope and compare browser ↔ mirror. Missing
-   * mirrors and field drift are repaired once via targeted ops
+   * mirrors, field drift and parent drift are repaired once via targeted ops
    * (PROCESS_DEFERRED_LOCAL_CHANGES, doc 06 §13); whatever still
    * diverges fails verification.
    */
@@ -122,24 +129,62 @@ export class ReplicaVerifier {
       const mirrors = new Map(
         (await this.db.localNodes.where('bindingId').equals(bindingId).toArray()).map((m) => [m.browserId, m]),
       );
-      const queue: BrowserSnapshotNode[] = [...snap.children];
-      while (queue.length > 0) {
-        const cur = queue.shift()!;
-        queue.push(...cur.children);
-        const mirror = mirrors.get(cur.node.id);
-        if (!mirror) continue; // repaired by uploadPass below
-        if (mirror.canonicalId == null) continue; // upload still in flight
+      await this.repairLevel(bindingId, snap.children, mirrors);
+      await this.uploadPassAll(bindingId);
+      await this.quiesceLoop(bindingId);
+    }
+    return this.verifyScan(bindingId);
+  }
+
+  /**
+   * Queue what the browser says about each mapped node and the mirror does
+   * not, one level at a time. The parent is the drift a missed event hides
+   * best: a bookmark dragged into another folder leaves the browser and the
+   * mirror agreeing about the node itself, so a scan that only reads titles and
+   * urls calls a moved tree a synced one.
+   */
+  private async repairLevel(
+    bindingId: string,
+    children: BrowserSnapshotNode[],
+    mirrors: Map<string, LocalNodeRecord>,
+  ): Promise<void> {
+    for (const cur of children) {
+      const mirror = mirrors.get(cur.node.id);
+      if (mirror?.canonicalId) {
         if (cur.node.title !== mirror.title) {
           await this.enqueueOp(bindingId, { type: 'update_title', nodeId: mirror.canonicalId, title: cur.node.title });
         }
         if ((cur.node.url ?? null) !== mirror.url) {
           await this.enqueueOp(bindingId, { type: 'update_url', nodeId: mirror.canonicalId, url: cur.node.url ?? '' });
         }
+        if (mirror.parentBrowserId && cur.node.parentId && cur.node.parentId !== mirror.parentBrowserId) {
+          const parent = await this.canonicalParentRef(bindingId, cur.node.parentId);
+          if (parent) {
+            await this.enqueueOp(bindingId, {
+              type: 'move',
+              nodeId: mirror.canonicalId,
+              parent,
+              beforeId: this.nextMappedSibling(children, cur.node.id, mirrors),
+            });
+          }
+        }
       }
-      await this.uploadPassAll(bindingId);
-      await this.quiesceLoop(bindingId);
+      await this.repairLevel(bindingId, cur.children, mirrors);
     }
-    return this.verifyScan(bindingId);
+  }
+
+  /** The canonical id the moved node should land before, or null to append. */
+  private nextMappedSibling(
+    children: BrowserSnapshotNode[],
+    browserId: string,
+    mirrors: Map<string, LocalNodeRecord>,
+  ): string | null {
+    const at = children.findIndex((c) => c.node.id === browserId);
+    for (let i = at + 1; i < children.length; i++) {
+      const m = mirrors.get(children[i]!.node.id);
+      if (m?.canonicalId) return m.canonicalId;
+    }
+    return null;
   }
 
   /**
@@ -169,6 +214,14 @@ export class ReplicaVerifier {
       }
       if (cur.node.title !== mirror.title || (cur.node.url ?? null) !== mirror.url) {
         problems.push({ kind: 'field_mismatch', browserId: cur.node.id, canonicalId: mirror.canonicalId });
+      }
+      if (mirror.parentBrowserId && cur.node.parentId && cur.node.parentId !== mirror.parentBrowserId) {
+        problems.push({
+          kind: 'parent_mismatch',
+          browserId: cur.node.id,
+          canonicalId: mirror.canonicalId,
+          detail: `browser ${cur.node.parentId} vs mirror ${mirror.parentBrowserId}`,
+        });
       }
     }
 
@@ -303,7 +356,7 @@ export class ReplicaVerifier {
 
   private async enqueueOp(
     bindingId: string,
-    op: { type: PendingOpRecord['type']; nodeId: string; title?: string; url?: string },
+    op: { type: PendingOpRecord['type']; nodeId: string; title?: string; url?: string; parent?: ParentRefWire; beforeId?: string | null },
   ): Promise<void> {
     await this.db.transaction('rw', [this.db.bindings, this.db.pendingOps], async () => {
       const b = await this.db.bindings.get(bindingId);
@@ -319,6 +372,8 @@ export class ReplicaVerifier {
         nodeId: op.nodeId,
         title: op.title,
         url: op.url,
+        parent: op.parent,
+        beforeId: op.beforeId ?? null,
         createdAt: Date.now(),
       });
       await this.db.bindings.put(b);
@@ -356,13 +411,17 @@ export class ReplicaVerifier {
 
 }
 
-/** No queued ops, no unapplied inbox rows, watermarks level. */
+/** No unsettled ops, no unapplied inbox rows, watermarks level. */
 export async function isQuiescent(db: PontisDB, bindingId: string): Promise<boolean> {
   const b = await db.bindings.get(bindingId);
   if (!b) return true;
   if (b.appliedRevision !== b.receivedRevision) return false;
-  const queued = await db.pendingOps.where('[bindingId+status]').equals([bindingId, 'QUEUED']).count();
-  if (queued > 0) return false;
+  const outstanding = await db.pendingOps
+    .where('bindingId')
+    .equals(bindingId)
+    .filter((o) => isUnsettledOp(o))
+    .count();
+  if (outstanding > 0) return false;
   const unapplied = await db.remoteChanges
     .where('[bindingId+revision]')
     .between([bindingId, b.appliedRevision + 1], [bindingId, Number.MAX_SAFE_INTEGER], true, true)
