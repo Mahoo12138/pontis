@@ -663,3 +663,59 @@ export interface ScheduleRequest {
   space_id?: string;
   enabled?: boolean;
 }
+
+// ─── Start page (pontis-start-page-v1 §12-§13, pinned by fixtures/api) ──────
+
+/** One device's approved source: a space, a folder inside it, and the
+ * version of that approval. `grant_*` are empty on a session read, which is
+ * bounded by ownership rather than by a grant. */
+export interface StartPageSource {
+  grant_id: string;
+  device_id: string;
+  space_id: string;
+  space_name: string;
+  folder_id: string;
+  folder_title: string;
+  grant_version: number;
+}
+
+export interface StartPageGrantListResponse {
+  grants: StartPageSource[];
+}
+
+export interface AuthorizeStartPageGrantRequest {
+  device_id: string;
+  space_id: string;
+  folder_id: string;
+}
+
+/** A node inside the source subtree. The source folder itself is not among
+ * them: its title arrives on `source`. */
+export interface StartPageSnapshotNode {
+  id: string;
+  type: NodeType;
+  parent_id: string;
+  title: string;
+  url?: string;
+  position: number;
+  /** Direct children, folders only. Absent means zero. */
+  child_count?: number;
+  updated_at: string;
+}
+
+export interface StartPageSnapshotMeta {
+  epoch: number;
+  revision: number;
+  captured_at: string;
+  complete: boolean;
+  source_title: string;
+}
+
+export interface StartPageSnapshot {
+  schema_version: number;
+  instance_id: string;
+  user_id: string;
+  source: StartPageSource;
+  snapshot: StartPageSnapshotMeta;
+  nodes: StartPageSnapshotNode[];
+}

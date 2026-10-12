@@ -88,4 +88,10 @@ export type {
   ScheduleKind,
   ScheduleView,
   ScheduleRequest,
+  StartPageSource,
+  StartPageGrantListResponse,
+  AuthorizeStartPageGrantRequest,
+  StartPageSnapshotNode,
+  StartPageSnapshotMeta,
+  StartPageSnapshot,
 } from './types';

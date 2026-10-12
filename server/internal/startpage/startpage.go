@@ -190,6 +190,35 @@ func (s *Service) ActiveGrant(ctx context.Context, deviceID string) (Grant, erro
 	return g, err
 }
 
+// Source loads the space and folder a grant points at, without reading
+// anything below it. A client checking whether its cached source is still
+// alive asks that question, and the answer should not cost a subtree.
+func (s *Service) Source(ctx context.Context, g Grant) (canonical.SyncSpace, canonical.Node, error) {
+	sp, err := s.tree.Space(ctx, g.SpaceID)
+	if err != nil {
+		if errors.Is(err, canonical.ErrSpaceNotFound) {
+			return canonical.SyncSpace{}, canonical.Node{}, ErrSourceUnavailable
+		}
+		return canonical.SyncSpace{}, canonical.Node{}, err
+	}
+	// A space that has changed hands is not this grant's space any more: the
+	// folder id may still resolve, but it resolves to somebody else's tree.
+	if sp.OwnerUserID != g.UserID {
+		return canonical.SyncSpace{}, canonical.Node{}, ErrSourceUnavailable
+	}
+	node, err := s.tree.Node(ctx, g.SpaceID, g.FolderID)
+	if err != nil {
+		if errors.Is(err, canonical.ErrNodeNotFound) {
+			return canonical.SyncSpace{}, canonical.Node{}, ErrSourceUnavailable
+		}
+		return canonical.SyncSpace{}, canonical.Node{}, err
+	}
+	if node.Type != canonical.NodeTypeFolder {
+		return canonical.SyncSpace{}, canonical.Node{}, ErrSourceUnavailable
+	}
+	return sp, node, nil
+}
+
 // ListGrants returns the account's live grants.
 func (s *Service) ListGrants(ctx context.Context, user canonical.UserID) ([]Grant, error) {
 	all, err := s.grants.ListGrants(ctx, user)
@@ -210,25 +239,8 @@ func (s *Service) ListGrants(ctx context.Context, user canonical.UserID) ([]Gran
 // Space transferred to another account, must stop being served rather than
 // resolve to whatever else shares its name (§5.2).
 func (s *Service) GrantSnapshot(ctx context.Context, g Grant) (Subtree, error) {
-	sp, err := s.tree.Space(ctx, g.SpaceID)
-	if err != nil {
-		if errors.Is(err, canonical.ErrSpaceNotFound) {
-			return Subtree{}, ErrSourceUnavailable
-		}
+	if _, _, err := s.Source(ctx, g); err != nil {
 		return Subtree{}, err
-	}
-	if sp.OwnerUserID != g.UserID {
-		return Subtree{}, ErrSourceUnavailable
-	}
-	node, err := s.tree.Node(ctx, g.SpaceID, g.FolderID)
-	if err != nil {
-		if errors.Is(err, canonical.ErrNodeNotFound) {
-			return Subtree{}, ErrSourceUnavailable
-		}
-		return Subtree{}, err
-	}
-	if node.Type != canonical.NodeTypeFolder {
-		return Subtree{}, ErrSourceUnavailable
 	}
 	return s.read(ctx, g.SpaceID, g.FolderID)
 }

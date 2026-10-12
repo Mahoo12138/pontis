@@ -1,0 +1,22 @@
+{
+  "instance_id": "id-1",
+  "nodes": [],
+  "schema_version": 1,
+  "snapshot": {
+    "captured_at": "2026-01-01T00:00:00Z",
+    "complete": true,
+    "epoch": 1,
+    "revision": 6,
+    "source_title": "Empty source"
+  },
+  "source": {
+    "device_id": "",
+    "folder_id": "id-2",
+    "folder_title": "Empty source",
+    "grant_id": "",
+    "grant_version": 0,
+    "space_id": "id-3",
+    "space_name": "Archive"
+  },
+  "user_id": "id-4"
+}

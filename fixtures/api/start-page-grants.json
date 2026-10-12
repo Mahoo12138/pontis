@@ -1,0 +1,13 @@
+{
+  "grants": [
+    {
+      "device_id": "id-1",
+      "folder_id": "id-2",
+      "folder_title": "Reading",
+      "grant_id": "id-3",
+      "grant_version": 1,
+      "space_id": "id-4",
+      "space_name": "Personal"
+    }
+  ]
+}

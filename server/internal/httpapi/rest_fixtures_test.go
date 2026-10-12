@@ -69,6 +69,17 @@ func TestGoldenRESTFixtures(t *testing.T) {
 	}
 	restPOST(t, ts, deviceToken, "/api/v1/device/bindings", map[string]string{"space_id": spaceID})
 
+	// The start page reads one folder the account approved for this device.
+	// "Reading" is the folder the tree above already holds, so the snapshot
+	// fixture shows a source with contents.
+	deviceID, _ := device["device"].(map[string]any)["id"].(string)
+	if deviceID == "" {
+		t.Fatalf("device registration returned no id: %v", device)
+	}
+	restPOST(t, ts, token, "/api/v1/start-page-grants", map[string]string{
+		"device_id": deviceID, "space_id": spaceID, "folder_id": folderID,
+	})
+
 	// space_scope is either "all" or a JSON array of ids, so a single-space
 	// token carries an encoded string, not a nested array. The second token
 	// carries an expiry so the fixture shows both shapes of expires_at.
@@ -111,6 +122,14 @@ func TestGoldenRESTFixtures(t *testing.T) {
 		{"link-check-results", restGET(t, ts, token,
 			"/api/v1/spaces/"+spaceID+"/organizer/link-check/results")},
 		{"duplicates", restGET(t, ts, token, "/api/v1/spaces/"+spaceID+"/organizer/duplicates")},
+
+		// Start page (§13.2): the source the device may read, the whole
+		// subtree it resolves to, and the same read as a signed-in account.
+		{"start-page-source", restGET(t, ts, deviceToken, "/api/v1/device/start-page")},
+		{"start-page-snapshot", restGET(t, ts, deviceToken, "/api/v1/device/start-page/snapshot")},
+		{"start-page-grants", restGET(t, ts, token, "/api/v1/start-page-grants")},
+		{"start-page-web-snapshot", restGET(t, ts, token,
+			"/api/v1/start-page/snapshot?space_id="+spaceID+"&folder_id="+folderID)},
 
 		// A space with no nodes is the first-run state, and `nodes` must
 		// still be an array — this is the class of bug that broke the
@@ -186,6 +205,15 @@ func TestGoldenRESTFixtures(t *testing.T) {
 			"transfer_id": "fixture-transfer-1", "target_space_id": targetSpaceID, "node_id": folderID,
 			"target_parent": map[string]string{"type": "root", "key": "main"},
 		})},
+		// A source folder with nothing in it: an empty list and an absent key
+		// are different answers to a page that has to tell "this folder is
+		// empty" from "the read failed".
+		restFixture{"start-page-snapshot-empty", restGET(t, ts, token,
+			"/api/v1/start-page/snapshot?space_id="+targetSpaceID+"&folder_id="+
+				restPOST(t, ts, token, "/api/v1/spaces/"+targetSpaceID+"/nodes", map[string]any{
+					"type": "folder", "title": "Empty source", "url": "",
+					"parent": map[string]string{"type": "root", "key": "main"},
+				})["id"].(string))},
 	)
 
 	// The last group is what a client reads from an action that answers once:

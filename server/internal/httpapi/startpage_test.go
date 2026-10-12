@@ -680,6 +680,11 @@ func TestStartPageGrantListingAndRevocation(t *testing.T) {
 	if row["device_id"] != f.deviceID || row["space_name"] != "Personal" {
 		t.Fatalf("grant row = %v", row)
 	}
+	// The settings page lists sources by name; a row that only carries ids
+	// would ask the client to read a tree it was never granted.
+	if row["folder_title"] != "Entries" {
+		t.Fatalf("grant row has no folder name: %v", row)
+	}
 
 	id := row["grant_id"].(string)
 	// Someone else's account cannot revoke it, and the refusal is the same as

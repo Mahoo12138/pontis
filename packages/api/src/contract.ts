@@ -62,6 +62,11 @@ import type {
   ScheduleView,
   Space,
   SpaceListResponse,
+  StartPageGrantListResponse,
+  StartPageSnapshot,
+  StartPageSnapshotMeta,
+  StartPageSnapshotNode,
+  StartPageSource,
   SystemSettings,
   SystemSettingsResponse,
   TaskJobView,
@@ -631,3 +636,52 @@ export const checkJobAccepted: Checker<{ id: string; type: JobType; status: JobS
 /** run-now omits `type`; the id is what the caller polls. */
 export const checkRunNow: Checker<{ id: string; status: JobStatus }> =
   record<{ id: string; status: JobStatus }>({ id: str, status: jobStatus });
+
+// ─── Start page ────────────────────────────────────────────────────────────
+
+export const checkStartPageSource: Checker<StartPageSource> = record<StartPageSource>({
+  grant_id: str,
+  device_id: str,
+  space_id: str,
+  space_name: str,
+  folder_id: str,
+  folder_title: str,
+  grant_version: num,
+});
+
+export const checkStartPageGrantList: Checker<StartPageGrantListResponse> =
+  record<StartPageGrantListResponse>({ grants: arr(checkStartPageSource) });
+
+export const checkStartPageSnapshotNode: Checker<StartPageSnapshotNode> =
+  record<StartPageSnapshotNode>({
+    id: str,
+    type: nodeType,
+    parent_id: str,
+    title: str,
+    // A folder has no url and no children to count; both keys are left out
+    // rather than sent as "" or 0, so a missing one is not read as a value.
+    url: opt(str),
+    position: num,
+    child_count: opt(num),
+    updated_at: str,
+  });
+
+export const checkStartPageSnapshotMeta: Checker<StartPageSnapshotMeta> =
+  record<StartPageSnapshotMeta>({
+    epoch: num,
+    revision: num,
+    captured_at: str,
+    complete: bool,
+    source_title: str,
+  });
+
+export const checkStartPageSnapshot: Checker<StartPageSnapshot> = record<StartPageSnapshot>({
+  schema_version: num,
+  instance_id: str,
+  user_id: str,
+  source: checkStartPageSource,
+  snapshot: checkStartPageSnapshotMeta,
+  // The server answers `[]` for an empty folder. Anything else — null, an
+  // absent key — is a read the page must not render as an empty room.
+  nodes: arr(checkStartPageSnapshotNode),
+});

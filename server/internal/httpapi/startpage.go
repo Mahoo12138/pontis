@@ -225,7 +225,15 @@ func (s *Server) handleListStartPageGrants(w http.ResponseWriter, r *http.Reques
 	}
 	out := make([]startPageSourceResponse, 0, len(grants))
 	for _, g := range grants {
-		out = append(out, startPageSourceDTO(g, names[g.SpaceID], ""))
+		// The folder's own name, resolved per row: a source that has since
+		// been deleted stays in the list with an empty title, because the row
+		// is still there for the user to revoke (§15).
+		_, folder, err := s.StartPage.Source(r.Context(), g)
+		if err != nil && !errors.Is(err, startpage.ErrSourceUnavailable) {
+			s.writeStartPageError(w, r, err)
+			return
+		}
+		out = append(out, startPageSourceDTO(g, names[g.SpaceID], folder.Title))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"grants": out})
 }
