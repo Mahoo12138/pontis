@@ -250,7 +250,7 @@ Authorization
 
 ## 起始页与工作台并列
 
-[起始页 V1](./features/start-page-v1.md) 使用独立布局与独立路由 `/start`，不进入工作台 Shell：
+[起始页 V1](./features/start-page-v1.md) 只存在于扩展内（`entrypoints/start-page`），Web 端不提供起始页路由；扩展侧的起始页设置是 Options 的一个分区，不进入工作台 Shell：
 
 1. 起始页不承载常驻 Sidebar、Explorer 表头或右侧 Inspector，也不复用其信息密度。
 2. 起始页是既有书签树的只读快速访问视图，不是第二套导航收藏，也不提供编辑入口。

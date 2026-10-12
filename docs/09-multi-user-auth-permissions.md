@@ -250,13 +250,14 @@ Disable 与 Delete 分开。
 
 已由其他用户从 Publication Copy 进入自己 Space 的书签不受 Publisher 删除影响。
 
-## 起始页来源读取授权
+## 起始页读取范围
 
-[起始页 V1](./features/start-page-v1.md) §11 引入一个比 Sync Binding 更窄的只读范围，边界如下：
+[起始页 V1](./features/start-page-v1.md) §0.1 决定不引入独立的 Grant 对象：起始页的读取范围直接由设备既有的 Sync Binding 派生。边界如下。
 
-1. `StartPageReadGrant` 把一个设备的起始页读取范围限定到**一个来源文件夹子树**，不创建 Binding、不改变 Full/Partial 模式、不推进任何 watermark。
-2. 展示范围、读取授权、书签同步范围是三件不同的事：起始页选中某目录不等于该 Space 被这台设备同步。
-3. Grant 的创建、变更与撤销只接受用户 Session 或既有短期配对授权，并沿用同源校验；**普通 Device 凭据只能使用已批准的 Grant**，不能自行把范围扩到另一个 Space 或目录。
-4. 设备侧快照接口不接受 `folder_id` 参数：来源由 Grant 决定，请求里的 ID 不构成授权。
-5. 条件请求（`If-None-Match`）必须先完成账户、设备、Grant 与来源有效性检查再判断是否返回 304；内容未变化不能绕过撤销检查。
+1. 起始页不创建 Binding、不改变 Full/Partial 模式、不推进任何 watermark，也不读写 `pending_operations`／`remote_changes`／`expected_mutations`。
+2. `GET /api/v1/device/start-page/snapshot` 只接受 Device 凭据，且只在该设备对此 Space 存在 **active 绑定**时应答——门槛与 `/sync` 自身的快照读取一致，不是第二套判断。
+3. 请求中的 `folder_id` 不构成授权：它只能在这个 Space 内解析，返回值限定为该文件夹的子树，不含父级、不含其它 Space，也不接受 Root Slot 或整个 Space 作为来源。
+4. 来源选择是扩展的本地配置，Server 侧不保存起始页状态；因此扩展内不存在"为了改来源而重新输入账户凭据"的路径，设备凭据也不因此变宽。
+5. 条件请求（`If-None-Match`）必须先完成账户、设备与绑定校验再判断是否返回 304；内容未变化不能绕过解绑与禁用检查。
+6. 来源失效或设备停止同步该 Space 时立即停止展示并清理该来源缓存，且不自动退回整个 Space。
 6. 来源失效不自动退回整个 Space，授权失效立即停止展示并清理该来源缓存。

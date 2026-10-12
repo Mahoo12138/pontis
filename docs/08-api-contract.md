@@ -406,12 +406,9 @@ Frontend / Extension 主要依赖 `code`，message 作为 debug/fallback。
 
 | 接口 | 身份 | 语义 |
 |---|---|---|
-| `POST /api/v1/start-page-grants` | 用户 Session | 为本人的设备批准一个来源文件夹 |
-| `DELETE /api/v1/start-page-grants/{id}` | 用户 Session | 撤销该读取授权 |
-| `GET /api/v1/start-page-grants` | 用户 Session | 列出本人已批准的来源 |
-| `GET /api/v1/device/start-page` | Device 凭据 | 读取本设备已批准的来源描述，不扩权 |
-| `GET /api/v1/device/start-page/snapshot` | Device 凭据 + 来源 Grant | 读取完整来源子树快照 |
-| `GET /api/v1/start-page/snapshot?space_id=…&folder_id=…` | 用户 Session | 普通 Web 起始页读取本人目录 |
+| `GET /api/v1/device/start-page/snapshot?space_id=…&folder_id=…` | Device 凭据 + 该 Space 的 active 绑定 | 读取一个来源文件夹的完整子树快照 |
+
+没有授权管理接口，也没有 Web 侧起始页读取：来源是扩展的本地配置，Server 不保存起始页状态（起始页文档 §0.1）。
 
 1. 快照的元数据、水位与节点必须来自同一份一致性读取；`epoch` / `revision` 沿用本项目统一的整数编码，两端不得一端按 number、一端按 string 比较。
 2. 没有内容时返回 `nodes: []`，不返回 `null`；过大来源返回 `START_PAGE_SOURCE_TOO_LARGE`，不截断成标记为完整的快照。

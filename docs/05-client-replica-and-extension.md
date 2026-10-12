@@ -324,3 +324,4 @@ Sync Trigger：
 3. 缓存先完整验证再原子替换；每次请求绑定 `identityGeneration + configGeneration + grantVersion`，旧身份或旧配置的响应必须丢弃。
 4. 退出登录或解除来源时清理起始页数据，不误删同步 Pending 或用户离线编辑。
 5. 起始页预览入口是普通扩展页面；新标签页覆盖只出现在明确选定的接管产物中，标准同步扩展不因升级而接管新标签页。
+6. 起始页的读取范围由设备对该 Space 的 active 绑定决定，扩展内不保存也不索取账户凭据；变更来源只写本地 `startPageConfigs`，不产生任何服务端状态。
