@@ -17,6 +17,8 @@ import type { SyncCoordinator } from './syncCoordinator';
 
 /** Debounce for a burst of browser events (doc 05 §15). */
 const SYNC_DEBOUNCE_MS = 1500;
+/** How long a round waits its turn when another holder is still inside it. */
+const BUSY_RETRY_MS = 3000;
 
 /**
  * The reconciler's two entry points, named as a seam so the loop can be tested
@@ -75,7 +77,10 @@ export class WorkerLoop {
         }
       }
 
-      await coordinator.syncAll();
+      // A binding that lost the lock still wants this round: the change it
+      // would have pulled is already on the server. Without a retry the next
+      // chance is the periodic alarm, which is minutes away.
+      if (await coordinator.syncAll()) this.scheduleSync(BUSY_RETRY_MS);
 
       const stuck = await db.bindings.where('state').equals('needs_recovery').toArray();
       for (const b of stuck) {

@@ -270,7 +270,9 @@ describe('SyncCoordinator', () => {
     const guarded = new SyncCoordinator(db, new RemoteChangeApplier(db, adapter), probe);
     expect(await acquireRunLock(db, bindingId, 'someone-else')).toBe('someone-else');
 
-    expect(await guarded.syncBinding(bindingId)).toBe('inactive');
+    // 'busy', not 'inactive': the binding does want this round, and a caller
+    // that cannot tell the two apart drops the work until the next alarm.
+    expect(await guarded.syncBinding(bindingId)).toBe('busy');
     expect(reached).toBe(false);
     // Skipped, not failed: the round that holds the binding is the one that
     // advances it, and the log says so.
@@ -278,6 +280,8 @@ describe('SyncCoordinator', () => {
     expect(skipped.map((e) => [e.level, e.message])).toEqual([
       ['info', 'another round holds this binding, skipping'],
     ]);
+    // The sweep reports it too, which is what lets the loop schedule a retry.
+    expect(await guarded.syncAll()).toBe(true);
 
     // A holder that died stops blocking: the next trigger takes the lock over
     // instead of parking the binding forever.

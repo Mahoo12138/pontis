@@ -30,7 +30,7 @@ import {
 } from '../protocol/types';
 import { UnmappedProjectionError, type RemoteChangeApplier } from './remoteChangeApplier';
 
-export type SyncOutcome = 'synced' | 'needs-recovery' | 'inactive' | 'error';
+export type SyncOutcome = 'synced' | 'needs-recovery' | 'inactive' | 'busy' | 'error';
 
 /** Safety valve so a stuck has_more loop can't spin forever. */
 const MAX_ROUNDS_PER_SYNC = 20;
@@ -51,10 +51,13 @@ export class SyncCoordinator {
     // watermarks, and the replica ends up reporting a tree it never applied.
     const lockToken = uuidv7();
     if (!(await acquireRunLock(this.db, bindingId, lockToken))) {
+      // Distinct from 'inactive': the binding does want a round, and something
+      // else is inside it. A caller that treats the two the same way drops the
+      // work until the next alarm, which is minutes away.
       await logDiagnostic(this.db, 'info', 'coordinator', 'another round holds this binding, skipping', {
         bindingId,
       });
-      return 'inactive';
+      return 'busy';
     }
     try {
       return await this.rounds(bindingId);
@@ -180,7 +183,9 @@ export class SyncCoordinator {
     return 'synced';
   }
 
-  async syncAll(): Promise<void> {
+  /** True when at least one binding wanted a round and lost the lock. */
+  async syncAll(): Promise<boolean> {
+    let busy = false;
     const bindings = await this.db.bindings.where('state').equals('active').toArray();
     for (const b of bindings) {
       // A switched-off binding keeps capturing local edits — the journal still
@@ -189,7 +194,7 @@ export class SyncCoordinator {
       // already has to survive.
       if (!isSyncEnabled(b)) continue;
       try {
-        await this.syncBinding(b.id);
+        if ((await this.syncBinding(b.id)) === 'busy') busy = true;
       } catch (err) {
         await logDiagnostic(this.db, 'error', 'coordinator', 'unexpected sync failure', {
           bindingId: b.id,
@@ -197,6 +202,7 @@ export class SyncCoordinator {
         });
       }
     }
+    return busy;
   }
 
   /**

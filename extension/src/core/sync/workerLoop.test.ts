@@ -4,7 +4,7 @@
 // single collaborator, so it is the part this file tests.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { PontisDB, type BindingRecord, type PendingOpRecord } from './../store/db';
+import { acquireRunLock, PontisDB, type BindingRecord, type PendingOpRecord } from './../store/db';
 import { FakeBrowserAdapter } from '../browser/fakeAdapter';
 import type { BrowserNode } from '../browser/types';
 import { RemoteChangeApplier } from './remoteChangeApplier';
@@ -244,6 +244,23 @@ describe('what each trigger is allowed to touch', () => {
     expect(sessions.some((x) => x.type === 'FULL_RESYNC' && x.state === 'FAILED')).toBe(true);
     expect(transport.calls.map((c) => c.bindingId)).toEqual([otherBinding]);
     expect(await messages('background')).not.toContain('recovery attempt failed');
+  });
+
+  it('retries a round that lost the run lock instead of waiting for the alarm', async () => {
+    await seedBinding();
+    await seedQueuedOp('op-1', 'Waiting');
+    // Another holder is inside this binding's round: the single-flight rule says
+    // this trigger stands down.
+    expect(await acquireRunLock(db, bindingId, 'other-holder')).toBe('other-holder');
+
+    const scheduled = vi.spyOn(loop, 'scheduleSync').mockImplementation(() => undefined);
+    await loop.runSync('manual');
+
+    expect(transport.calls).toEqual([]);
+    // Standing down is only honest if the work comes back: without this the
+    // change already sitting on the server waits for the 5-minute alarm.
+    expect(scheduled).toHaveBeenCalledTimes(1);
+    expect(scheduled.mock.calls[0]![0]).toBeGreaterThan(0);
   });
 
   it('does no network work for a switched-off binding, and still journals what it edits', async () => {
