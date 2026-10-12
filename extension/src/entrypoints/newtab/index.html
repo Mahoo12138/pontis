@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Only the takeover build keeps this entrypoint. WXT turns a directory
+         named `newtab` into a chrome_url_overrides declaration in the manifest,
+         and that key is read when the extension installs — there is no runtime
+         switch for it, so "use this as my new tab" is a property of which
+         artifact was installed, not a setting (start-page doc §9.1). -->
+    <title>Pontis 起始页</title>
+  </head>
+  <body style="margin: 0">
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

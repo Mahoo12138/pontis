@@ -1,6 +1,7 @@
 # data dir (server runtime only)
 /data/
 server/data/
+/.test-env/
 
 # databases
 *.db
@@ -27,6 +28,7 @@ server/internal/webui/dist/*
 
 # extension build output / generated types
 extension/.output/
+extension/.output-newtab/
 extension/.e2e-output/
 extension/.wxt/
 
