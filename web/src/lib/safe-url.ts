@@ -25,15 +25,50 @@ export function classifyUrl(raw: string): 'safe' | 'confirm' | 'bookmarklet' | '
   }
 }
 
+/** The parsed address a click may hand to the browser, or null when the raw
+ * string is not openable.
+ *
+ * The parsed value is what gets opened, not the stored one: `classifyUrl`
+ * decided about `new URL(raw)`, and only that object is known to be http(s).
+ * Passing `raw` along would let a string the parser silently repaired — a
+ * leading tab, a folded scheme — be the thing that actually navigates
+ * (start-page doc §16.1). */
+export function safeHref(raw: string): string | null {
+  if (classifyUrl(raw) !== 'safe') return null;
+  try {
+    return new URL(raw).href;
+  } catch {
+    return null;
+  }
+}
+
 /** Open a URL safely. Returns true if opened, false if blocked. */
 export function openUrlSafely(raw: string): boolean {
-  const kind = classifyUrl(raw);
-  if (kind === 'safe') {
-    window.open(raw, '_blank', 'noopener,noreferrer');
+  const href = safeHref(raw);
+  if (!href) {
+    // bookmarklet, confirm-scheme and unparseable are all handled by the UI
+    // component, which offers copy or a confirmation instead.
+    return false;
+  }
+  window.open(href, '_blank', 'noopener,noreferrer');
+  return true;
+}
+
+/** Where a plain activation of a bookmark goes.
+ *
+ * Only a plain click reaches this: a middle click or a Ctrl/Cmd-click is
+ * handled by the browser from the anchor's own href, and overriding it would
+ * make the modifier keys mean something other than what they always meant
+ * (§8.1, SP-20). */
+export function openWithTarget(raw: string, target: 'current-tab' | 'new-tab'): boolean {
+  const href = safeHref(raw);
+  if (!href) return false;
+  if (target === 'new-tab') {
+    window.open(href, '_blank', 'noopener,noreferrer');
     return true;
   }
-  // bookmarklet and confirm are handled by the UI component
-  return false;
+  window.location.href = href;
+  return true;
 }
 
 /** Extract bookmarklet code from a javascript: URL. */

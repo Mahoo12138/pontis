@@ -5,6 +5,7 @@ import LoginPage from './routes/login';
 import SetupPage from './routes/setup';
 import ResetPasswordPage from './routes/reset';
 import SpaceExplorerPage from './routes/space-explorer';
+import StartPage from './routes/start';
 import SpaceActivityPage from './routes/space-activity';
 import SpaceOrganizerPage from './routes/space-organizer';
 import SpaceBackupsPage from './routes/space-backups';
@@ -53,6 +54,17 @@ export default function App() {
             <RequirePublic>
               <ResetPasswordPage />
             </RequirePublic>
+          }
+        />
+        {/* The start page is its own page, not a pane of the workbench: no
+            sidebar, no Explorer header, no Inspector (§4.1). It has to be
+            declared before the catch-all below or nothing reaches it. */}
+        <Route
+          path="/start"
+          element={
+            <RequireAuth>
+              <StartPage />
+            </RequireAuth>
           }
         />
         <Route

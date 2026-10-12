@@ -2,8 +2,8 @@
 // A javascript: URL must never be reachable through the "open" path, and an
 // unrecognized scheme must not be silently treated as safe.
 
-import { describe, expect, it } from 'vitest';
-import { classifyUrl, extractBookmarkletCode } from './safe-url';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { classifyUrl, extractBookmarkletCode, openWithTarget, safeHref } from './safe-url';
 import { extractHost } from './format';
 
 describe('classifyUrl', () => {
@@ -58,5 +58,64 @@ describe('extractHost', () => {
     expect(extractHost('mailto:a@example.com')).toBe('');
     expect(extractHost('javascript:alert(1)')).toBe('');
     expect(extractHost('not a url')).toBe('not a url');
+  });
+});
+
+describe('safeHref', () => {
+  it('hands back the parsed address, not the string it was given', () => {
+    // Whatever the classifier accepted is opened in its parsed form, so the
+    // value that navigates is the value that was checked (§16.1).
+    expect(safeHref('https://example.com/a/b?x=1#frag')).toBe('https://example.com/a/b?x=1#frag');
+    expect(safeHref('HTTPS://EXAMPLE.COM')).toBe('https://example.com/');
+  });
+
+  it('gives nothing to a scheme that must not execute here', () => {
+    for (const raw of [
+      'javascript:alert(1)',
+      ' data:text/html,<script>alert(1)</script>',
+      'file:///etc/passwd',
+      'chrome://settings',
+      'view-source:https://example.com',
+      'not a url',
+      '',
+    ]) {
+      expect(safeHref(raw)).toBeNull();
+    }
+  });
+
+  it('does not let an obfuscated scheme through', () => {
+    // The parser strips tabs and newlines before reading a scheme, so these
+    // still mean javascript:. safeHref refuses them rather than returning the
+    // original string with its whitespace intact.
+    expect(safeHref('java\tscript:alert(1)')).toBeNull();
+    expect(safeHref('  javascript:alert(1)')).toBeNull();
+  });
+});
+
+describe('openWithTarget', () => {
+  beforeEach(() => {
+    vi.stubGlobal('window', {
+      open: vi.fn(),
+      location: { href: '' },
+    });
+  });
+
+  it('follows the browser preference on a plain activation', () => {
+    window.open('https://example.com', '_blank');
+    expect(openWithTarget('https://example.com', 'new-tab')).toBe(true);
+    expect(window.open).toHaveBeenCalledWith(
+      'https://example.com/',
+      '_blank',
+      'noopener,noreferrer',
+    );
+
+    expect(openWithTarget('https://example.com', 'current-tab')).toBe(true);
+    expect(window.location.href).toBe('https://example.com/');
+  });
+
+  it('opens nothing for a URL it will not vouch for', () => {
+    expect(openWithTarget('javascript:alert(1)', 'new-tab')).toBe(false);
+    expect(window.open).not.toHaveBeenCalled();
+    expect(window.location.href).toBe('');
   });
 });
