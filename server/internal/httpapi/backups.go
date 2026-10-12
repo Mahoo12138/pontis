@@ -90,12 +90,8 @@ func (s *Server) handleUpdateBackup(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if req.Protected != nil {
-		if err := s.Backups.SetProtected(r.Context(), backupID, *req.Protected); err != nil {
-			s.writeBackupError(w, r, err)
-			return
-		}
-	}
+	// Ownership first: a write that lands before the space check cannot be
+	// taken back by the 404 that follows it.
 	b, err := s.Backups.Get(r.Context(), backupID)
 	if err != nil {
 		s.writeBackupError(w, r, err)
@@ -104,6 +100,17 @@ func (s *Server) handleUpdateBackup(w http.ResponseWriter, r *http.Request) {
 	if b.SpaceID != string(spaceID) {
 		s.writeError(w, r, http.StatusNotFound, "BACKUP_NOT_FOUND", "unknown backup")
 		return
+	}
+	if req.Protected != nil {
+		if err := s.Backups.SetProtected(r.Context(), spaceID, backupID, *req.Protected); err != nil {
+			s.writeBackupError(w, r, err)
+			return
+		}
+		b, err = s.Backups.Get(r.Context(), backupID)
+		if err != nil {
+			s.writeBackupError(w, r, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, backupDTOOf(b))
 }
@@ -120,7 +127,7 @@ func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusNotFound, "BACKUP_NOT_FOUND", "unknown backup")
 		return
 	}
-	if err := s.Backups.Delete(r.Context(), backupID); err != nil {
+	if err := s.Backups.Delete(r.Context(), spaceID, backupID); err != nil {
 		s.writeBackupError(w, r, err)
 		return
 	}

@@ -321,8 +321,81 @@ func TestRestoreOfNestedTreeKeepsIdsAndParents(t *testing.T) {
 	}
 }
 
-// A space with nothing in it is the state right after creating one, and people
-// back it up before they start. An empty payload is also the one case where the
+// A backup id is not an authorization capability. Addressing another space's
+// backup through one's own space URL must be refused *and* must leave the
+// other space's row untouched — a 404 that arrives after the write already
+// happened is still a write.
+func TestBackupOfAnotherSpaceIsNeitherWritableNorDeleted(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	alice := map[string]string{"Authorization": "Bearer " + f.sessionToken}
+	bob := map[string]string{"Authorization": "Bearer " + f.bobToken}
+
+	backupOf := func(t *testing.T, token map[string]string) (spaceRoot, id string) {
+		t.Helper()
+		code, body := doJSON(t, "POST", f.ts.URL+"/api/v1/spaces", token, map[string]string{"name": "Kept"})
+		if code != http.StatusCreated {
+			t.Fatalf("create space = %d %v", code, body)
+		}
+		spaceRoot = f.ts.URL + "/api/v1/spaces/" + body["id"].(string)
+		code, body = doJSON(t, "POST", spaceRoot+"/backups", token, nil)
+		if code != http.StatusCreated {
+			t.Fatalf("create backup = %d %v", code, body)
+		}
+		return spaceRoot, body["id"].(string)
+	}
+
+	aliceRoot, aliceBackup := backupOf(t, alice)
+	bobRoot, bobBackup := backupOf(t, bob)
+
+	protected := func(id string) bool {
+		t.Helper()
+		var p int
+		if err := f.db.QueryRow(`SELECT protected FROM space_backups WHERE id = ?`, id).Scan(&p); err != nil {
+			t.Fatalf("read backup %s: %v", id, err)
+		}
+		return p != 0
+	}
+	exists := func(t *testing.T, id string) bool {
+		t.Helper()
+		var n int
+		if err := f.db.QueryRow(`SELECT count(*) FROM space_backups WHERE id = ?`, id).Scan(&n); err != nil {
+			t.Fatalf("count backup %s: %v", id, err)
+		}
+		return n > 0
+	}
+
+	// Bob aims at alice's backup through his own space.
+	code, body := doJSON(t, "PATCH", bobRoot+"/backups/"+aliceBackup, bob, map[string]any{"protected": true})
+	if code != http.StatusNotFound || errCode(t, body) != "BACKUP_NOT_FOUND" {
+		t.Fatalf("bob protect alice backup = %d %v, want 404 BACKUP_NOT_FOUND", code, body)
+	}
+	if protected(aliceBackup) {
+		t.Fatalf("alice's backup was protected by a request addressed to bob's space")
+	}
+
+	// And the same in the other direction, as a delete.
+	if code := doEmpty(t, "DELETE", aliceRoot+"/backups/"+bobBackup, alice); code != http.StatusNotFound {
+		t.Fatalf("alice delete bob backup = %d, want 404", code)
+	}
+	if !exists(t, bobBackup) {
+		t.Fatalf("bob's backup row was deleted by alice")
+	}
+
+	// The owner can still do both, so the guard is the space, not the verb.
+	if code, _ := doJSON(t, "PATCH", aliceRoot+"/backups/"+aliceBackup, alice,
+		map[string]any{"protected": true}); code != http.StatusOK {
+		t.Fatalf("owner protect = %d", code)
+	}
+	if !protected(aliceBackup) {
+		t.Fatalf("owner PATCH returned 200 but did not protect the row")
+	}
+	if code := doEmpty(t, "DELETE", bobRoot+"/backups/"+bobBackup, bob); code != http.StatusNoContent {
+		t.Fatalf("owner delete = %d, want 204", code)
+	}
+	if exists(t, bobBackup) {
+		t.Fatalf("owner delete returned 204 but left the row")
+	}
+}
 // restore path has no node to anchor on, so it is tested end to end: back up
 // the empty space, fill it, restore, and the tree must be empty again — with
 // the epoch moved, so devices know they cannot resume on the old journal.

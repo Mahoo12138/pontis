@@ -88,16 +88,19 @@ func (s *BackupStore) Get(ctx context.Context, id string) (backup.Backup, error)
 	return b, err
 }
 
-// Delete removes a catalog row.
-func (s *BackupStore) Delete(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM space_backups WHERE id = ?`, id)
+// Delete removes one of the space's catalog rows. The space id is part of
+// the write, not a check layered on top of it: a row addressed by id alone
+// is writable by anyone who learns the id (doc 22 D.6).
+func (s *BackupStore) Delete(ctx context.Context, spaceID, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM space_backups WHERE id = ? AND space_id = ?`, id, spaceID)
 	return err
 }
 
-// SetProtected toggles the retention exemption.
-func (s *BackupStore) SetProtected(ctx context.Context, id string, protected bool) error {
+// SetProtected toggles the retention exemption, space-qualified like Delete.
+func (s *BackupStore) SetProtected(ctx context.Context, spaceID, id string, protected bool) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE space_backups SET protected = ? WHERE id = ?`, boolInt(protected), id)
+		`UPDATE space_backups SET protected = ? WHERE id = ? AND space_id = ?`,
+		boolInt(protected), id, spaceID)
 	return err
 }
 

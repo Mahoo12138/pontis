@@ -188,13 +188,14 @@ type TreeSource interface {
 		canonical.SyncSpace, []canonical.Node, []canonical.RootSlot, error)
 }
 
-// Store is the catalog persistence contract.
+// Store is the catalog persistence contract. Every write names the space it
+// is scoped to: a backup id alone is not an authorization capability.
 type Store interface {
 	Insert(ctx context.Context, b Backup) error
 	List(ctx context.Context, spaceID string) ([]Backup, error)
 	Get(ctx context.Context, id string) (Backup, error)
-	Delete(ctx context.Context, id string) error
-	SetProtected(ctx context.Context, id string, protected bool) error
+	Delete(ctx context.Context, spaceID, id string) error
+	SetProtected(ctx context.Context, spaceID, id string, protected bool) error
 	// ReplaceBaseline swaps the space's tree atomically: it wipes nodes and
 	// journal history, rewrites root slots, inserts the snapshot with the
 	// ORIGINAL node ids at the new zero baseline, bumps the epoch inside the
@@ -326,11 +327,16 @@ func (s *Service) List(ctx context.Context, spaceID canonical.SpaceID) ([]Backup
 	return list, nil
 }
 
-// Delete removes a catalog row and its file.
-func (s *Service) Delete(ctx context.Context, id string) error {
+// Delete removes a catalog row and its file, and refuses a backup that
+// belongs to another space: the caller's authority is the space in the URL,
+// not the backup id it happens to carry.
+func (s *Service) Delete(ctx context.Context, spaceID canonical.SpaceID, id string) error {
 	b, err := s.store.Get(ctx, id)
 	if err != nil {
 		return err
+	}
+	if b.SpaceID != string(spaceID) {
+		return ErrSpaceMismatch
 	}
 	// File first, catalog second: when the filesystem refuses (permission,
 	// EBUSY), the row survives and the delete stays retryable instead of
@@ -340,12 +346,20 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 			return err
 		}
 	}
-	return s.store.Delete(ctx, id)
+	return s.store.Delete(ctx, string(spaceID), id)
 }
 
-// SetProtected toggles the retention exemption.
-func (s *Service) SetProtected(ctx context.Context, id string, protected bool) error {
-	return s.store.SetProtected(ctx, id, protected)
+// SetProtected toggles the retention exemption for one of the space's
+// backups.
+func (s *Service) SetProtected(ctx context.Context, spaceID canonical.SpaceID, id string, protected bool) error {
+	b, err := s.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if b.SpaceID != string(spaceID) {
+		return ErrSpaceMismatch
+	}
+	return s.store.SetProtected(ctx, string(spaceID), id, protected)
 }
 
 // ReadPayload locates one backup's file and decodes it under exactly the rules
@@ -447,7 +461,7 @@ func (s *Service) PurgeExpiredSafety(ctx context.Context, window time.Duration) 
 		}
 		for _, b := range backups {
 			if b.Kind == KindSafety && !b.Protected && b.CreatedAt.Before(cutoff) {
-				if err := s.Delete(ctx, b.ID); err != nil {
+				if err := s.Delete(ctx, canonical.SpaceID(sid), b.ID); err != nil {
 					return removed, err
 				}
 				removed++
@@ -482,7 +496,7 @@ func (s *Service) ApplyScheduledRetention(ctx context.Context, keep int) (int, e
 			}
 			seen++
 			if seen > keep && !b.Protected {
-				if err := s.Delete(ctx, b.ID); err != nil {
+				if err := s.Delete(ctx, canonical.SpaceID(sid), b.ID); err != nil {
 					return removed, err
 				}
 				removed++

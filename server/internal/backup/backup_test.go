@@ -100,18 +100,25 @@ func (f *fakeStore) Get(_ context.Context, id string) (Backup, error) {
 	return b, nil
 }
 
-func (f *fakeStore) Delete(_ context.Context, id string) error {
-	if _, ok := f.rows[id]; !ok {
+func (f *fakeStore) Delete(_ context.Context, spaceID, id string) error {
+	b, ok := f.rows[id]
+	if !ok {
 		return ErrNotFound
+	}
+	if b.SpaceID != spaceID {
+		return ErrSpaceMismatch
 	}
 	delete(f.rows, id)
 	return nil
 }
 
-func (f *fakeStore) SetProtected(_ context.Context, id string, protected bool) error {
+func (f *fakeStore) SetProtected(_ context.Context, spaceID, id string, protected bool) error {
 	b, ok := f.rows[id]
 	if !ok {
 		return ErrNotFound
+	}
+	if b.SpaceID != spaceID {
+		return ErrSpaceMismatch
 	}
 	b.Protected = protected
 	f.rows[id] = b
@@ -307,7 +314,7 @@ func TestDeleteFailureKeepsRetryableRow(t *testing.T) {
 	removeErr := errors.New("device busy")
 	svc.files = failingFiles{inner: dirFiles{dir: dir}, removeErr: removeErr}
 
-	if err := svc.Delete(context.Background(), b.ID); !errors.Is(err, removeErr) {
+	if err := svc.Delete(context.Background(), "space-1", b.ID); !errors.Is(err, removeErr) {
 		t.Fatalf("delete err = %v, want %v", err, removeErr)
 	}
 	if _, ok := store.rows[b.ID]; !ok {
@@ -315,7 +322,7 @@ func TestDeleteFailureKeepsRetryableRow(t *testing.T) {
 	}
 
 	svc.files = dirFiles{dir: dir}
-	if err := svc.Delete(context.Background(), b.ID); err != nil {
+	if err := svc.Delete(context.Background(), "space-1", b.ID); err != nil {
 		t.Fatalf("retry delete: %v", err)
 	}
 	if _, ok := store.rows[b.ID]; ok {
@@ -354,7 +361,7 @@ func TestRowWithoutStorageKeyIsNeverGuessed(t *testing.T) {
 		t.Fatalf("restore replaced the baseline from an ambiguous row")
 	}
 
-	if err := svc.Delete(context.Background(), ambiguous.ID); err != nil {
+	if err := svc.Delete(context.Background(), "space-1", ambiguous.ID); err != nil {
 		t.Fatalf("delete of an unresolvable row: %v", err)
 	}
 	if _, ok := store.rows[ambiguous.ID]; ok {
@@ -405,7 +412,7 @@ func TestStorageKeyOutsideDirIsRejected(t *testing.T) {
 	if _, _, err := svc.Restore(context.Background(), "space-1", "hostile"); !errors.Is(err, ErrUnlocated) {
 		t.Fatalf("restore err = %v, want ErrUnlocated", err)
 	}
-	if err := svc.Delete(context.Background(), "hostile"); !errors.Is(err, ErrUnlocated) {
+	if err := svc.Delete(context.Background(), "space-1", "hostile"); !errors.Is(err, ErrUnlocated) {
 		t.Fatalf("delete err = %v, want ErrUnlocated", err)
 	}
 	if _, ok := store.rows["hostile"]; !ok {
