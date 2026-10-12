@@ -54,23 +54,6 @@ export function openUrlSafely(raw: string): boolean {
   return true;
 }
 
-/** Where a plain activation of a bookmark goes.
- *
- * Only a plain click reaches this: a middle click or a Ctrl/Cmd-click is
- * handled by the browser from the anchor's own href, and overriding it would
- * make the modifier keys mean something other than what they always meant
- * (§8.1, SP-20). */
-export function openWithTarget(raw: string, target: 'current-tab' | 'new-tab'): boolean {
-  const href = safeHref(raw);
-  if (!href) return false;
-  if (target === 'new-tab') {
-    window.open(href, '_blank', 'noopener,noreferrer');
-    return true;
-  }
-  window.location.href = href;
-  return true;
-}
-
 /** Extract bookmarklet code from a javascript: URL. */
 export function extractBookmarkletCode(raw: string): string | null {
   try {

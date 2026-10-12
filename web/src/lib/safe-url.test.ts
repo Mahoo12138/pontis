@@ -3,7 +3,7 @@
 // unrecognized scheme must not be silently treated as safe.
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { classifyUrl, extractBookmarkletCode, openWithTarget, safeHref } from './safe-url';
+import { classifyUrl, extractBookmarkletCode, safeHref } from './safe-url';
 import { extractHost } from './format';
 
 describe('classifyUrl', () => {
@@ -89,33 +89,5 @@ describe('safeHref', () => {
     // original string with its whitespace intact.
     expect(safeHref('java\tscript:alert(1)')).toBeNull();
     expect(safeHref('  javascript:alert(1)')).toBeNull();
-  });
-});
-
-describe('openWithTarget', () => {
-  beforeEach(() => {
-    vi.stubGlobal('window', {
-      open: vi.fn(),
-      location: { href: '' },
-    });
-  });
-
-  it('follows the browser preference on a plain activation', () => {
-    window.open('https://example.com', '_blank');
-    expect(openWithTarget('https://example.com', 'new-tab')).toBe(true);
-    expect(window.open).toHaveBeenCalledWith(
-      'https://example.com/',
-      '_blank',
-      'noopener,noreferrer',
-    );
-
-    expect(openWithTarget('https://example.com', 'current-tab')).toBe(true);
-    expect(window.location.href).toBe('https://example.com/');
-  });
-
-  it('opens nothing for a URL it will not vouch for', () => {
-    expect(openWithTarget('javascript:alert(1)', 'new-tab')).toBe(false);
-    expect(window.open).not.toHaveBeenCalled();
-    expect(window.location.href).toBe('');
   });
 });

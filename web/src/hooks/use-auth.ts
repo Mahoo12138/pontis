@@ -3,7 +3,6 @@ import { login, logout, getMe, resetPassword } from '@pontis/api/endpoints/auth'
 import type { LoginRequest, LoginResponse, User } from '@pontis/api';
 import type { SetupRequest } from '@pontis/api';
 import { setup } from '@pontis/api/endpoints/auth';
-import { clearConfig as clearStartPageConfig } from '../features/start-page/config';
 
 export function useMe() {
   return useQuery({
@@ -29,15 +28,8 @@ export function useLogout() {
   return useMutation({
     mutationFn: () => logout(),
     onSuccess: () => {
-      // The start page keeps its source folder in this browser's storage. A
-      // signed-out profile must not be left holding which private folder the
-      // next visitor will be shown (§14.4); the id comes from the cache
-      // because after this the session — and /auth/me — is gone.
-      const me = qc.getQueryData<{ id?: string }>(['auth', 'me']);
-      if (me?.id) clearStartPageConfig(me.id);
       qc.setQueryData(['auth', 'me'], null);
       qc.invalidateQueries({ queryKey: ['auth'] });
-      qc.removeQueries({ queryKey: ['start-page'] });
     },
   });
 }
