@@ -27,6 +27,7 @@ import (
 	"pontis/internal/schedule"
 	"pontis/internal/space"
 	"pontis/internal/spacetransfer"
+	"pontis/internal/startpage"
 	"pontis/internal/store/sqlite"
 	"pontis/internal/sync"
 	"pontis/internal/token"
@@ -133,9 +134,12 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Backups:       backupSvc,
 		Jobs:          jobSvc,
 		Schedules:     scheduleSvc,
-		Accounts:      accountStore,
-		InstanceID:    instanceID,
-		Logger:        logger,
+		// One store plays both halves: the grants it owns and the tree it may
+		// read are the same aggregate's problem.
+		StartPage:  startpage.NewService(sqlite.NewStartPageStore(db), sqlite.NewStartPageStore(db)),
+		Accounts:   accountStore,
+		InstanceID: instanceID,
+		Logger:     logger,
 	}
 
 	jobSvc.Start(ctx)

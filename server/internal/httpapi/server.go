@@ -26,6 +26,7 @@ import (
 	"pontis/internal/schedule"
 	"pontis/internal/space"
 	"pontis/internal/spacetransfer"
+	"pontis/internal/startpage"
 	"pontis/internal/store/sqlite"
 	"pontis/internal/sync"
 	"pontis/internal/token"
@@ -58,6 +59,7 @@ type Server struct {
 	Schedules     *schedule.Service
 	Transfer      *transfer.Service
 	SpaceTransfer *spacetransfer.Service
+	StartPage     *startpage.Service
 	Accounts      *sqlite.AccountStore
 
 	// Web serves the compiled Web app for any path the API routes do not
@@ -228,6 +230,18 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/v1/devices", s.handleRegisterDevice)
 	})
 
+	// Start page (start-page doc §11.2, §13.1): the account approves one
+	// source folder per device, and the web page reads folders the visitor
+	// owns. Approving is a session action on purpose — see
+	// requireStartPageAdmin.
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireStartPageAdmin, s.requireSession)
+		r.Get("/api/v1/start-page-grants", s.handleListStartPageGrants)
+		r.Post("/api/v1/start-page-grants", s.handleAuthorizeStartPageGrant)
+		r.Delete("/api/v1/start-page-grants/{grantID}", s.handleRevokeStartPageGrant)
+		r.Get("/api/v1/start-page/snapshot", s.handleWebStartPageSnapshot)
+	})
+
 	// Device-scoped API (device credential).
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireDevice)
@@ -239,6 +253,12 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/v1/sync/bindings/{bindingID}", s.handleSync)
 		r.Get("/api/v1/sync/bindings/{bindingID}/snapshot", s.handleSnapshot)
 		r.Post("/api/v1/sync/transfers", s.handleDeviceTransfer)
+
+		// Start page reads (§13.1). Which folder is named by the grant the
+		// account approved, never by anything on this request, so the device
+		// credential cannot aim itself at another part of the tree.
+		r.Get("/api/v1/device/start-page", s.handleDeviceStartPageSource)
+		r.Get("/api/v1/device/start-page/snapshot", s.handleDeviceStartPageSnapshot)
 
 		// Reconciliation lifecycle (doc 08 §9-§14): the only way a
 		// pending_initial binding becomes active.

@@ -8,9 +8,10 @@ import (
 	"fmt"
 )
 
-// deviceTokenPrefix is the fixed prefix of device secrets, e.g.
-// "pdv_AbC123...".
-const deviceTokenPrefix = "pdv_"
+// TokenPrefix is the fixed prefix of device secrets, e.g. "pdv_AbC123...".
+// Bearer credentials are typed by prefix, so a caller can say which kind of
+// secret reached it without trying to authenticate it twice.
+const TokenPrefix = "pdv_"
 
 // newDeviceToken returns (raw token, display prefix, sha256 hash). The
 // raw token is shown to the user exactly once.
@@ -19,7 +20,7 @@ func newDeviceToken() (token, prefix, hash string, err error) {
 	if _, err := rand.Read(raw); err != nil {
 		return "", "", "", fmt.Errorf("device: read token entropy: %w", err)
 	}
-	token = deviceTokenPrefix + base64.RawURLEncoding.EncodeToString(raw)
+	token = TokenPrefix + base64.RawURLEncoding.EncodeToString(raw)
 	return token, tokenPrefixFor(token), hashToken(token), nil
 }
 

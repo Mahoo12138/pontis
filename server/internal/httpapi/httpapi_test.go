@@ -26,6 +26,7 @@ import (
 	"pontis/internal/schedule"
 	"pontis/internal/space"
 	"pontis/internal/spacetransfer"
+	"pontis/internal/startpage"
 	"pontis/internal/store/sqlite"
 	"pontis/internal/sync"
 	"pontis/internal/token"
@@ -82,6 +83,7 @@ func newTestServerWithDB(t *testing.T) (*Server, *httptest.Server, *sql.DB) {
 		Accounts:      sqlite.NewAccountStore(db),
 		Jobs:          jobSvc,
 		Schedules:     schedule.NewService(sqlite.NewScheduleStore(db), jobSvc),
+		StartPage:     startpage.NewService(sqlite.NewStartPageStore(db), sqlite.NewStartPageStore(db)),
 		InstanceID:    instanceID,
 		Logger:        slog.New(slog.DiscardHandler),
 	}
