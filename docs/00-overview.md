@@ -118,3 +118,12 @@ Single Go Binary
 React Web UI 的 `dist` 在 release build 中嵌入 Go binary。运行时不需要 Node.js。
 
 Browser Extension 独立发布，版本节奏与 Server 独立，以 Sync Protocol compatibility 判定是否兼容。
+
+## 工作台与起始页的职责区分
+
+[起始页 V1](./features/start-page-v1.md) 是既有书签树的快速访问视图，不是第二套导航收藏系统：
+
+1. 工作台负责管理、整理和维护书签；起始页负责日常搜索、浏览常用目录和快速打开网站。
+2. 两者使用同一份 Canonical 书签数据，但信息密度与操作边界不同：起始页不提供编辑、排序、批量管理。
+3. 起始页的改动来自工作台或已同步浏览器经 Server 确认后的结果，不需要再次导入或发布。
+4. V1 不替换工作台首页，不默认改变浏览器启动页、Home 按钮或默认搜索引擎。

@@ -314,3 +314,13 @@ Sync Trigger：
 2. Remote mutation：Expected Mutation 必须先持久化，再 Browser API。
 3. Server response：Remote Changes 持久化成功后才推进 received revision。
 4. Browser state confirmed 后才推进 applied revision。
+
+## 起始页展示缓存与副本状态分离
+
+[起始页 V1](./features/start-page-v1.md) 在扩展内新增 `StartPageProjection`，与本文的 Replica 互不越界：
+
+1. 展示缓存与 `pending_operations`、`remote_changes`、`expected_mutations`、Binding watermark 之间不存在读写关系；刷新快照不触发 Full Resync 或 Recovery。
+2. 起始页数据来自独立的只读快照接口，不把浏览器本地 Mirror 当作 Canonical 真相；既有同步事件只作为「缓存可能需要刷新」的提示。
+3. 缓存先完整验证再原子替换；每次请求绑定 `identityGeneration + configGeneration + grantVersion`，旧身份或旧配置的响应必须丢弃。
+4. 退出登录或解除来源时清理起始页数据，不误删同步 Pending 或用户离线编辑。
+5. 起始页预览入口是普通扩展页面；新标签页覆盖只出现在明确选定的接管产物中，标准同步扩展不因升级而接管新标签页。

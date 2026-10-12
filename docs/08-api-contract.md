@@ -399,3 +399,21 @@ POST /api/v1/sync/transfers
 ```
 
 Frontend / Extension 主要依赖 `code`，message 作为 debug/fallback。
+
+## 起始页只读接口
+
+[起始页 V1](./features/start-page-v1.md) §13 增加一组边界明确的只读契约：
+
+| 接口 | 身份 | 语义 |
+|---|---|---|
+| `POST /api/v1/start-page-grants` | 用户 Session | 为本人的设备批准一个来源文件夹 |
+| `DELETE /api/v1/start-page-grants/{id}` | 用户 Session | 撤销该读取授权 |
+| `GET /api/v1/start-page-grants` | 用户 Session | 列出本人已批准的来源 |
+| `GET /api/v1/device/start-page` | Device 凭据 | 读取本设备已批准的来源描述，不扩权 |
+| `GET /api/v1/device/start-page/snapshot` | Device 凭据 + 来源 Grant | 读取完整来源子树快照 |
+| `GET /api/v1/start-page/snapshot?space_id=…&folder_id=…` | 用户 Session | 普通 Web 起始页读取本人目录 |
+
+1. 快照的元数据、水位与节点必须来自同一份一致性读取；`epoch` / `revision` 沿用本项目统一的整数编码，两端不得一端按 number、一端按 string 比较。
+2. 没有内容时返回 `nodes: []`，不返回 `null`；过大来源返回 `START_PAGE_SOURCE_TOO_LARGE`，不截断成标记为完整的快照。
+3. 响应标注 `Cache-Control: no-store`；ETag 由应用层保存，且必须先验证身份与授权再决定是否返回 304。
+4. 错误码 `START_PAGE_NOT_CONFIGURED` / `_SOURCE_UNAVAILABLE` / `_SOURCE_TOO_LARGE` / `_SNAPSHOT_INVALID` / `_PERMISSION_REQUIRED` 遵循本文既有的防枚举策略：不存在与无权访问给出同样的拒绝。

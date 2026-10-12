@@ -239,3 +239,15 @@ pnpm-lock.yaml
 CI frozen lockfile。
 
 Release 记录 server version、commit、Go version、extension version，便于诊断与漏洞响应。
+
+## 起始页的隐私与执行边界
+
+[起始页 V1](./features/start-page-v1.md) §16 补充以下约束：
+
+1. 标题、URL 与文件夹名称一律按文本渲染；只有 `http:` / `https:` 可导航，且实际跳转使用**校验后的解析结果**，不是存储的原始字符串。
+2. `javascript:`、`data:`、`file:`、浏览器内部协议与其他未支持协议在 V1 只提供复制，不在 Web 或扩展 origin 内执行；包含混淆控制字符的地址不得在校验后原样绕过。
+3. 页面打开不触发对每个网站的自动请求，也不调用第三方 favicon 服务；图标缺失时使用中性占位。
+4. 书签搜索在本地快照内完成，搜索词不发送到 Server 或第三方；网页搜索只在用户显式提交后发生网络导航，不经 Server 代理。
+5. 日志只记录错误码、数量、耗时与受控内部标识，不记录搜索词、完整书签 URL 或请求体。
+6. **Server 无法远程收回已落到离线设备上的明文缓存**：本地退出立即清理，远程撤销需设备重新联机并验证后生效，文案不得承诺离线设备上的即时远程擦除。
+7. 起始页沿用所需 Server 的 host permission，仅为浏览器默认搜索申请 `search`；不因新页面申请 history、cookies 或注入能力。

@@ -249,3 +249,14 @@ Disable 与 Delete 分开。
 - organizer data。
 
 已由其他用户从 Publication Copy 进入自己 Space 的书签不受 Publisher 删除影响。
+
+## 起始页来源读取授权
+
+[起始页 V1](./features/start-page-v1.md) §11 引入一个比 Sync Binding 更窄的只读范围，边界如下：
+
+1. `StartPageReadGrant` 把一个设备的起始页读取范围限定到**一个来源文件夹子树**，不创建 Binding、不改变 Full/Partial 模式、不推进任何 watermark。
+2. 展示范围、读取授权、书签同步范围是三件不同的事：起始页选中某目录不等于该 Space 被这台设备同步。
+3. Grant 的创建、变更与撤销只接受用户 Session 或既有短期配对授权，并沿用同源校验；**普通 Device 凭据只能使用已批准的 Grant**，不能自行把范围扩到另一个 Space 或目录。
+4. 设备侧快照接口不接受 `folder_id` 参数：来源由 Grant 决定，请求里的 ID 不构成授权。
+5. 条件请求（`If-None-Match`）必须先完成账户、设备、Grant 与来源有效性检查再判断是否返回 304；内容未变化不能绕过撤销检查。
+6. 来源失效不自动退回整个 Space，授权失效立即停止展示并清理该来源缓存。
