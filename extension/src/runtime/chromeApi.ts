@@ -33,8 +33,21 @@ export interface ChromeRuntimeApi {
   getURL(path: string): string;
 }
 
+/**
+ * Chrome's default-search provider surface. `tab` is optional and defaults to
+ * the CURRENT tab, which is what the start page wants: submitting from the
+ * page that received the keystroke means the query cannot land in some other
+ * tab that took focus while the request was in flight (start-page doc §7.2).
+ */
+export interface ChromeSearchApi {
+  query(queryInfo: { text: string }, options?: { tab?: unknown }): Promise<void>;
+}
+
 export interface ChromeGlobal {
   bookmarks: ChromeBookmarksApi;
+  /** Absent on a browser without chrome.search; the start page then says so
+   * rather than substituting an engine nobody chose. */
+  search?: ChromeSearchApi;
   /** Only `create` is used: the guide and the settings page open as tabs. */
   tabs: { create(props: { url: string }): Promise<unknown> };
   storage: { local: ChromeStorageArea };

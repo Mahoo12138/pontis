@@ -17,7 +17,10 @@ export default defineConfig({
   manifest: {
     name: e2eOrigin ? 'Pontis (E2E)' : 'Pontis',
     description: 'Pontis self-hosted bookmark sync — browser replica',
-    permissions: ['bookmarks', 'storage', 'alarms'],
+    // `search` is here for one call: handing a typed query to the browser's
+    // own default search provider. It is not a site-access permission, and the
+    // start page asks for nothing else (§16.4).
+    permissions: ['bookmarks', 'storage', 'alarms', 'search'],
     optional_host_permissions: ['http://*/*', 'https://*/*'],
     ...(e2eOrigin ? { host_permissions: [e2eOrigin] } : {}),
   },

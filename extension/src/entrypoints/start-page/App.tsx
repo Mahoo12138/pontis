@@ -11,15 +11,22 @@ import { createRuntime, errText } from '../../ui/runtime';
 import {
   REVALIDATE_AFTER_MS,
   loadStartPage,
+  patchConfig,
   refreshStartPage,
   type StartPageView,
 } from '../../core/start-page/provider';
 import { buildSourceTree, resolveCurrentFolder } from '../../core/start-page/tree';
 import { navigableUrl, openNavigable, urlKind } from '../../core/start-page/url';
+import { createSearchAdapter } from '../../core/start-page/search';
+import { SearchArea } from './SearchArea';
 import type { StartPageSnapshotNodeWire } from '../../core/start-page/wire';
 
 const runtime = createRuntime();
 const deps = { db: runtime.db, bootstrap: runtime.bootstrap, client: runtime.client };
+
+/** Built once: whether this browser can do a default search does not change
+ * while the page is open. */
+const searchAdapter = createSearchAdapter(chromeApi().search);
 
 /** How long a page that stays open waits before asking again (§14.2). A
  * courtesy interval, not the mechanism that keeps the view correct: the
@@ -185,6 +192,18 @@ export function App() {
   const items = tree.childrenOf(at);
   const openTarget = view?.config?.openTarget ?? 'current-tab';
 
+  const goTo = (id: string) => {
+    setMovedBack(null);
+    setFolderId(id);
+  };
+
+  // The remembered mode is written back so the next new tab starts where this
+  // reader left it, without that ever deciding what a typed string means.
+  const patchSearchMode = async (mode: 'web' | 'bookmarks') => {
+    const updated = await patchConfig(deps, { searchMode: mode });
+    if (updated) setView((v) => (v ? { ...v, config: updated } : v));
+  };
+
   return (
     <Shell
       status={
@@ -204,6 +223,18 @@ export function App() {
         </Group>
       }
     >
+      <div className="pontis-spSearchArea">
+        <SearchArea
+          tree={tree}
+          adapter={searchAdapter}
+          initialMode={view?.config?.searchMode ?? 'web'}
+          sourceTitle={tree.sourceTitle}
+          openTarget={openTarget}
+          onModeChange={(mode) => void patchSearchMode(mode)}
+          onNavigate={goTo}
+        />
+      </div>
+
       <nav className="pontis-spCrumbs" aria-label="目录位置">
         {crumbs.map((node, i) => {
           const last = i === crumbs.length - 1;

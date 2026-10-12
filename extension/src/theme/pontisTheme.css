@@ -439,3 +439,166 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ─── Start page: search ───────────────────────────────────────────────────
+   The result list is the only floating layer here, so it is the only thing
+   with a shadow (start-page doc §10). */
+
+.pontis-spSearchArea {
+  display: flex;
+  justify-content: center;
+  padding: 56px 0 28px;
+}
+
+@media (max-height: 700px) {
+  .pontis-spSearchArea {
+    padding: 24px 0 18px;
+  }
+}
+
+.pontis-spSearchWrap {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+}
+
+.pontis-spSearchBox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 6px 0 8px;
+  border: 1px solid var(--mantine-color-gray-3);
+  border-radius: 8px;
+  background: var(--mantine-color-body);
+}
+
+html[data-mantine-color-scheme='dark'] .pontis-spSearchBox {
+  border-color: var(--mantine-color-dark-4);
+}
+
+.pontis-spModeSwitch {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  height: 30px;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--mantine-color-gray-7);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pontis-spModeSwitch:hover {
+  background: var(--mantine-color-gray-1);
+}
+
+html[data-mantine-color-scheme='dark'] .pontis-spModeSwitch:hover {
+  background: var(--mantine-color-dark-5);
+}
+
+.pontis-spSearchInput {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+}
+
+.pontis-spSearchInput::placeholder {
+  color: var(--mantine-color-gray-5);
+}
+
+.pontis-spSearchNotice {
+  margin-top: 6px;
+  text-align: center;
+  color: var(--mantine-color-gray-6);
+}
+
+.pontis-spResults {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  max-height: 420px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--mantine-color-gray-3);
+  border-radius: 8px;
+  background: var(--mantine-color-body);
+  box-shadow: 0 4px 16px rgba(16, 24, 40, 0.1);
+}
+
+html[data-mantine-color-scheme='dark'] .pontis-spResults {
+  border-color: var(--mantine-color-dark-4);
+}
+
+.pontis-spResultsEmpty {
+  padding: 14px 10px;
+  font-size: 13px;
+  color: var(--mantine-color-gray-6);
+}
+
+.pontis-spResultRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pontis-spResultRow[data-selected='true'] {
+  background: var(--mantine-color-blue-0);
+}
+
+html[data-mantine-color-scheme='dark'] .pontis-spResultRow[data-selected='true'] {
+  background: var(--mantine-color-dark-4);
+}
+
+.pontis-spResultRow:hover {
+  background: var(--mantine-color-gray-1);
+}
+
+html[data-mantine-color-scheme='dark'] .pontis-spResultRow:hover {
+  background: var(--mantine-color-dark-5);
+}
+
+.pontis-spResultText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pontis-spResultTitle {
+  font-size: 14px;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pontis-spResultPath {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--mantine-color-gray-6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
