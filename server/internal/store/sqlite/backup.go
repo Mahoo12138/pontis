@@ -212,6 +212,16 @@ func (s *BackupStore) ReplaceBaseline(ctx context.Context, spaceID string, slots
 		WHERE space_id = ?`, newEpoch, formatTime(time.Now().UTC()), spaceID); err != nil {
 		return 0, fmt.Errorf("backup: reset bindings: %w", err)
 	}
+	// A reconciliation opened against the old epoch is now describing a tree
+	// that no longer exists. Left open, its client could still commit or
+	// complete it and stamp the new binding with the old baseline, so the
+	// session goes with the epoch it was frozen at.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE reconciliations SET state = 'failed', phase = '', completed_at = ?, updated_at = ?
+		WHERE space_id = ? AND state IN ('running', 'waiting_user')`,
+		formatTime(time.Now().UTC()), formatTime(time.Now().UTC()), spaceID); err != nil {
+		return 0, fmt.Errorf("backup: fail superseded reconciliations: %w", err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, err

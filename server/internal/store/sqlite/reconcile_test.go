@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"pontis/internal/backup"
 	"pontis/internal/canonical"
 	"pontis/internal/device"
 	"pontis/internal/reconcile"
@@ -478,5 +479,80 @@ func TestReconcileFullResyncFlow(t *testing.T) {
 	state, _, applied, received := deps.bindingWatermarks(bindingID)
 	if state != "active" || applied != snap.Revision || received != snap.Revision {
 		t.Fatalf("watermarks after resync = %s %d %d, want snapshot revision %d", state, applied, received, snap.Revision)
+	}
+}
+
+// A backup restore rebuilds the space underneath an open reconciliation: new
+// epoch, revision 0, every binding back to pending_initial. That session now
+// describes a tree that no longer exists, and letting it finish would hand the
+// new baseline a watermark it never reached and activate a binding that still
+// owes its initialization (doc 06 §8).
+func TestRestoreSupersedesAnOpenReconciliation(t *testing.T) {
+	svc, deps := setupReconcileTest(t)
+	ctx := context.Background()
+	_, bindingID := deps.registerPendingBinding("Edge")
+	deps.activateBinding(bindingID)
+
+	seedSystem(t, deps.db, canonical.CreateNode{SpaceID: "s1", NodeID: "n1", Type: canonical.NodeTypeBookmark,
+		Title: "Server", URL: "https://srv.example", Parent: canonical.NewRootParent("main")})
+
+	sess, err := svc.CreateSession(ctx, bindingID, reconcile.TypeFullResync, "history expired")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SubmitClientSnapshot(ctx, bindingID, clientSnapshot(
+		[]reconcile.ClientRootJSON{{LocalRef: "l_bar", RootKey: "main", Title: "Bar"}},
+		[]reconcile.ClientNodeJSON{
+			{LocalRef: "l1", ParentLocalRef: "l_bar", Type: "bookmark", Title: "Server", URL: "https://srv.example", CanonicalID: "n1"},
+		},
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateServerSnapshot(ctx, bindingID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Plan(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Commit(ctx, sess.ID); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// The restore lands: the session is committed but not completed.
+	if _, err := NewBackupStore(deps.db).ReplaceBaseline(ctx, "s1",
+		[]backup.SlotDTO{{Key: "main", DisplayName: "Main", Position: 0, CreatedAt: "2026-01-01T00:00:00Z"}},
+		[]backup.NodeDTO{{ID: "r1", Type: "bookmark", Title: "Restored", URL: ref("https://restored"),
+			RootKey: ref("main"), Position: 0,
+			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"}}); err != nil {
+		t.Fatalf("ReplaceBaseline: %v", err)
+	}
+
+	if after, err := svc.Session(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	} else if after.State != reconcile.StateFailed {
+		t.Fatalf("session after the restore = %s, want failed", after.State)
+	}
+	if _, err := svc.Complete(ctx, sess.ID); !errors.Is(err, reconcile.ErrSessionSuperseded) {
+		t.Fatalf("complete err = %v, want ErrSessionSuperseded", err)
+	}
+
+	// The second layer stands on its own: a request that had already passed
+	// the restore's UPDATE must still be refused by the epoch it was frozen
+	// against, so the guard cannot lean on the restore alone.
+	if _, err := deps.db.ExecContext(ctx,
+		`UPDATE reconciliations SET state = 'running', phase = 'planned' WHERE id = ?`, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Complete(ctx, sess.ID); !errors.Is(err, reconcile.ErrSessionSuperseded) {
+		t.Fatalf("complete of a re-opened old-epoch session = %v, want ErrSessionSuperseded", err)
+	}
+	if _, err := svc.Commit(ctx, sess.ID); !errors.Is(err, reconcile.ErrPlanStale) {
+		t.Fatalf("commit of an old-epoch session = %v, want ErrPlanStale", err)
+	}
+
+	state, epoch, applied, received := deps.bindingWatermarks(bindingID)
+	if state != "pending_initial" || epoch != 2 || applied != 0 || received != 0 {
+		t.Fatalf("binding = %s epoch %d at %d/%d, want pending_initial at the new baseline",
+			state, epoch, applied, received)
 	}
 }

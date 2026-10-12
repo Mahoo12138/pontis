@@ -74,6 +74,10 @@ var (
 	ErrPlanStale = errors.New("reconcile: plan stale")
 	// ErrNotCommitted is returned when completing an uncommitted session.
 	ErrNotCommitted = errors.New("reconcile: session not committed")
+	// ErrSessionSuperseded is returned when a session belongs to an epoch the
+	// space has left behind — a backup restore rebuilt the baseline under it.
+	// Nothing may be committed or finalized through it any more.
+	ErrSessionSuperseded = errors.New("reconcile: session belongs to a superseded epoch")
 )
 
 // Session is a persistent reconciliation (doc 06 §3, doc 18 §6).
@@ -900,6 +904,12 @@ func (s *Service) Commit(ctx context.Context, sessionID string) (Session, error)
 			return Session{}, err
 		}
 		commitRevision = head.CurrentRevision
+	} else if space.Epoch != sess.TargetEpoch {
+		// A resync or recovery commits no canonical change, but its steps were
+		// derived from a snapshot of a tree this space no longer holds: a
+		// restore under it means re-planning against the new head, not
+		// confirming a baseline that has been replaced (doc 06 §7).
+		return Session{}, ErrPlanStale
 	}
 
 	now := time.Now().UTC()
@@ -1045,7 +1055,12 @@ func (s *Service) Complete(ctx context.Context, sessionID string) (Session, erro
 	if sess.State == StateCompleted {
 		return sess, nil
 	}
-	if sess.State == StateFailed || !sess.ServerCommitted {
+	if sess.State == StateFailed {
+		// Closed by the space itself (a restore superseded it, or the binding
+		// was revoked): no completion, and the client must stop resuming it.
+		return Session{}, ErrSessionSuperseded
+	}
+	if !sess.ServerCommitted {
 		return Session{}, ErrNotCommitted
 	}
 
@@ -1064,17 +1079,35 @@ func (s *Service) Complete(ctx context.Context, sessionID string) (Session, erro
 	if err != nil {
 		return Session{}, err
 	}
+	// Re-read the session inside the transaction: a backup restore can bump
+	// the epoch and reset the binding after the read above, and a completion
+	// that lands then would hand the new baseline a revision it never
+	// reached and activate a binding that still owes an initialization.
+	current, err := tx.LoadSession(ctx, sess.ID)
+	if err != nil {
+		return Session{}, err
+	}
+	if current.State != StateRunning && current.State != StateWaitingUser {
+		return Session{}, ErrSessionSuperseded
+	}
+	if !current.ServerCommitted {
+		return Session{}, ErrNotCommitted
+	}
+	if current.TargetEpoch != space.Epoch {
+		return Session{}, ErrSessionSuperseded
+	}
 	// Baseline reset (doc 06 §8): the client state matches the commit
 	// head after an initial merge, but only the snapshot point for a
 	// resync — anything newer flows in through the next /sync rounds.
-	baseline := sess.CommitRevision
-	if sess.Type != TypeInitial {
-		baseline = sess.TargetRevision
+	baseline := current.CommitRevision
+	if current.Type != TypeInitial {
+		baseline = current.TargetRevision
 	}
-	if err := tx.CompleteSession(ctx, sess.ID, time.Now().UTC()); err != nil {
+	if err := tx.CompleteSession(ctx, current.ID, time.Now().UTC()); err != nil {
 		return Session{}, err
 	}
-	if err := tx.FinalizeBinding(ctx, sess.BindingID, space.Epoch, baseline, baseline, time.Now().UTC()); err != nil {
+	if err := tx.FinalizeBinding(ctx, current.BindingID, current.TargetEpoch,
+		space.Epoch, baseline, baseline, time.Now().UTC()); err != nil {
 		return Session{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

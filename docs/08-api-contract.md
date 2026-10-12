@@ -230,7 +230,14 @@ recovery
 
 类型与 Binding 状态互相限定：`initial` 只允许 pending_initial，其余两种只允许
 active；不匹配返回 `409 BINDING_NOT_ELIGIBLE`。同一 Binding 只允许一个未完结
-session，否则 `409 RECONCILIATION_IN_PROGRESS`。
+session，否则 `409 RECONCILIATION_IN_PROGRESS`。备份恢复把 Binding 打回
+pending_initial，因此那之后设备上的第一个可用 session 只能是 `initial`——Client
+收到 `BINDING_NOT_ELIGIBLE` 时不去重试 resync，而是回头补首次合并。
+
+`commit` 与 `complete` 在写事务内复核 session 冻结快照时的 epoch：Space 已经换代
+（备份恢复）时，`complete` 返回 `409 RECONCILIATION_SUPERSEDED`，`commit` 返回
+`409 PLAN_STALE` 让客户端按新 head 重新规划；恢复本身也在同一个事务里把该 Space
+所有未完结 session 置为 failed。旧 epoch 的 session 不能决定新基线的 Binding。
 
 > 对 pending_initial 的 Binding，`POST .../complete` 是它变成 active 的唯一
 > 路径：complete 用 committed revision 写回 baseline 并激活 binding。

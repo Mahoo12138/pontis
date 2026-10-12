@@ -52,5 +52,15 @@ type Tx interface {
 	UpdateSessionServerSnapshot(ctx context.Context, id, phase, serverArtifactID string, targetEpoch, targetRevision int64, at time.Time) error
 	MarkSessionCommitted(ctx context.Context, id string, commitRevision int64, at time.Time) error
 	CompleteSession(ctx context.Context, id string, at time.Time) error
-	FinalizeBinding(ctx context.Context, bindingID string, epoch, appliedRevision, receivedRevision int64, at time.Time) error
+
+	// LoadSession reads the session row inside the transaction, so the state
+	// a commit or completion validates against cannot move underneath it.
+	LoadSession(ctx context.Context, id string) (Session, error)
+
+	// FinalizeBinding activates the binding and stamps the baseline
+	// watermarks (doc 06 §8). baseEpoch is the epoch the session was frozen
+	// against: the write only lands while the binding still carries it, so a
+	// session from a superseded epoch cannot activate a binding a backup
+	// restore has re-initialized.
+	FinalizeBinding(ctx context.Context, bindingID string, baseEpoch, epoch, appliedRevision, receivedRevision int64, at time.Time) error
 }

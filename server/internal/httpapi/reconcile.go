@@ -235,6 +235,12 @@ func (s *Server) writeReconcileError(w http.ResponseWriter, r *http.Request, err
 		s.writeError(w, r, http.StatusConflict, "PLAN_STALE", "the canonical target moved; preview again")
 	case errors.Is(err, reconcile.ErrNotCommitted):
 		s.writeError(w, r, http.StatusConflict, "RECONCILIATION_NOT_COMMITTED", "commit the reconciliation first")
+	case errors.Is(err, reconcile.ErrSessionSuperseded):
+		// The space was rebuilt (a backup restore) while this reconciliation
+		// was open: it describes a tree that no longer exists, and the client
+		// must stop resuming it rather than finalize a baseline nobody set.
+		s.writeError(w, r, http.StatusConflict, "RECONCILIATION_SUPERSEDED",
+			"the space baseline was replaced while this reconciliation was open")
 	case errors.Is(err, reconcile.ErrDecisionInvalid):
 		s.writeError(w, r, http.StatusBadRequest, "RECONCILIATION_DECISION_INVALID",
 			"a decision is not one of the issue's candidates")

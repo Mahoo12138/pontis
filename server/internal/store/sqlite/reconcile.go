@@ -406,16 +406,33 @@ func (s *ReconcileStore) LoadSpace(ctx context.Context, spaceID canonical.SpaceI
 	return scanSpace(s.db.QueryRowContext(ctx, spaceColumns, string(spaceID)))
 }
 
-// FinalizeBinding activates the binding and stamps the baseline
-// watermarks (doc 06 §8).
-func (t *reconcileTx) FinalizeBinding(ctx context.Context, bindingID string, epoch, appliedRevision, receivedRevision int64, at time.Time) error {
-	_, err := t.tx.ExecContext(ctx, `
+// LoadSession reads a session inside the transaction (reconcile.Tx).
+func (t *reconcileTx) LoadSession(ctx context.Context, id string) (reconcile.Session, error) {
+	return scanSession(t.tx.QueryRowContext(ctx, sessionColumns+` WHERE id = ?`, id))
+}
+
+// FinalizeBinding activates the binding and stamps the baseline watermarks
+// (doc 06 §8), but only while the binding still carries the epoch the session
+// was frozen against. A backup restore bumps that epoch and drops the binding
+// back to pending_initial; letting an old session write here would hand the
+// new baseline a watermark it never reached and activate a binding that still
+// owes an initialization.
+func (t *reconcileTx) FinalizeBinding(ctx context.Context, bindingID string, baseEpoch, epoch, appliedRevision, receivedRevision int64, at time.Time) error {
+	res, err := t.tx.ExecContext(ctx, `
 		UPDATE device_space_bindings SET state = 'active', epoch = ?,
 		       applied_revision = ?, received_revision = ?, initialized_at = ?,
 		       last_sync_at = ?, updated_at = ?
-		WHERE id = ?`,
-		epoch, appliedRevision, receivedRevision, formatTime(at), formatTime(at), formatTime(at), bindingID)
-	return err
+		WHERE id = ? AND epoch = ?`,
+		epoch, appliedRevision, receivedRevision, formatTime(at), formatTime(at), formatTime(at),
+		bindingID, baseEpoch)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("reconcile: %w: binding %s no longer carries epoch %d",
+			reconcile.ErrSessionSuperseded, bindingID, baseEpoch)
+	}
+	return nil
 }
 
 // --- transaction ---
