@@ -3,6 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The settings screen is a page of its own, not the small dialog Chrome
+         embeds in chrome://extensions: in that dialog the binding rows wrap and
+         the diagnostic log has no room to scroll. -->
+    <meta name="manifest.open_in_tab" content="true" />
     <title>Pontis — 设置</title>
   </head>
   <body style="margin: 0">
