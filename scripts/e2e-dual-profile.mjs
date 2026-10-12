@@ -35,6 +35,9 @@ const ORIGIN = `http://127.0.0.1:${PORT}`;
 const PASSWORD = 'pontis-e2e-pass';
 const WORK = path.join(os.tmpdir(), 'pontis-e2e');
 const EXT_DIR = path.join(ROOT, 'extension', '.e2e-output', 'chrome-mv3');
+// A CDP call that never answers used to hang the whole run: it is one dead tab
+// away from a green-looking process that prints nothing for twenty minutes.
+const CDP_TIMEOUT_MS = 30_000;
 
 let failed = 0;
 const log = (...a) => console.log(...a);
@@ -233,6 +236,14 @@ class Session {
       this.pending.delete(msg.id);
       msg.error ? hit.reject(new Error(msg.error.message)) : hit.resolve(msg.result);
     });
+    // A tab that is closed or discarded takes its socket with it, and CDP then
+    // never answers the requests already in flight. Without this the run sits
+    // there forever instead of saying which step lost its page.
+    ws.addEventListener('close', () => this.failAll(new Error('cdp socket closed')));
+  }
+  failAll(err) {
+    for (const [, hit] of this.pending) hit.reject(err);
+    this.pending.clear();
   }
   static async connect(wsUrl, { enableRuntime = true } = {}) {
     const ws = new WebSocket(wsUrl);
@@ -249,7 +260,17 @@ class Session {
   send(method, params = {}) {
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      // Backstop for the case the socket stays open but the target stops
+      // answering — a hung extension page must fail the run, not stall it.
+      const timer = setTimeout(() => reject(new Error(`cdp ${method} never answered`)),
+        CDP_TIMEOUT_MS);
+      timer.unref?.();
+      const settle = (fn) => (v) => {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        fn(v);
+      };
+      this.pending.set(id, { resolve: settle(resolve), reject: settle(reject) });
       this.ws.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -313,9 +334,36 @@ class Browser {
     }
     throw new Error(`${this.name}: devtools never came up`);
   }
-  /** Open (or reuse) an extension page and attach to it. */
-  async page(url) {
+  /**
+   * Attach to a page showing this url, reusing the tab when one is already
+   * open. Driving the popup means one round after another, and creating a tab
+   * for every round opens a hundred windows and then attaches to the oldest
+   * one, which Chrome has long since discarded.
+   */
+  async page(url, { fresh = false } = {}) {
+    if (!fresh) {
+      const list = await (await fetch(`http://127.0.0.1:${this.debugPort}/json/list`)).json();
+      const target = list.find((t) => t.url === url && t.webSocketDebuggerUrl);
+      if (target) return Session.connect(target.webSocketDebuggerUrl);
+    }
     await this.sendBrowser('Target.createTarget', { url });
+    return this.findPage(url);
+  }
+  /** True once a tab showing this url exists — the extension may have opened it. */
+  async waitForTarget(url, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const list = await (await fetch(`http://127.0.0.1:${this.debugPort}/json/list`)).json();
+      if (list.some((t) => t.url === url)) return true;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return false;
+  }
+  /**
+   * Attach to a tab that already shows this url — including one the extension
+   * moved there itself, which is how the guide hands off to the settings page.
+   */
+  async findPage(url) {
     for (let i = 0; i < 60; i++) {
       const list = await (await fetch(`http://127.0.0.1:${this.debugPort}/json/list`)).json();
       const target = list.find((t) => t.url === url);
@@ -331,6 +379,17 @@ class Browser {
     }
     return this.browserSession.send(method, params);
   }
+  /**
+   * Close every tab showing this url. The sync rounds drive the popup, and a
+   * tab left behind is one more candidate the next `findPage` can attach to —
+   * Chrome is free to discard it, and a discarded target answers nothing.
+   */
+  async closePages(url) {
+    const list = await (await fetch(`http://127.0.0.1:${this.debugPort}/json/list`)).json();
+    for (const t of list.filter((x) => x.url === url)) {
+      await this.sendBrowser('Target.closeTarget', { targetId: t.id }).catch(() => undefined);
+    }
+  }
   stop() {
     this.browserSession?.close();
     killGroup(this.proc);
@@ -343,9 +402,14 @@ class Browser {
 const HELPERS = `
   const byText = (sel, text) => [...document.querySelectorAll(sel)]
     .find((el) => (el.textContent || '').trim() === text);
+  // A required field's label carries a trailing asterisk in the DOM, and the
+  // person reading the screen does not say "服务器地址 star". Backslashes are
+  // doubled because this is a string the page parses, not a regex literal.
+  const labelOf = (el) => (el.querySelector('label')?.textContent || '')
+    .replace(/\\s*\\*\\s*$/, '').trim();
   const fieldRoot = (label) => [...document.querySelectorAll(
       '.mantine-TextInput-root, .mantine-PasswordInput-root, .mantine-Select-root')]
-    .find((el) => (el.querySelector('label')?.textContent || '').trim() === label);
+    .find((el) => labelOf(el) === label);
   const rectOf = (el) => {
     if (!el) return null;
     el.scrollIntoView({ block: 'center', inline: 'center' });
@@ -353,6 +417,10 @@ const HELPERS = `
     return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
   };
   const buttonRect = (label) => rectOf(byText('button', label));
+  const buttonReady = (label) => {
+    const b = byText('button', label);
+    return !!b && !b.disabled;
+  };
   const selectRect = (label) => {
     const root = fieldRoot(label);
     return root ? rectOf(root.querySelector('input')) : null;
@@ -435,11 +503,22 @@ const treeTitles = `
   return JSON.stringify(out.sort());
 `;
 
-/** Pair, bind the bookmark bar, and wait until the first sync is active. */
+/**
+ * Walk the first-run guide the way a person does, and end up on the settings
+ * page: pair (step 1) → bind the bookmark bar (step 2) → 完成并打开设置页
+ * (step 3). Driving the guide rather than the settings page is the point — it
+ * is the only surface that offers both forms without a tab click in between,
+ * and the handoff is part of what this verifies.
+ */
 async function pairProfile(name, info) {
   const browser = new Browser(name, info.debugPort);
   await browser.start();
-  const page = await browser.page(`chrome-extension://${info.extId}/options.html`);
+  const optionsUrl = `chrome-extension://${info.extId}/options.html#sync`;
+  // A first install opens the guide by itself — that is the whole point of the
+  // page — so drive that tab instead of creating a second window beside it.
+  const guideUrl = `chrome-extension://${info.extId}/onboarding.html`;
+  check(await browser.waitForTarget(guideUrl, 15_000), `${name}: installing opened the guide tab`);
+  const page = await browser.page(guideUrl);
 
   // The E2E build carries the origin in the manifest; if this is false the
   // switch broke and pairing would hang on a bubble nobody can click.
@@ -448,29 +527,42 @@ async function pairProfile(name, info) {
   // An extension page opens as soon as its URL resolves, which is before React
   // has mounted the form — typing into a field that is not there yet is the
   // difference between a green run and a flaky one.
-  await waitStep(page, `!!fieldRoot('服务器地址')`, 'true', `${name}: pairing form mounted`, 20_000);
+  await waitStep(page, `!!fieldRoot('服务器地址')`, 'true', `${name}: guide step 1 mounted`, 20_000);
 
   await runStep(page, `typeInto('服务器地址', '${ORIGIN}')`, `${name}: server url`);
   await runStep(page, `typeInto('用户名', 'e2e')`, `${name}: username`);
   await runStep(page, `typeInto('密码', '${PASSWORD}')`, `${name}: password`);
   await runStep(page, `typeInto('设备名称', 'E2E ${name}')`, `${name}: device name`);
   log(`  step ${name}: 登录并注册设备 → ${await clickButton(page, '登录并注册设备', name)}`);
-  await waitStep(page, 'bodyText()', '已配对', `${name}: pairing`, 60_000, '操作失败');
+  // Step 1 collapses to a summary line once it is done, which is the guide's
+  // own proof that pairing succeeded.
+  await waitStep(page, "bodyText()", '已连接', `${name}: pairing`, 60_000, '操作失败');
 
-  const fields = await page.evaluate(`${HELPERS}
-    return [...document.querySelectorAll('.mantine-Select-root')].length;`);
-  if (fields < 2) throw new Error(`${name}: expected the space and mount selects, saw ${fields}`);
+  // Step 2 opens itself, and its two selects are the signal they are filled in.
+  await waitStep(page, `[...document.querySelectorAll('.mantine-Select-root')].length >= 2`,
+    'true', `${name}: guide step 2 mounted`, 20_000);
   await pickOption(page, '同步空间', 'E2E Converge', name);
   await pickOption(page, '挂载目录', 'Bookmarks Bar', name);
   log(`  step ${name}: 创建绑定 → ${await clickButton(page, '创建绑定', name)}`);
+
+  await waitStep(page, `buttonReady('完成并打开设置页')`, 'true',
+    `${name}: guide unlocks the settings page`, 30_000);
+  log(`  step ${name}: 完成并打开设置页 → ${await clickButton(page, '完成并打开设置页', name)}`);
+  page.close();
+
+  // Same-tab navigation: attach to wherever the guide left the tab, and check
+  // the settings page really took over (its tabs are the only place those
+  // words appear).
+  const settings = await browser.findPage(optionsUrl);
+  await waitStep(settings, 'bodyText()', '账号管理', `${name}: settings page mounted`, 20_000);
 
   // The gate is the durable state, not the badge wording. The label for an idle
   // active binding is a product decision that has already changed once (同步中
   // → 监测中), and a harness wired to the string fails for reasons that are not
   // bugs. What the user is shown is still checked — by the convergence
   // assertions below, which read the browsers themselves.
-  await waitStep(page, BINDING_STATES, 'active', `${name}: binding reached active`, 120_000, 'needs_recovery');
-  return { browser, page };
+  await waitStep(settings, BINDING_STATES, 'active', `${name}: binding reached active`, 120_000, 'needs_recovery');
+  return { browser, page: settings };
 }
 
 /** The binding states this profile's replica store currently holds. */
@@ -567,13 +659,33 @@ async function main() {
       log(`  step ${name}: created ${title} as browser id ${createdId}; bar now ${bar.join(',')}`);
     }
 
-    // Both sides sync through the popup's own control.
+    // The popup, opened through its own url so a script can reach it. The tab is
+    // closed as soon as the step is done — a page left behind is a page Chrome
+    // can discard, and the next attach would then hang on a dead target.
+    const popupUrl = `chrome-extension://${extId}/popup.html`;
+    const withPopup = async (name, ref, fn) => {
+      const popup = await ref.browser.page(popupUrl, { fresh: true });
+      try {
+        await waitStep(popup, 'bodyText()', '立即同步', `${name}: popup mounted`, 20_000);
+        return await fn(popup);
+      } finally {
+        popup.close();
+        await ref.browser.closePages(popupUrl);
+      }
+    };
+
+    // One real click on 立即同步 per profile. That is the only place this control
+    // is exercised, and it is what a person uses.
+    for (const [name, ref] of [['A', a], ['B', b]]) {
+      await withPopup(name, ref, (popup) => clickButton(popup, '立即同步', name));
+    }
+
+    // Every round after that is asked for over the same message the button
+    // sends, from the settings page this run already has open. Reopening the
+    // popup for each of the ~90 polling rounds only made a tab reload forever.
     const syncBoth = async () => {
       for (const [name, ref] of [['A', a], ['B', b]]) {
-        const popup = await ref.browser.page(`chrome-extension://${extId}/popup.html`);
-        await waitStep(popup, 'bodyText()', '立即同步', `${name}: popup mounted`, 20_000);
-        await clickButton(popup, '立即同步', name);
-        popup.close();
+        await ref.page.evaluate(`return await chrome.runtime.sendMessage({ type: 'pontis/manual-sync' });`);
       }
     };
 
@@ -611,7 +723,14 @@ async function main() {
         `${name}: browser shows the other profile's bookmark`, titles.join(','));
       const dupes = titles.filter((t, i) => titles.indexOf(t) !== i);
       check(dupes.length === 0, `${name}: no doubled bookmarks`, dupes.join(','));
-      const text = await ref.page.evaluate(`${HELPERS}return bodyText()`);
+
+      // Read the popup, not the settings page: the settings page now hides the
+      // binding list behind a tab, so its body text would pass this check while
+      // saying nothing. The popup is what a person glances at, and it shows the
+      // space's own name — stable data, unlike the status wording.
+      const text = await withPopup(name, ref, (popup) =>
+        popup.evaluate(`${HELPERS}return bodyText()`));
+      check(text.includes('E2E Converge'), `${name}: popup lists the bound space`, text.slice(0, 160));
       check(!/需要恢复|等待确认|目录缺失/.test(text), `${name}: binding needs no human`, text.slice(0, 160));
     }
   } finally {
@@ -639,9 +758,10 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(`e2e: ${err.message}`);
-  try {
-    serverProc?.kill();
-  } catch { /* already gone */ }
+  // The profiles are opened before the run's finally block, so a throw there
+  // would otherwise leave two real Chromium windows holding 9401/9402 — and the
+  // next run would attach to those tabs and fail somewhere far from the cause.
+  console.error(`e2e: ${err.stack || err.message}`);
+  shutdownAll();
   process.exit(1);
 });
