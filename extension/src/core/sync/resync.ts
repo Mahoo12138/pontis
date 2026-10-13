@@ -80,7 +80,7 @@ export class ResyncService {
         phase: 'wait_user',
         error: 'recovery intent requires review; pending ops preserved',
       });
-      await logDiagnostic(this.db, 'warn', 'resync', 'needs_recovery with unsynced intent; waiting for user', {
+      await logDiagnostic(this.db, 'warn', 'resync', '处于待恢复且有未同步意图，等待用户处理', {
         bindingId,
         queued,
       });
@@ -153,7 +153,7 @@ export class ResyncService {
     session.phase = 'commit';
     session.error = undefined;
     await this.touch(session);
-    await logDiagnostic(this.db, 'info', 'resync', 'recovery intents resolved', {
+    await logDiagnostic(this.db, 'info', 'resync', '恢复意图已全部落定', {
       bindingId,
       applied,
       discarded,
@@ -169,7 +169,7 @@ export class ResyncService {
     await writeEmergencySnapshot(this.db, binding, keepIntent ? 'resync after intent review' : 'full resync');
     const { deviceToken } = await this.bootstrap.get();
     if (!deviceToken) {
-      await logDiagnostic(this.db, 'warn', 'resync', 'cannot resync: device token missing', { bindingId });
+      await logDiagnostic(this.db, 'warn', 'resync', '无法重新同步：缺少设备令牌', { bindingId });
       return 'waiting';
     }
 
@@ -191,7 +191,7 @@ export class ResyncService {
         state: 'needs_recovery',
         recovery: { code: 'RESYNC_FAILED', message: String(err) },
       });
-      await logDiagnostic(this.db, 'warn', 'resync', 'full resync round failed, will retry', {
+      await logDiagnostic(this.db, 'warn', 'resync', '完全重新同步失败，稍后重试', {
         bindingId,
         error: String(err),
       });
@@ -213,7 +213,7 @@ export class ResyncService {
         state: 'needs_recovery',
         recovery: { code: 'VERIFY_FAILED', message: report.problems.map((p) => p.kind).join(',') },
       });
-      await logDiagnostic(this.db, 'error', 'resync', 'full resync verification failed', {
+      await logDiagnostic(this.db, 'error', 'resync', '完全重新同步校验失败', {
         bindingId,
         problems: report.problems,
       });
@@ -222,7 +222,7 @@ export class ResyncService {
 
     const settled = await this.db.bindings.get(bindingId);
     await this.db.emergencySnapshots.where('bindingId').equals(bindingId).delete();
-    await logDiagnostic(this.db, 'info', 'resync', 'full resync completed against the server snapshot', {
+    await logDiagnostic(this.db, 'info', 'resync', '已按服务端快照完成完全重新同步', {
       bindingId,
       epoch: settled?.epoch ?? null,
       baselineRevision: settled?.appliedRevision ?? null,

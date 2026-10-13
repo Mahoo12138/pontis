@@ -77,7 +77,7 @@ export class WorkerLoop {
         try {
           await reconciler.runBinding(b.id);
         } catch (err) {
-          await logDiagnostic(db, 'warn', 'background', 'reconciliation round failed', {
+          await logDiagnostic(db, 'warn', 'background', '本轮对账失败', {
             bindingId: b.id,
             error: String(err),
           });
@@ -97,7 +97,7 @@ export class WorkerLoop {
         try {
           await reconciler.resumeRecovery(b.id);
         } catch (err) {
-          await logDiagnostic(db, 'warn', 'background', 'interrupted reconciliation not resumed', {
+          await logDiagnostic(db, 'warn', 'background', '被中断的对账未能继续', {
             bindingId: b.id,
             error: String(err),
           });
@@ -115,14 +115,14 @@ export class WorkerLoop {
         try {
           await resync.attemptRecovery(b.id);
         } catch (err) {
-          await logDiagnostic(db, 'warn', 'background', 'recovery attempt failed', {
+          await logDiagnostic(db, 'warn', 'background', '恢复尝试失败', {
             bindingId: b.id,
             error: String(err),
           });
         }
       }
     } catch (err) {
-      await logDiagnostic(db, 'error', 'background', `sync (${trigger}) crashed`, { error: String(err) });
+      await logDiagnostic(db, 'error', 'background', `同步（${trigger}）异常中断`, { error: String(err) });
     }
   }
 
@@ -137,7 +137,7 @@ export class WorkerLoop {
       try {
         await this.integrityFor(b.id);
       } catch (err) {
-        await logDiagnostic(db, 'warn', 'background', `integrity check (${trigger}) failed`, {
+        await logDiagnostic(db, 'warn', 'background', `完整性检查（${trigger}）失败`, {
           bindingId: b.id,
           error: String(err),
         });
@@ -187,7 +187,7 @@ export class WorkerLoop {
         if (producedLocalOp) this.scheduleSync();
       })
       .catch(async (err) => {
-        await logDiagnostic(db, 'error', 'background', 'event dispatch failed', { error: String(err), event });
+        await logDiagnostic(db, 'error', 'background', '事件分发失败', { error: String(err), event });
       });
     return this.eventsSettled;
   }

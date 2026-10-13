@@ -114,7 +114,7 @@ export default defineBackground(() => {
   void releaseAllRunLocks(db)
     .then((cleared) => {
       if (cleared > 0) {
-        return logDiagnostic(db, 'warn', 'background', 'cleared run locks left by the previous worker', { cleared });
+        return logDiagnostic(db, 'warn', 'background', '已清除上一个 worker 遗留的运行锁', { cleared });
       }
       return undefined;
     })

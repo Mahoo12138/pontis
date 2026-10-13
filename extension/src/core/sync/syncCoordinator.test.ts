@@ -332,7 +332,7 @@ describe('SyncCoordinator', () => {
     // advances it, and the log says so.
     const skipped = await db.diagnostics.toArray();
     expect(skipped.map((e) => [e.level, e.message])).toEqual([
-      ['info', 'another round holds this binding, skipping'],
+      ['info', '另一轮正在处理该绑定，本轮跳过'],
     ]);
     // The sweep reports it too, which is what lets the loop schedule a retry.
     expect(await guarded.syncAll()).toBe(true);

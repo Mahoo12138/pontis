@@ -103,7 +103,7 @@ async function applyAssignIdentity(
   const canonicalId = step.canonical_id ?? '';
   const browserId = scope.localRefs[step.local_ref ?? ''];
   if (!browserId || !canonicalId) {
-    await logDiagnostic(db, 'error', 'reconcile-steps', 'identity step without a resolvable ref', { scope, step });
+    await logDiagnostic(db, 'error', 'reconcile-steps', '身份步骤缺少可解析的引用', { scope, step });
     throw new StepResolutionError('target', step.local_ref ?? canonicalId);
   }
   const existing = await findMirrorByCanonical(db, scope.bindingId, canonicalId);
@@ -111,7 +111,7 @@ async function applyAssignIdentity(
   if (existing) {
     // Two browser nodes claiming one canonical id is not a state this
     // applier may resolve by picking one.
-    await logDiagnostic(db, 'error', 'reconcile-steps', 'canonical id already mapped to another browser node', {
+    await logDiagnostic(db, 'error', 'reconcile-steps', '该规范 id 已映射到另一个浏览器节点', {
       canonicalId,
       mappedBrowserId: existing.browserId,
       stepBrowserId: browserId,
@@ -120,7 +120,7 @@ async function applyAssignIdentity(
   }
   const node = await adapter.getNode(browserId);
   if (!node) {
-    await logDiagnostic(db, 'warn', 'reconcile-steps', 'identity step for a browser node that no longer exists', {
+    await logDiagnostic(db, 'warn', 'reconcile-steps', '身份步骤指向的浏览器节点已不存在', {
       browserId,
       canonicalId,
     });

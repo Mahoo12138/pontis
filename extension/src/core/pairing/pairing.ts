@@ -176,7 +176,7 @@ export class PairingService {
         }
       },
     );
-    await logDiagnostic(this.db, 'warn', 'pairing', 're-paired with a new device, local bindings dropped', {
+    await logDiagnostic(this.db, 'warn', 'pairing', '已用新设备重新配对，本机绑定已清除', {
       previousDeviceId,
       bindingCount: stale.length,
     });

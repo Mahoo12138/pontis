@@ -54,7 +54,7 @@ export class SyncCoordinator {
       // Distinct from 'inactive': the binding does want a round, and something
       // else is inside it. A caller that treats the two the same way drops the
       // work until the next alarm, which is minutes away.
-      await logDiagnostic(this.db, 'info', 'coordinator', 'another round holds this binding, skipping', {
+      await logDiagnostic(this.db, 'info', 'coordinator', '另一轮正在处理该绑定，本轮跳过', {
         bindingId,
       });
       return 'busy';
@@ -92,13 +92,13 @@ export class SyncCoordinator {
             state: 'needs_recovery',
             recovery: { code: err.code, message: err.message },
           });
-          await logDiagnostic(this.db, 'error', 'coordinator', 'binding cannot be synced from this replica, needs recovery', {
+          await logDiagnostic(this.db, 'error', 'coordinator', '该副本无法同步此绑定，需要恢复', {
             bindingId: b.id,
             code: err.code,
           });
           return 'needs-recovery';
         }
-        await logDiagnostic(this.db, 'warn', 'coordinator', 'sync round failed, will retry later', {
+        await logDiagnostic(this.db, 'warn', 'coordinator', '本轮同步失败，稍后重试', {
           bindingId: b.id,
           error: String(err),
         });
@@ -158,7 +158,7 @@ export class SyncCoordinator {
             state: 'needs_recovery',
             recovery: { code: err.code, message: err.message },
           });
-          await logDiagnostic(this.db, 'error', 'coordinator', 'remote change targets a lost mapping', {
+          await logDiagnostic(this.db, 'error', 'coordinator', '远端改动指向已丢失的映射', {
             bindingId: b.id,
             revision: rec.revision,
             kind: err.kind,
@@ -196,7 +196,7 @@ export class SyncCoordinator {
       try {
         if ((await this.syncBinding(b.id)) === 'busy') busy = true;
       } catch (err) {
-        await logDiagnostic(this.db, 'error', 'coordinator', 'unexpected sync failure', {
+        await logDiagnostic(this.db, 'error', 'coordinator', '未预期的同步失败', {
           bindingId: b.id,
           error: String(err),
         });
@@ -300,14 +300,14 @@ export class SyncCoordinator {
               settleAfterRevision: Number.MAX_SAFE_INTEGER,
             },
           });
-          await logDiagnostic(this.db, 'error', 'coordinator', 'transfer rejected by server', {
+          await logDiagnostic(this.db, 'error', 'coordinator', '跨空间搬运被服务端拒绝', {
             bindingId: op.bindingId,
             opId: op.opId,
             code: err.code,
           });
           continue;
         }
-        await logDiagnostic(this.db, 'warn', 'coordinator', 'transfer upload failed, will retry', {
+        await logDiagnostic(this.db, 'warn', 'coordinator', '跨空间搬运上传失败，稍后重试', {
           bindingId: op.bindingId,
           opId: op.opId,
           error: String(err),
@@ -349,7 +349,7 @@ export class SyncCoordinator {
       }
       await this.db.pendingOps.delete(op.opId);
     });
-    await logDiagnostic(this.db, 'info', 'coordinator', 'cross-space transfer acked, mappings rebuilt', {
+    await logDiagnostic(this.db, 'info', 'coordinator', '跨空间搬运已确认，映射已重建', {
       bindingId: op.bindingId,
       opId: op.opId,
       nodes: resp.mapping.length,

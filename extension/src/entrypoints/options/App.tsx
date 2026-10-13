@@ -51,6 +51,7 @@ import { PairingForm } from '../../ui/PairingForm';
 import { createRuntime, errText, wakeWorker } from '../../ui/runtime';
 import { StartPageSettings } from '../../ui/StartPageSettings';
 import { bindingStatus, relTime, sortBindings } from '../../ui/bindingStatus';
+import { levelLabel, scopeLabel } from '../../ui/diagnosticLabels';
 import { PontisLogo } from '../../ui/PontisLogo';
 import { chromeApi } from '../../runtime/chromeApi';
 
@@ -759,12 +760,12 @@ export function App() {
                               variant="light"
                               color={d.level === 'error' ? 'errorRed' : d.level === 'warn' ? 'warningAmber' : 'coolGray'}
                             >
-                              {d.level}
+                              {levelLabel(d.level)}
                             </Badge>
                           </Table.Td>
                           <Table.Td>
                             <Text size="xs" c="dimmed">
-                              {d.scope}
+                              {scopeLabel(d.scope)}
                             </Text>
                           </Table.Td>
                           <Table.Td>

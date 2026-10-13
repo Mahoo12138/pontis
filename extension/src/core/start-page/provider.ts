@@ -211,7 +211,7 @@ async function refresh(
   // A body describing a different folder than the one this read named is not
   // this page's content, whatever else is true of it.
   if (snapshot.source.folder_id !== config.folderId || snapshot.source.space_id !== config.spaceId) {
-    await logDiagnostic(deps.db, 'warn', 'start-page', 'snapshot identity did not match the request', {
+    await logDiagnostic(deps.db, 'warn', 'start-page', '快照身份与请求不符', {
       deviceId: config.deviceId,
       asked: config.folderId,
       returned: snapshot.source.folder_id,
@@ -230,7 +230,7 @@ async function refresh(
     await install(deps.db, record);
   } catch (error) {
     // A write that cannot be made must not take the good copy with it (§14.3).
-    await logDiagnostic(deps.db, 'error', 'start-page', 'snapshot could not be stored', {
+    await logDiagnostic(deps.db, 'error', 'start-page', '快照未能保存', {
       reason: error instanceof Error ? error.name : 'unknown',
     });
     return {
@@ -333,7 +333,7 @@ async function failureView(
 
   if (stops.has(code)) {
     await dropSnapshotsFor(deps.db, config.deviceId);
-    await logDiagnostic(deps.db, 'warn', 'start-page', 'source stopped being readable', {
+    await logDiagnostic(deps.db, 'warn', 'start-page', '来源不再可读', {
       code,
       deviceId: config.deviceId,
     });

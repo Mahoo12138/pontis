@@ -152,7 +152,7 @@ export class RemoteChangeApplier {
             await this.advanceApplied(b, exp.revision);
           });
         } else {
-          await logDiagnostic(this.db, 'warn', 'applier', 'unresolved create expectation needs reconciliation', {
+          await logDiagnostic(this.db, 'warn', 'applier', '未落定的新建预期需要对账', {
             bindingId,
             exp,
           });
@@ -165,7 +165,7 @@ export class RemoteChangeApplier {
         // The mapping the expectation points at is gone. Dropping the
         // expectation and advancing would mark an unapplied revision as
         // reached; keep it so the binding stays visibly unfixed.
-        await logDiagnostic(this.db, 'error', 'applier', 'recovery: expectation has no mapping to verify, needs recovery', {
+        await logDiagnostic(this.db, 'error', 'applier', '恢复：预期没有可校验的映射，需要恢复', {
           bindingId,
           exp,
         });
@@ -194,7 +194,7 @@ export class RemoteChangeApplier {
       } else {
         // Not satisfied: leave the expectation; the next incremental round
         // re-applies through the normal ensure-state path.
-        await logDiagnostic(this.db, 'info', 'applier', 'recovery: expectation not satisfied, will re-apply', {
+        await logDiagnostic(this.db, 'info', 'applier', '恢复：预期未达成，将重新应用', {
           bindingId,
           exp,
         });
@@ -216,7 +216,7 @@ export class RemoteChangeApplier {
       return;
     }
     if (parent.kind === 'missing') {
-      await logDiagnostic(this.db, 'error', 'applier', 'create with unmapped parent, binding needs recovery', {
+      await logDiagnostic(this.db, 'error', 'applier', '新建的父目录未映射，该绑定需要恢复', {
         bindingId: binding.id,
         change,
         ref: parent.ref,
@@ -329,7 +329,7 @@ export class RemoteChangeApplier {
       });
       await this.advanceApplied(b, change.revision);
     });
-    await logDiagnostic(this.db, 'info', 'applier', 'local create adopted canonical id from ack', {
+    await logDiagnostic(this.db, 'info', 'applier', '本机新建已采用服务端确认的规范 id', {
       bindingId: binding.id,
       browserId: op.browserId,
       canonicalId: change.node_id,
@@ -349,7 +349,7 @@ export class RemoteChangeApplier {
       // Applied revisions are contiguous, so the create for this node either
       // landed here or was acknowledged as satisfied. A missing mapping means
       // local state was lost; skipping would hide it from any later repair.
-      await logDiagnostic(this.db, 'error', 'applier', 'update for unmapped node, binding needs recovery', {
+      await logDiagnostic(this.db, 'error', 'applier', '更新目标未映射，该绑定需要恢复', {
         bindingId: binding.id,
         change,
       });
@@ -400,7 +400,7 @@ export class RemoteChangeApplier {
   ): Promise<void> {
     const mirror = await findMirrorByCanonical(this.db, binding.id, change.node_id);
     if (!mirror?.browserId) {
-      await logDiagnostic(this.db, 'error', 'applier', 'move for unmapped node, binding needs recovery', {
+      await logDiagnostic(this.db, 'error', 'applier', '移动目标未映射，该绑定需要恢复', {
         bindingId: binding.id,
         change,
       });
@@ -412,7 +412,7 @@ export class RemoteChangeApplier {
       return;
     }
     if (parent.kind === 'missing') {
-      await logDiagnostic(this.db, 'error', 'applier', 'move with unmapped parent, binding needs recovery', {
+      await logDiagnostic(this.db, 'error', 'applier', '移动后的父目录未映射，该绑定需要恢复', {
         bindingId: binding.id,
         change,
         ref: parent.ref,

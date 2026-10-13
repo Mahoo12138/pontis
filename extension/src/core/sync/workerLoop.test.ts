@@ -185,7 +185,7 @@ describe('one round per binding across triggers', () => {
     expect(slow.calls[0]?.ops).toBe(1);
     transport = slow;
     // The others did not quietly do nothing: they said why.
-    expect(await messages('coordinator')).toContain('another round holds this binding, skipping');
+    expect(await messages('coordinator')).toContain('另一轮正在处理该绑定，本轮跳过');
     });
 });
 
@@ -228,7 +228,7 @@ describe('what each trigger is allowed to touch', () => {
     await expect(loop.runSync('alarm')).resolves.toBeUndefined();
 
     expect(reconciler.run).toEqual([bindingId, otherBinding]);
-    expect(await messages('background')).toContain('reconciliation round failed');
+    expect(await messages('background')).toContain('本轮对账失败');
   });
 
   it('attempts recovery for a stuck binding without failing the round', async () => {
@@ -262,7 +262,7 @@ describe('what each trigger is allowed to touch', () => {
     expect((await db.bindings.get(bindingId))?.state).toBe('needs_recovery');
     expect(resyncDriver.calls).toEqual([bindingId]);
     expect(transport.calls.map((c) => c.bindingId)).toEqual([otherBinding]);
-    expect(await messages('background')).not.toContain('recovery attempt failed');
+    expect(await messages('background')).not.toContain('恢复尝试失败');
   });
 
   it('resumes a recovery the trigger ordering would otherwise strand', async () => {

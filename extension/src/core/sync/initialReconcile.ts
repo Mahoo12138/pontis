@@ -161,7 +161,7 @@ export class InitialReconciler {
           state: 'needs_recovery',
           recovery: { code: 'RECONCILIATION_SUPERSEDED', message: 'the space baseline was replaced' },
         });
-        await logDiagnostic(this.db, 'warn', 'initial-reconcile', 'server session is closed, binding needs recovery', {
+        await logDiagnostic(this.db, 'warn', 'initial-reconcile', '服务端会话已关闭，该绑定需要恢复', {
           bindingId: binding.id,
           sessionId: sess.id,
         });
@@ -173,7 +173,7 @@ export class InitialReconciler {
         session.progress = { ...session.progress, ambiguous: env.issues.length };
         await this.touch(session);
         await this.db.bindings.update(binding.id, { state: 'waiting_user' });
-        await logDiagnostic(this.db, 'info', 'initial-reconcile', 'server plan needs an answer', {
+        await logDiagnostic(this.db, 'info', 'initial-reconcile', '服务端方案需要作答', {
           bindingId: binding.id,
           sessionId: sess.id,
           issues: env.issues.map((i) => i.id),
@@ -295,7 +295,7 @@ export class InitialReconciler {
         await this.db.remoteChanges.where('bindingId').equals(bindingId).delete();
       },
     );
-    await logDiagnostic(this.db, 'info', 'initial-reconcile', 'mount remounted, mapping recovered', {
+    await logDiagnostic(this.db, 'info', 'initial-reconcile', '挂载目录已重新挂载，映射已恢复', {
       bindingId,
       folderBrowserId,
     });
@@ -331,7 +331,7 @@ export class InitialReconciler {
         session.state = 'FAILED';
         session.error = 'the declared mapping was refused; re-matching from scratch';
         await this.touch(session);
-        await logDiagnostic(this.db, 'warn', 'initial-reconcile', 'resync mapping refused, falling back to re-matching', {
+        await logDiagnostic(this.db, 'warn', 'initial-reconcile', '重新同步声明的映射被拒绝，改用重新匹配', {
           bindingId,
           message: err.message,
         });
@@ -345,7 +345,7 @@ export class InitialReconciler {
         session.error = 'the binding owes a first reconciliation';
         await this.touch(session);
         await this.db.bindings.update(bindingId, { state: 'pending_initial' });
-        await logDiagnostic(this.db, 'info', 'initial-reconcile', 'resync deferred to a first reconciliation', {
+        await logDiagnostic(this.db, 'info', 'initial-reconcile', '重新同步推迟到首次对账', {
           bindingId,
         });
         return 'idle';
@@ -366,7 +366,7 @@ export class InitialReconciler {
     const session = await activeReconSession(this.db, bindingId);
     if (session?.driver !== 'server') return 'idle';
     if (session.state === 'WAITING_USER') return 'waiting_user';
-    await logDiagnostic(this.db, 'info', 'initial-reconcile', 'resuming the interrupted reconciliation', {
+    await logDiagnostic(this.db, 'info', 'initial-reconcile', '继续被中断的对账', {
       bindingId,
       sessionType: session.type,
       bindingState: binding.state,
@@ -495,7 +495,7 @@ export class InitialReconciler {
           `initialReconcile: binding ${binding.id} already runs a ${env.session.type} reconciliation, not a ${type}`,
         );
       }
-      await logDiagnostic(this.db, 'warn', 'initial-reconcile', 'adopted the binding orphaned reconciliation session', {
+      await logDiagnostic(this.db, 'warn', 'initial-reconcile', '接管了该绑定遗留的对账会话', {
         bindingId: binding.id,
         sessionId: env.session.id,
         type,
@@ -547,7 +547,7 @@ export class InitialReconciler {
       await this.transport.commitReconciliation(sessionId);
     } catch (err) {
       if (err instanceof ApiError && err.code === 'PLAN_STALE') {
-        await logDiagnostic(this.db, 'info', 'initial-reconcile', 'plan went stale, previewing the new target', {
+        await logDiagnostic(this.db, 'info', 'initial-reconcile', '方案已过期，正在预览新的目标', {
           bindingId: binding.id,
           sessionId,
         });
@@ -575,7 +575,7 @@ export class InitialReconciler {
     // hide every node that never landed.
     const problems = await verifyAppliedSteps(this.db, this.adapter, binding.id, steps);
     if (problems.length > 0) {
-      await logDiagnostic(this.db, 'error', 'initial-reconcile', 'applied plan is not satisfied, retrying next round', {
+      await logDiagnostic(this.db, 'error', 'initial-reconcile', '已应用的方案未达成，下一轮重试', {
         bindingId: binding.id,
         sessionId,
         problems: problems.slice(0, 10),
@@ -629,7 +629,7 @@ export class InitialReconciler {
     session.issues = undefined;
     session.serverPhase = env.session.phase;
     await this.touch(session);
-    await logDiagnostic(this.db, 'info', 'initial-reconcile', 'initial reconciliation completed', {
+    await logDiagnostic(this.db, 'info', 'initial-reconcile', '初始对账已完成', {
       bindingId: binding.id,
       sessionId: env.session.id,
       baselineRevision: revision,

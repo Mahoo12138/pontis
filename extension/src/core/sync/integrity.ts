@@ -34,7 +34,7 @@ export async function integrityCheck(
   const ratio = scope > 0 ? missing / scope : missing > 0 ? 1 : 0;
 
   if (serious(pre).length === 0) {
-    await logDiagnostic(db, 'debug', 'integrity', 'integrity check passed', { bindingId, scope });
+    await logDiagnostic(db, 'debug', 'integrity', '完整性检查通过', { bindingId, scope });
     return 'ok';
   }
 
@@ -43,7 +43,7 @@ export async function integrityCheck(
       db,
       'warn',
       'integrity',
-      'mapping loss exceeds threshold; a recovery reconciliation is needed',
+      '映射丢失超过阈值，需要一次恢复对账',
       { bindingId, missing, scope, ratio },
     );
     return 'mapping_lost';
@@ -56,7 +56,7 @@ export async function integrityCheck(
     db,
     repaired ? 'info' : 'error',
     'integrity',
-    repaired ? 'minor drift repaired' : 'repair verification failed',
+    repaired ? '轻微漂移已修复' : '修复后校验失败',
     { bindingId, pre: pre.problems, post: post.problems },
   );
   return repaired ? 'repaired' : 'failed';

@@ -109,7 +109,7 @@ export class EventProcessor {
     }
     if (provisional.length > 1) {
       // Ambiguity: never guess (doc 05 §9) — leave it to reconciliation.
-      await logDiagnostic(this.db, 'warn', 'event-processor', 'ambiguous create expectation, skipped', {
+      await logDiagnostic(this.db, 'warn', 'event-processor', '新建预期有歧义，已跳过', {
         bindingId: binding.id,
         node,
       });
@@ -146,7 +146,7 @@ export class EventProcessor {
 
     const parentRef = await this.canonicalParentRef(binding, node.parentId);
     if (!parentRef) {
-      await logDiagnostic(this.db, 'warn', 'event-processor', 'local create under unmapped parent, skipped', {
+      await logDiagnostic(this.db, 'warn', 'event-processor', '本机新建位于未映射的父目录下，已跳过', {
         bindingId: binding.id,
         node,
       });
@@ -253,7 +253,7 @@ export class EventProcessor {
         );
         return 'local-op';
       }
-      await logDiagnostic(this.db, 'warn', 'event-processor', 'change on unmapped local node dropped', {
+      await logDiagnostic(this.db, 'warn', 'event-processor', '未映射本机节点的改动已丢弃', {
         bindingId: binding.id,
         node,
       });
@@ -375,7 +375,7 @@ export class EventProcessor {
 
     const parentRef = await this.canonicalParentRef(binding, node.parentId);
     if (!parentRef) {
-      await logDiagnostic(this.db, 'warn', 'event-processor', 'local move to unmapped parent, skipped', {
+      await logDiagnostic(this.db, 'warn', 'event-processor', '本机移动到未映射的父目录，已跳过', {
         bindingId: binding.id,
         node,
       });
@@ -413,7 +413,7 @@ export class EventProcessor {
     // Mount root deletion is not a canonical DELETE (doc 03 §5).
     if (binding.mount.mode === 'partial' && node.id === binding.mount.folderBrowserId) {
       await this.db.bindings.update(binding.id, { state: 'mount_missing' });
-      await logDiagnostic(this.db, 'warn', 'event-processor', 'mount root deleted; binding paused as mount_missing', {
+      await logDiagnostic(this.db, 'warn', 'event-processor', '挂载根目录被删除，绑定已暂停（缺少挂载目录）', {
         bindingId: binding.id,
       });
       return 'ignored';

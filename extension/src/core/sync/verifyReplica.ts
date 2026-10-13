@@ -100,7 +100,7 @@ export class ReplicaVerifier {
       await this.coordinator.syncBinding(bindingId);
       if ((await this.uploadPassAll(bindingId)) === 0 && (await this.isQuiescent(bindingId))) return;
     }
-    await logDiagnostic(this.db, 'warn', 'verify', 'quiesce budget exhausted', { bindingId });
+    await logDiagnostic(this.db, 'warn', 'verify', '静置等待已用尽', { bindingId });
   }
 
   private async uploadPassAll(bindingId: string): Promise<number> {
