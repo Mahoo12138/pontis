@@ -276,46 +276,59 @@ export function App() {
         </div>
       }
     >
-      <nav className="pontis-spCrumbs" aria-label="目录位置">
-        {crumbs.map((node, i) => {
-          const last = i === crumbs.length - 1;
-          return (
-            <span key={node.id} className="pontis-spCrumbGroup">
-              {i > 0 ? <span className="pontis-spSep" aria-hidden>›</span> : null}
-              {last ? (
-                <span className="pontis-spCrumb pontis-spCrumbNow" aria-current="page" title={node.title}>
-                  {node.title}
-                </span>
-              ) : (
-                <button type="button" className="pontis-spCrumb" onClick={() => setFolderId(node.id)} title={node.title}>
-                  {node.title}
-                </button>
-              )}
-            </span>
-          );
-        })}
-      </nav>
+      <div className="pontis-spPanel">
+        <nav className="pontis-spCrumbs" aria-label="目录位置">
+          {crumbs.map((node, i) => {
+            const last = i === crumbs.length - 1;
+            return (
+              <span key={node.id} className="pontis-spCrumbGroup">
+                {i > 0 ? <span className="pontis-spSep" aria-hidden>›</span> : null}
+                {last ? (
+                  <span className="pontis-spCrumb pontis-spCrumbNow" aria-current="page" title={node.title}>
+                    {node.title}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="pontis-spCrumb"
+                    onClick={() => setFolderId(node.id)}
+                    title={node.title}
+                  >
+                    {node.title}
+                  </button>
+                )}
+              </span>
+            );
+          })}
+        </nav>
 
-      {items.length === 0 ? (
-        <Emptyish
-          icon={<FolderGlyph />}
-          title="这个文件夹还没有内容"
-          body="在工作台里添加书签后，刷新这里就会看到。"
-          action={
-            <Button size="xs" variant="light" component="a" href={workbenchUrl(serverUrl, snapshot.spaceId)} target="_blank">
-              在工作台管理
-            </Button>
-          }
-        />
-      ) : (
-        <ul className="pontis-spGrid">
-          {items.map((node) => (
-            <li key={node.id}>
-              <Entry node={node} openTarget={openTarget} onOpen={() => setFolderId(node.id)} />
-            </li>
-          ))}
-        </ul>
-      )}
+        {items.length === 0 ? (
+          <Emptyish
+            icon={<FolderGlyph />}
+            title="这个文件夹还没有内容"
+            body="在工作台里添加书签后，刷新这里就会看到。"
+            action={
+              <Button
+                size="xs"
+                variant="light"
+                component="a"
+                href={workbenchUrl(serverUrl, snapshot.spaceId)}
+                target="_blank"
+              >
+                在工作台管理
+              </Button>
+            }
+          />
+        ) : (
+          <ul className="pontis-spGrid">
+            {items.map((node) => (
+              <li key={node.id}>
+                <Entry node={node} openTarget={openTarget} onOpen={() => setFolderId(node.id)} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </Shell>
   );
 }

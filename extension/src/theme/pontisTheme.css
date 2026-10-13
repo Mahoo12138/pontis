@@ -197,6 +197,11 @@ html[data-mantine-color-scheme='dark'] {
   --pontis-hover-bg: var(--mantine-color-coolGray-1);
   --pontis-text-primary: var(--mantine-color-coolGray-8);
   --pontis-text-secondary: var(--mantine-color-coolGray-5);
+  /* Text that has to survive a translucent ground. Mantine's own grey scale
+     (gray-5..7) was tuned against solid surfaces: measured over the search
+     field with a black photograph showing through at full opacity, gray-6
+     reaches 2.2:1 and gray-7 3.3:1. This one reaches 4.7:1. */
+  --pontis-text-muted: var(--mantine-color-coolGray-7);
   --pontis-accent: var(--mantine-color-accentBlue-6);
 }
 
@@ -207,7 +212,19 @@ html[data-mantine-color-scheme='dark'] {
   --pontis-hover-bg: var(--mantine-color-graphite-3);
   --pontis-text-primary: var(--mantine-color-graphite-8);
   --pontis-text-secondary: var(--mantine-color-graphite-7);
+  --pontis-text-muted: var(--mantine-color-graphite-7);
   --pontis-accent: var(--mantine-color-accentBlueDark-6);
+}
+
+/* How much of the page's own colour is laid over a custom background, per
+   layer. The three are stepped on purpose: the header is chrome and lets the
+   most light through, the field and the reading surface are where words have
+   to be parsed, so they hold enough ground to stand on whatever is behind
+   them. */
+:root {
+  --pontis-glass-chrome: 70%;
+  --pontis-glass-field: 80%;
+  --pontis-glass-surface: 82%;
 }
 
 /* A page is a 56px bar over a padded content column, capped at the width the
@@ -305,15 +322,15 @@ html[data-mantine-color-scheme='dark'] {
   position: sticky;
   top: 0;
   z-index: 3;
-  /* Tall enough to hold the search field, which docks inside this row rather
-     than under it. Height, not padding, so the title and the status line stay
-     on the vertical centre line the field lands on. */
-  min-height: 72px;
+  /* Just tall enough to hold the search field with a little air above and below
+     it. Any more and the chrome starts competing with the folder for the
+     viewport. Height rather than padding, so the field docks centred. */
+  min-height: 60px;
   padding: 0 28px;
   border-bottom: 1px solid var(--mantine-color-gray-2);
   /* Frosted rather than solid: the background image belongs to the window, and
      an opaque bar would cut it in half. */
-  background: color-mix(in srgb, var(--pontis-workspace-bg) 62%, transparent);
+  background: color-mix(in srgb, var(--pontis-workspace-bg) var(--pontis-glass-chrome), transparent);
   backdrop-filter: blur(12px) saturate(1.15);
 }
 
@@ -364,6 +381,31 @@ html[data-mantine-color-scheme='dark'] .pontis-spHead {
   padding: 20px 28px 40px;
 }
 
+/* The reading surface. Over a wallpaper the grid needs its own ground: the
+   background is decoration, the bookmarks are the product, and only one of
+   them should be competing for the eye. Corner is a step up from the field's
+   8px on purpose - interactive parts stay tight, containers stay soft. */
+.pontis-spPanel {
+  border: 1px solid var(--pontis-subtle-border);
+  border-radius: 12px;
+  padding: 18px 20px 22px;
+  background: color-mix(in srgb, var(--pontis-workspace-bg) var(--pontis-glass-surface), transparent);
+  backdrop-filter: blur(16px) saturate(1.2);
+}
+
+/* Transparency is an enhancement here, not the design. Where the OS asks for
+   reduced transparency, every glass surface on this page falls back to the
+   plain workspace colour so contrast stops depending on a blur the user has
+   turned off. */
+@media (prefers-reduced-transparency: reduce) {
+  .pontis-spHead,
+  .pontis-spSearchBox,
+  .pontis-spPanel {
+    background: var(--pontis-workspace-bg);
+    backdrop-filter: none;
+  }
+}
+
 .pontis-spCrumbs {
   display: flex;
   flex-wrap: wrap;
@@ -371,7 +413,7 @@ html[data-mantine-color-scheme='dark'] .pontis-spHead {
   gap: 4px;
   margin-bottom: 16px;
   font-size: 13px;
-  color: var(--mantine-color-gray-6);
+  color: var(--pontis-text-muted);
 }
 
 .pontis-spCrumbGroup {
@@ -483,7 +525,7 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
 .pontis-spEntryMeta {
   font-size: 12px;
   line-height: 16px;
-  color: var(--mantine-color-gray-6);
+  color: var(--pontis-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -492,6 +534,13 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
 /* ─── Start page: search ───────────────────────────────────────────────────
    The result list is the only floating layer here, so it is the only thing
    with a shadow (start-page doc §10). */
+
+/* Mantine's `c=\"dimmed\"` resolves through this variable. Left at the tool's
+   default it is unreadable on the start page's glass, and the start page is the
+   only surface that sits on a photograph, so the override stays local. */
+.pontis-page {
+  --mantine-color-dimmed: var(--pontis-text-muted);
+}
 
 .pontis-spSearchArea {
   --pontis-sp-field-h: 44px;
@@ -502,7 +551,7 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
      that row carries a min-height: the field ends up on top of the band, not
      below it. The row's real height is measured by the page, so the field stays
      centred even when the status text makes the band taller. */
-  top: calc((var(--pontis-sp-head-h, 72px) - var(--pontis-sp-field-h)) / 2);
+  top: calc((var(--pontis-sp-head-h, 60px) - var(--pontis-sp-field-h)) / 2);
   /* Above the title row, which paints its own background at z-index 3. */
   z-index: 4;
   /* The drop it starts at. Margin rather than padding, so the sticky offset
@@ -522,7 +571,7 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
    it is meant to sit between, so it parks under the row instead of inside it. */
 @media (max-width: 920px) {
   .pontis-spSearchArea {
-    top: calc(var(--pontis-sp-head-h, 72px) + 12px);
+    top: calc(var(--pontis-sp-head-h, 60px) + 12px);
   }
 }
 
@@ -540,17 +589,19 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
   padding: 0 6px 0 8px;
   border: 1px solid var(--mantine-color-gray-3);
   border-radius: 8px;
-  /* A field, not a sheet of paper. The band behind it is already frosted, so
-     this only adds a little more ground for the text to sit on and lets the
-     wallpaper read through. */
-  background: color-mix(in srgb, var(--pontis-workspace-bg) 34%, transparent);
-  /* Once pinned, bookmark rows pass behind this field. Blurring the backdrop
-     keeps them from reading through the placeholder and the typed query. */
-  backdrop-filter: blur(14px) saturate(1.15);
+  background: color-mix(in srgb, var(--pontis-workspace-bg) var(--pontis-glass-field), transparent);
+  /* Once docked, bookmark rows pass behind this field. The blur keeps them from
+     reading through the placeholder and the typed query. */
+  backdrop-filter: blur(16px) saturate(1.2);
+  /* Web approximation of frosted glass, not a port of any platform material:
+     ground colour, backdrop blur, plus a light inner edge so the field reads as
+     a surface with thickness rather than a hole cut in the page. */
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.45);
 }
 
 html[data-mantine-color-scheme='dark'] .pontis-spSearchBox {
   border-color: var(--mantine-color-dark-4);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08);
 }
 
 .pontis-spSearchBox:focus-within {
@@ -572,7 +623,7 @@ html[data-mantine-color-scheme='dark'] .pontis-spSearchBox {
   height: 30px;
   padding: 0 8px;
   background: transparent;
-  color: var(--mantine-color-gray-7);
+  color: var(--pontis-text-muted);
   font: inherit;
   font-size: 12px;
   white-space: nowrap;
@@ -600,7 +651,10 @@ html[data-mantine-color-scheme='dark'] .pontis-spModeSwitch:hover {
 }
 
 .pontis-spSearchInput::placeholder {
-  color: var(--mantine-color-gray-5);
+  color: var(--pontis-text-muted);
+  /* The engine default is a faded grey on top of the colour, which is the wrong
+     direction on a field that is already see-through. */
+  opacity: 1;
 }
 
 .pontis-spSearchNotice {
@@ -685,7 +739,7 @@ html[data-mantine-color-scheme='dark'] .pontis-spResultRow:hover {
 .pontis-spResultPath {
   font-size: 12px;
   line-height: 16px;
-  color: var(--mantine-color-gray-6);
+  color: var(--pontis-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
