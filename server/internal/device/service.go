@@ -26,6 +26,12 @@ type Store interface {
 	// TouchCredential updates credential last_used_at.
 	TouchCredential(ctx context.Context, credID string, at time.Time) error
 
+	// TouchDevice updates the device's last_seen_at. It is tracked apart from
+	// the credential because a device outlives the token it currently holds:
+	// rotating or re-issuing a credential must not reset when the browser was
+	// last heard from.
+	TouchDevice(ctx context.Context, deviceID string, at time.Time) error
+
 	// RevokeDevice marks the device and all its credentials revoked.
 	RevokeDevice(ctx context.Context, deviceID string, at time.Time) error
 
@@ -132,7 +138,12 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Device, Crede
 	if !dev.RevokedAt.IsZero() {
 		return Device{}, Credential{}, ErrDeviceRevoked
 	}
-	_ = s.store.TouchCredential(ctx, cred.ID, time.Now().UTC())
+	// One timestamp for both: they are read side by side on the devices page,
+	// and two clock readings would show a device and its credential disagreeing
+	// by however long the round trip took.
+	now := time.Now().UTC()
+	_ = s.store.TouchCredential(ctx, cred.ID, now)
+	_ = s.store.TouchDevice(ctx, dev.ID, now)
 	return dev, cred, nil
 }
 

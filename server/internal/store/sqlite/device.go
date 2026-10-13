@@ -132,6 +132,13 @@ func (s *DeviceStore) TouchCredential(ctx context.Context, credID string, at tim
 	return err
 }
 
+// TouchDevice updates the device's last_seen_at.
+func (s *DeviceStore) TouchDevice(ctx context.Context, deviceID string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE devices SET last_seen_at = ? WHERE id = ?`, formatTime(at), deviceID)
+	return err
+}
+
 // RevokeDevice marks the device and all its credentials revoked.
 func (s *DeviceStore) RevokeDevice(ctx context.Context, deviceID string, at time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)

@@ -127,6 +127,48 @@ func TestAuthenticateGatesOnOwnerAccountStatus(t *testing.T) {
 	}
 }
 
+func TestAuthenticateStampsDeviceLastSeen(t *testing.T) {
+	svc, h := setupDeviceTest(t)
+	ctx := context.Background()
+
+	dev, secret, err := svc.RegisterDevice(ctx, "u1", "Edge@Home", "extension", "edge", "windows")
+	if err != nil {
+		t.Fatalf("RegisterDevice: %v", err)
+	}
+	seenAt := func() string {
+		t.Helper()
+		var seen sql.NullString
+		if err := h.db.QueryRowContext(ctx, `SELECT last_seen_at FROM devices WHERE id = ?`, dev.ID).Scan(&seen); err != nil {
+			t.Fatal(err)
+		}
+		return seen.String
+	}
+
+	// The devices page reads this column and says "从未连接" when it is empty,
+	// so a browser that has paired and synced must not still look never-seen.
+	if got := seenAt(); got != "" {
+		t.Fatalf("a device that never authenticated should have no last_seen_at, got %q", got)
+	}
+	if _, _, err := svc.Authenticate(ctx, secret); err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	stamped := seenAt()
+	if stamped == "" {
+		t.Fatalf("the accepted attempt should have stamped devices.last_seen_at")
+	}
+
+	// A refused credential is not activity, same rule as the credential stamp.
+	if _, err := h.db.ExecContext(ctx, `UPDATE users SET status = 'disabled' WHERE id = 'u1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Authenticate(ctx, secret); !errors.Is(err, device.ErrAccountDisabled) {
+		t.Fatalf("disabled owner: err = %v, want ErrAccountDisabled", err)
+	}
+	if after := seenAt(); after != stamped {
+		t.Errorf("disabled owner moved last_seen_at from %q to %q", stamped, after)
+	}
+}
+
 func TestBindSpaceLifecycle(t *testing.T) {
 	svc, h := setupDeviceTest(t)
 	ctx := context.Background()
