@@ -381,18 +381,6 @@ html[data-mantine-color-scheme='dark'] .pontis-spHead {
   padding: 20px 28px 40px;
 }
 
-/* The reading surface. Over a wallpaper the grid needs its own ground: the
-   background is decoration, the bookmarks are the product, and only one of
-   them should be competing for the eye. Corner is a step up from the field's
-   8px on purpose - interactive parts stay tight, containers stay soft. */
-.pontis-spPanel {
-  border: 1px solid var(--pontis-subtle-border);
-  border-radius: 12px;
-  padding: 18px 20px 22px;
-  background: color-mix(in srgb, var(--pontis-workspace-bg) var(--pontis-glass-surface), transparent);
-  backdrop-filter: blur(16px) saturate(1.2);
-}
-
 /* Transparency is an enhancement here, not the design. Where the OS asks for
    reduced transparency, every glass surface on this page falls back to the
    plain workspace colour so contrast stops depending on a blur the user has
@@ -400,7 +388,8 @@ html[data-mantine-color-scheme='dark'] .pontis-spHead {
 @media (prefers-reduced-transparency: reduce) {
   .pontis-spHead,
   .pontis-spSearchBox,
-  .pontis-spPanel {
+  .pontis-spEntry,
+  .pontis-spCrumb {
     background: var(--pontis-workspace-bg);
     backdrop-filter: none;
   }
@@ -430,9 +419,9 @@ html[data-mantine-color-scheme='dark'] .pontis-spHead {
 .pontis-spCrumb {
   appearance: none;
   border: 0;
-  background: transparent;
-  padding: 2px 6px;
-  border-radius: 6px;
+  background: color-mix(in srgb, var(--pontis-workspace-bg) var(--pontis-glass-surface), transparent);
+  padding: 4px 10px;
+  border-radius: 8px;
   font: inherit;
   color: inherit;
   max-width: 240px;
@@ -443,12 +432,8 @@ html[data-mantine-color-scheme='dark'] .pontis-spHead {
 }
 
 .pontis-spCrumb:hover {
-  background: var(--mantine-color-gray-1);
+  background: color-mix(in srgb, var(--pontis-workspace-bg) 96%, transparent);
   color: var(--mantine-color-text);
-}
-
-html[data-mantine-color-scheme='dark'] .pontis-spCrumb:hover {
-  background: var(--mantine-color-dark-5);
 }
 
 .pontis-spCrumbNow {
@@ -479,7 +464,12 @@ html[data-mantine-color-scheme='dark'] .pontis-spCrumb:hover {
   padding: 0 12px;
   border: 0;
   border-radius: 8px;
-  background: transparent;
+  /* One ground per bookmark, not one slab behind the grid: the wallpaper stays
+     visible between the tiles, and each entry still has a surface firm enough
+     for its own two lines of text. No backdrop-filter here on purpose - a
+     hundred scrolling tiles each opening a backdrop is a repaint cost paid on
+     every frame, and at this opacity the blur would buy nothing. */
+  background: color-mix(in srgb, var(--pontis-workspace-bg) var(--pontis-glass-surface), transparent);
   color: inherit;
   font: inherit;
   text-align: left;
@@ -489,12 +479,10 @@ html[data-mantine-color-scheme='dark'] .pontis-spCrumb:hover {
   transition: background-color 100ms;
 }
 
+/* Hover stays a background change and nothing else (spec section 10): the tile
+   firms up rather than picking up a shadow. */
 .pontis-spEntry:hover {
-  background: var(--mantine-color-gray-1);
-}
-
-html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
-  background: var(--mantine-color-dark-6);
+  background: color-mix(in srgb, var(--pontis-workspace-bg) 96%, transparent);
 }
 
 .pontis-spEntryIcon {
@@ -504,7 +492,9 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--mantine-color-gray-6);
+  /* The glyph is how a folder is told from a bookmark at a glance, so it is
+     held to non-text contrast (3:1) rather than treated as decoration. */
+  color: var(--pontis-text-muted);
 }
 
 .pontis-spEntryText {
