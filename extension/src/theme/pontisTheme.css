@@ -301,25 +301,33 @@ html[data-mantine-color-scheme='dark'] {
   flex-direction: column;
 }
 
-.pontis-spHead {
-  /* Stays put while the folder scrolls, so the title and the "how fresh is
-     this" line are never off-screen on a long list. */
+/* The pinned band: the title row and the search row together. They stick as one
+   block because the search row would otherwise need the title row's measured
+   height as its own sticky offset, and that height moves with the colour
+   scheme, the zoom level and how long the status text is. */
+.pontis-spTopBar {
   position: sticky;
   top: 0;
   z-index: 2;
-  padding: 14px 28px;
   border-bottom: 1px solid var(--mantine-color-gray-2);
-  /* Translucent rather than solid: the background image belongs to the window,
-     and an opaque bar would cut it in half. The blur carries the text over the
-     rows that scroll beneath it. */
-  background: color-mix(in srgb, var(--pontis-workspace-bg) 82%, transparent);
-  backdrop-filter: blur(8px);
+  /* Frosted rather than solid: the background image belongs to the window, and
+     an opaque bar would cut it in half. */
+  background: color-mix(in srgb, var(--pontis-workspace-bg) 62%, transparent);
+  backdrop-filter: blur(12px) saturate(1.15);
 }
 
 @supports not (backdrop-filter: blur(2px)) {
-  .pontis-spHead {
+  .pontis-spTopBar {
     background: var(--pontis-workspace-bg);
   }
+}
+
+html[data-mantine-color-scheme='dark'] .pontis-spTopBar {
+  border-bottom-color: var(--mantine-color-dark-4);
+}
+
+.pontis-spHead {
+  padding: 14px 28px;
 }
 
 .pontis-spTitle {
@@ -351,16 +359,12 @@ html[data-mantine-color-scheme='dark'] {
   );
 }
 
-html[data-mantine-color-scheme='dark'] .pontis-spHead {
-  border-bottom-color: var(--mantine-color-dark-4);
-}
-
 .pontis-spBody {
   flex: 1;
   width: 100%;
   max-width: 1120px;
   margin: 0 auto;
-  padding: 24px 28px 40px;
+  padding: 20px 28px 40px;
 }
 
 .pontis-spCrumbs {
@@ -495,12 +499,12 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
 .pontis-spSearchArea {
   display: flex;
   justify-content: center;
-  padding: 56px 0 28px;
+  padding: 4px 28px 18px;
 }
 
 @media (max-height: 700px) {
   .pontis-spSearchArea {
-    padding: 24px 0 18px;
+    padding: 2px 28px 12px;
   }
 }
 
@@ -518,11 +522,26 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
   padding: 0 6px 0 8px;
   border: 1px solid var(--mantine-color-gray-3);
   border-radius: 8px;
-  background: var(--mantine-color-body);
+  /* A field, not a sheet of paper. The band behind it is already frosted, so
+     this only adds a little more ground for the text to sit on and lets the
+     wallpaper read through. */
+  background: color-mix(in srgb, var(--pontis-workspace-bg) 34%, transparent);
 }
 
 html[data-mantine-color-scheme='dark'] .pontis-spSearchBox {
   border-color: var(--mantine-color-dark-4);
+}
+
+.pontis-spSearchBox:focus-within {
+  border-color: var(--pontis-accent);
+}
+
+/* The page-wide :focus-visible outline is right for buttons and links and wrong
+   on a field that already has a border — it draws a second rectangle a few
+   pixels outside the first. The border colour change above carries the focus
+   instead, which keeps §7.4's visible-focus promise. */
+.pontis-page .pontis-spSearchInput:focus-visible {
+  outline: none;
 }
 
 .pontis-spModeSwitch {

@@ -262,19 +262,20 @@ export function App() {
           </Button>
         </Group>
       }
+      search={
+        <div className="pontis-spSearchArea">
+          <SearchArea
+            tree={tree}
+            adapter={searchAdapter}
+            initialMode={view?.config?.searchMode ?? 'web'}
+            sourceTitle={tree.sourceTitle}
+            openTarget={openTarget}
+            onModeChange={(mode) => void patchSearchMode(mode)}
+            onNavigate={goTo}
+          />
+        </div>
+      }
     >
-      <div className="pontis-spSearchArea">
-        <SearchArea
-          tree={tree}
-          adapter={searchAdapter}
-          initialMode={view?.config?.searchMode ?? 'web'}
-          sourceTitle={tree.sourceTitle}
-          openTarget={openTarget}
-          onModeChange={(mode) => void patchSearchMode(mode)}
-          onNavigate={goTo}
-        />
-      </div>
-
       <nav className="pontis-spCrumbs" aria-label="目录位置">
         {crumbs.map((node, i) => {
           const last = i === crumbs.length - 1;
@@ -330,20 +331,29 @@ function Shell({
   status,
   title,
   background,
+  search,
 }: {
   children: React.ReactNode;
   status?: React.ReactNode;
   title: string;
   background?: Record<string, string>;
+  /** The search row. It shares the pinned band with the title rather than
+   * sticking on its own, because a second sticky element needs the first one's
+   * measured height as its offset, and that height moves with the colour
+   * scheme, the zoom level and how long the status line is. */
+  search?: React.ReactNode;
 }) {
   return (
     <Box className="pontis-page pontis-spShell" style={background as React.CSSProperties | undefined}>
-      <Group justify="space-between" wrap="nowrap" className="pontis-spHead">
-        <Title order={4} fw={600} className="pontis-spTitle" title={title}>
-          {title}
-        </Title>
-        {status}
-      </Group>
+      <Box className="pontis-spTopBar">
+        <Group justify="space-between" wrap="nowrap" className="pontis-spHead">
+          <Title order={4} fw={600} className="pontis-spTitle" title={title}>
+            {title}
+          </Title>
+          {status}
+        </Group>
+        {search}
+      </Box>
       <Box className="pontis-spBody">{children}</Box>
     </Box>
   );
