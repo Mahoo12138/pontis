@@ -7,6 +7,7 @@ import { createChromiumAdapter } from '../../core/browser/chromium';
 import { countScopeBookmarks } from '../../core/browser/scopeCount';
 import { chromeApi } from '../../runtime/chromeApi';
 import { bindingStatus, recoveryNote, relTime, sortBindings } from '../../ui/bindingStatus';
+import { PontisLogo } from '../../ui/PontisLogo';
 
 export function App() {
   const [bindings, setBindings] = useState<BindingRecord[]>([]);
@@ -66,9 +67,12 @@ export function App() {
   if (bindings.length === 0) {
     return (
       <Stack className="pontis-popup" p="md" gap="sm">
-        <Title order={4} fw={600}>
-          Pontis
-        </Title>
+        <Group gap="xs">
+          <PontisLogo size={22} alt="Pontis" />
+          <Title order={4} fw={600}>
+            Pontis
+          </Title>
+        </Group>
         <Text size="sm" c="dimmed">
           还没有配对，也还没有绑定任何空间。
         </Text>
@@ -85,9 +89,12 @@ export function App() {
   return (
     <Stack className="pontis-popup" gap="xs">
       <Group justify="space-between" wrap="nowrap" px="md" pt="md" pb="xs">
-        <Title order={4} fw={600}>
-          Pontis 同步
-        </Title>
+        <Group gap="xs" wrap="nowrap">
+          <PontisLogo size={22} alt="Pontis" />
+          <Title order={4} fw={600}>
+            Pontis 同步
+          </Title>
+        </Group>
         <Group gap="xs" wrap="nowrap">
           {waiting.length > 0 && (
             <Badge color="warningAmber" variant="filled">

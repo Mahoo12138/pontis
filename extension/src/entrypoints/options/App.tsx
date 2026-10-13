@@ -49,6 +49,7 @@ import { PairingForm } from '../../ui/PairingForm';
 import { createRuntime, errText, wakeWorker } from '../../ui/runtime';
 import { StartPageSettings } from '../../ui/StartPageSettings';
 import { bindingStatus, relTime, sortBindings } from '../../ui/bindingStatus';
+import { PontisLogo } from '../../ui/PontisLogo';
 import { chromeApi } from '../../runtime/chromeApi';
 
 // Built once for the page: a Dexie handle, an ApiClient and a PairingService
@@ -309,6 +310,7 @@ export function App() {
     <div className="pontis-page">
       <header className="pontis-pageHead">
         <Group gap="xs" wrap="nowrap">
+          <PontisLogo size={22} alt="Pontis" />
           <Text className="pontis-pageTitle">Pontis</Text>
           <Text size="md" fw={600}>
             设置

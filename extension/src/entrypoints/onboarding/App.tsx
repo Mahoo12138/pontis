@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Alert, Badge, Box, Button, Group, Stack, Text } from '@mantine/core';
 import { originPatternFor } from '../../core/pairing/pairing';
+import { PontisLogo } from '../../ui/PontisLogo';
 import { createRuntime, errText, wakeWorker } from '../../ui/runtime';
 import { BindForm, type SpaceOption } from '../../ui/BindForm';
 import { PairingForm } from '../../ui/PairingForm';
@@ -98,6 +99,7 @@ export function App() {
     <div className="pontis-page">
       <header className="pontis-pageHead">
         <Group gap="xs" wrap="nowrap">
+          <PontisLogo size={22} alt="Pontis" />
           <Text className="pontis-pageTitle">Pontis</Text>
           <Text size="md" fw={600}>
             初始设置
