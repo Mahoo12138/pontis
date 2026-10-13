@@ -302,12 +302,14 @@ html[data-mantine-color-scheme='dark'] {
 }
 
 .pontis-spHead {
-  /* Stays put while the folder scrolls, so the title and the "how fresh is
-     this" line are never off-screen on a long list. */
   position: sticky;
   top: 0;
   z-index: 3;
-  padding: 14px 28px;
+  /* Tall enough to hold the search field, which docks inside this row rather
+     than under it. Height, not padding, so the title and the status line stay
+     on the vertical centre line the field lands on. */
+  min-height: 72px;
+  padding: 0 28px;
   border-bottom: 1px solid var(--mantine-color-gray-2);
   /* Frosted rather than solid: the background image belongs to the window, and
      an opaque bar would cut it in half. */
@@ -492,14 +494,17 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
    with a shadow (start-page doc §10). */
 
 .pontis-spSearchArea {
+  --pontis-sp-field-h: 44px;
   display: flex;
   justify-content: center;
   position: sticky;
-  /* Where it parks: a short way under the title row, whose height is measured
-   * and published by the page because it moves with the scheme, the zoom and
-   * the length of the status text. */
-  top: calc(var(--pontis-sp-head-h, 58px) + 12px);
-  z-index: 2;
+  /* It keeps rising until it is centred inside the title row — which is why
+     that row carries a min-height: the field ends up on top of the band, not
+     below it. The row's real height is measured by the page, so the field stays
+     centred even when the status text makes the band taller. */
+  top: calc((var(--pontis-sp-head-h, 72px) - var(--pontis-sp-field-h)) / 2);
+  /* Above the title row, which paints its own background at z-index 3. */
+  z-index: 4;
   /* The drop it starts at. Margin rather than padding, so the sticky offset
      applies to the field itself and not to empty space above it — otherwise the
      pinned bar would carry this gap down with it and leave a clear strip for
@@ -513,6 +518,14 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
   }
 }
 
+/* Narrower than this, a 640px field would cover the title and the status line
+   it is meant to sit between, so it parks under the row instead of inside it. */
+@media (max-width: 920px) {
+  .pontis-spSearchArea {
+    top: calc(var(--pontis-sp-head-h, 72px) + 12px);
+  }
+}
+
 .pontis-spSearchWrap {
   position: relative;
   width: 100%;
@@ -523,7 +536,7 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 44px;
+  height: var(--pontis-sp-field-h, 44px);
   padding: 0 6px 0 8px;
   border: 1px solid var(--mantine-color-gray-3);
   border-radius: 8px;
