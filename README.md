@@ -82,10 +82,58 @@ Node 22 + `packageManager` 里钉住的 pnpm。
 | `pnpm test:go:race` | `go test -race ./...`（并发与任务队列只在带 race 时算测过） |
 | `pnpm test:fixtures` | 两组 golden 协议/REST fixture 的漂移检查 |
 | `pnpm dev` | Vite 开发服务器，`/api` 代理到 `:8081` |
-| `pnpm --filter @pontis/extension build` | `wxt build` → `extension/.output/chrome-mv3` |
+| `pnpm dev:test` | 一键启动独立 Go + Vite 测试环境，关闭 Mock |
+| `pnpm e2e:api` | 对已启动的测试环境执行真实 HTTP API E2E |
+| `pnpm dev:extension` | WXT 扩展开发模式 |
+| `pnpm build:extension` | `wxt build` → `extension/.output/chrome-mv3` |
 
 `pnpm test` 用 `--no-bail`：默认的 `-r` 在第一个失败包停下，后面的包根本没跑到，
 聚合退出码会替人撒谎。
+
+### 一键启动测试环境
+
+需要 Node 22+、项目指定版本的 pnpm、Go 和 curl。脚本可从任意目录调用；缺少
+前端依赖时自动执行 `pnpm install --frozen-lockfile --prod=false`，每次启动都会编译当前后端。
+
+```sh
+./scripts/test-env.sh                 # 保留测试数据
+./scripts/test-env.sh --reset-db      # 清空测试数据库及其备份，再启动
+# 也可使用 pnpm dev:test / pnpm dev:test --reset-db
+```
+
+前端：`http://127.0.0.1:5180`；后端：`http://127.0.0.1:8180`。
+前端的 `/api` 代理到该后端，并强制 `VITE_API_MOCK=off`。数据位于
+`.test-env/data/`，日志为 `.test-env/api.log` 和 `.test-env/web.log`。
+脚本忽略部署用的 `config.toml` 和 `PONTIS_DATA_DIR` 等设置，不会重置
+`data/` 或 `server/data/`。全新数据库由后端自动迁移，首次使用可在页面创建管理员。
+
+命令在前台运行，显示 `Test environment ready` 后即可使用；Ctrl-C 会停止两个服务，
+默认保留数据。重复启动、端口占用或任一服务退出都会报错；不会自动切换端口。
+异常强杀后若留下 `.test-env/run.lock/`，先确认其中 `*.pid` 对应的进程均已停止，
+再删除该锁目录。需要换端口时：
+
+```sh
+./scripts/test-env.sh --api-port 8181 --web-port 5181
+```
+
+在另一个终端运行接口 E2E：
+
+```sh
+pnpm e2e:api
+# 对应上面的自定义端口：
+PONTIS_E2E_API_URL=http://127.0.0.1:8181 \
+PONTIS_E2E_WEB_URL=http://127.0.0.1:5181 pnpm e2e:api
+```
+
+E2E 直接使用 HTTP 接口初始化、登录和创建数据，不经过页面操作，也不直接写 SQL。
+空库会创建测试账号 `e2e` / `pontis-e2e-pass`；已有数据库则登录该账号。
+如果此前通过页面创建了其他账号，用 `PONTIS_E2E_USERNAME` 和
+`PONTIS_E2E_PASSWORD` 指定它，或停止环境后用 `--reset-db` 重新开始。
+每次测试创建独立的测试 Space，便于重复运行和排查；这些测试数据保留到显式重置。
+
+覆盖前端代理与后端实例一致性、认证拒绝、Cookie 与 Bearer 会话、书签树操作、
+非法移动回滚及退出登录。它验证真实 API 与代理的组合，不覆盖浏览器渲染或扩展同步；
+扩展的双 profile 测试仍使用 `pnpm e2e:dual-profile`。
 
 ## 迁移失败时
 
