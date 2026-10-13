@@ -1,0 +1,16 @@
+Generation mode: built-in image_gen (edit)
+Input: pontis-logo-abstract-v2.png
+Output: pontis-logo-po-v3.png
+
+Final prompt:
+
+Use case: precise-object-edit / logo-brand.
+Image 1 is the edit target: the existing blue abstract Pontis logo made from two offset rounded angular bands.
+
+User-requested edit: add the contours of uppercase "P" on the LEFT and uppercase "O" in the CENTER of this same symbol, so the monogram evokes Pontis.
+
+Keep the original upper-right band and lower-left band recognizable, with their existing arrangement, cool blue color, rounded-corner geometric language, and generous clear margins. Build a clearly recognizable P contour into the left-hand region: a vertical stem with an upper rounded bowl. Place a clearly recognizable O contour in the central negative-space opening, using a rounded geometric ring. Integrate these letter contours with the abstract mark as one cohesive logo; the eye should find P on the left and O in the center. The letter counters must remain transparent. Use medium-weight blue contour strokes, consistent and visually balanced, slightly lighter than the original heavy bands so the added letters do not fill all the negative space. Preserve sufficient clear separation for both letters to be legible. Do not move the O to the right of the mark.
+
+The only letters are exactly P and O. No separate caption, no full Pontis wordmark, no typography beneath the image. Preserve the abstract connection/synchronization feeling. Same solid muted cool blue #3F62C0. Minimal flat graphic with crisp smooth edges.
+Keep the background genuinely transparent, including inside the letter counters. No glow, shadows, gradients, textures, lighting, 3D, bridge, extra symbols, frame, badge or watermark.
+
