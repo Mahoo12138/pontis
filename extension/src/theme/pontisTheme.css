@@ -294,6 +294,54 @@ html[data-mantine-color-scheme='dark'] {
   border-top: none;
 }
 
+/* The source picker's rows. No rule between them: a tree's levels are told
+   apart by indentation, and a hairline under every row would draw one per
+   depth and read as noise. */
+.pontis-treeRow {
+  padding: 3px 12px 3px 0;
+  min-width: 0;
+  /* A row without children has no 20px toggle to hold it open, so without this
+     the leaves of a tree sit 4px shorter than its branches and every level
+     looks slightly misaligned. */
+  min-height: 26px;
+}
+
+.pontis-treeToggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 20px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--pontis-text-secondary);
+  cursor: pointer;
+}
+
+.pontis-treeToggle svg {
+  transition: transform 120ms ease;
+}
+
+.pontis-treeToggle[data-open] svg {
+  transform: rotate(90deg);
+}
+
+/* The caret on a picker's own field: same glyph, same turn, so the layer and
+   the rows inside it agree about what open means. */
+.pontis-fieldToggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--pontis-text-secondary);
+  transition: transform 120ms ease;
+}
+
+.pontis-fieldToggle[data-open] {
+  transform: rotate(90deg);
+}
+
 .pontis-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;

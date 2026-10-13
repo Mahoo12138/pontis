@@ -44,7 +44,9 @@ import {
 import type { IntentDecision } from '../../core/sync/resync';
 import { originPatternFor } from '../../core/pairing/pairing';
 import { BindForm, type SpaceOption } from '../../ui/BindForm';
-import { listMountFolders, type FolderOption } from '../../ui/mountFolders';
+import { mountFolderTree } from '../../ui/mountFolders';
+import { FolderPickerField } from '../../ui/FolderPickerField';
+import type { FolderTreeNode } from '../../ui/folderTree';
 import { PairingForm } from '../../ui/PairingForm';
 import { createRuntime, errText, wakeWorker } from '../../ui/runtime';
 import { StartPageSettings } from '../../ui/StartPageSettings';
@@ -100,7 +102,7 @@ export function App() {
   const [editPairing, setEditPairing] = useState(false);
 
   const [spaces, setSpaces] = useState<SpaceOption[]>([]);
-  const [folders, setFolders] = useState<FolderOption[]>([]);
+  const [folders, setFolders] = useState<FolderTreeNode[]>([]);
   /** The 绑定新空间 disclosure inside 同步管理. */
   const [addBinding, setAddBinding] = useState(false);
 
@@ -118,7 +120,7 @@ export function App() {
   const refresh = useCallback(async () => {
     const rows = await db.bindings.toArray();
     setBindings(rows);
-    setFolders(await listMountFolders(adapter));
+    setFolders(await mountFolderTree(adapter));
     setSessions(await db.reconSessions.toArray());
     setIntents((await db.pendingOps.filter((o) => isUnsettledOp(o)).toArray()));
     setDiagnostics((await db.diagnostics.orderBy('id').reverse().limit(30).toArray()).reverse());
@@ -680,12 +682,12 @@ export function App() {
 
                           {b.state === 'mount_missing' && (
                             <Group grow wrap="nowrap">
-                              <Select
+                              <FolderPickerField
+                                tree={folders}
+                                value={remountFolders[b.id] ?? ''}
+                                onChange={(id) => setRemountFolders((prev) => ({ ...prev, [b.id]: id }))}
                                 placeholder="重新选择挂载目录"
-                                data={folders}
-                                searchable
-                                value={remountFolders[b.id] ?? null}
-                                onChange={(v) => setRemountFolders((prev) => ({ ...prev, [b.id]: v ?? '' }))}
+                                groupName={`remount-${b.id}`}
                               />
                               <Button
                                 loading={busy === `remount:${b.id}`}

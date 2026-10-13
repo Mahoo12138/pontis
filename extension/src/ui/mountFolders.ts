@@ -1,12 +1,8 @@
-// The folder picker's data source: every browser folder a space could be
-// mounted on, labelled by where it lives.
+// The mount-directory picker's data source: every browser folder a space could
+// be mounted on, as the tree the picker shows.
 
 import type { BrowserAdapter } from '../core/browser/types';
-
-export interface FolderOption {
-  value: string;
-  label: string;
-}
+import { buildFolderTreeFromEntries, type FolderTreeEntry, type FolderTreeNode } from './folderTree';
 
 /**
  * Depth-first over the real bookmark tree.
@@ -18,16 +14,19 @@ export interface FolderOption {
  * its children, and mounting a space onto something nothing can be written to
  * would leave the binding unable to sync a single node.
  */
-export async function listMountFolders(adapter: BrowserAdapter): Promise<FolderOption[]> {
-  const options: FolderOption[] = [];
-  const walk = async (parentId: string, depth: number, prefix: string) => {
-    const children = await adapter.getChildren(parentId);
-    for (const child of children.filter((n) => n.type === 'folder')) {
-      const label = child.title || '(未命名)';
-      options.push({ value: child.id, label: `${'  '.repeat(depth)}${prefix}${label}` });
-      await walk(child.id, depth + 1, `${label} / `);
-    }
+export async function mountFolderTree(adapter: BrowserAdapter): Promise<FolderTreeNode[]> {
+  const entries: FolderTreeEntry[] = [];
+
+  const walk = async (id: string, title: string, parent: string | null) => {
+    const children = await adapter.getChildren(id);
+    const folders = children.filter((n) => n.type === 'folder');
+    entries.push({ id, title, parent, bookmarks: children.length - folders.length });
+    for (const child of folders) await walk(child.id, child.title, id);
   };
-  await walk('0', 0, '');
-  return options;
+
+  const root = await adapter.getChildren('0');
+  for (const child of root.filter((n) => n.type === 'folder')) {
+    await walk(child.id, child.title, null);
+  }
+  return buildFolderTreeFromEntries(entries);
 }

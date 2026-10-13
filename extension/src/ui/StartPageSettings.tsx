@@ -13,9 +13,6 @@ import {
   Button,
   Divider,
   Group,
-  Loader,
-  Radio,
-  ScrollArea,
   Select,
   Slider,
   Stack,
@@ -24,6 +21,8 @@ import {
 } from '@mantine/core';
 import { createRuntime, errText } from './runtime';
 import { chromeApi } from '../runtime/chromeApi';
+import { FolderPickerField } from './FolderPickerField';
+import { buildFolderTree, type FolderTreeNode } from './folderTree';
 import { clearStartPage, patchConfig, saveSource } from '../core/start-page/provider';
 import {
   BACKGROUND_ERROR_TEXT,
@@ -35,20 +34,9 @@ import {
   saveAppearance,
 } from '../core/start-page/appearance';
 import type { StartPageAppearanceRecord, StartPageConfigRecord } from '../core/store/db';
-import type { ParentRefWire } from '../core/protocol/types';
 
 const runtime = createRuntime();
 const deps = { db: runtime.db, bootstrap: runtime.bootstrap, client: runtime.client };
-
-/** One folder the reader could choose, with the titles above it so two folders
- * named 开发 can be told apart. */
-interface FolderChoice {
-  id: string;
-  title: string;
-  trail: string[];
-  /** How many direct children it has, for the row's hint. */
-  children: number;
-}
 
 export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
   const [config, setConfig] = useState<StartPageConfigRecord | null>(null);
@@ -59,7 +47,7 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
   /** Spaces this device actually syncs, with the binding that grants the read. */
   const [synced, setSynced] = useState<{ value: string; label: string; bindingId: string }[]>([]);
   const [spaceId, setSpaceId] = useState('');
-  const [folders, setFolders] = useState<FolderChoice[]>([]);
+  const [tree, setTree] = useState<FolderTreeNode[]>([]);
   const [picked, setPicked] = useState('');
   const [loadingTree, setLoadingTree] = useState(false);
 
@@ -116,12 +104,12 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
     [synced, spaceId],
   );
 
-  // Reading the binding's snapshot is what makes the folder list possible. It
+  // Reading the binding's snapshot is what makes the folder tree possible. It
   // is a settings-time read of a space this device already holds the right to
   // read in full — not something the start page itself ever does.
   useEffect(() => {
     if (!bindingId) {
-      setFolders([]);
+      setTree([]);
       return;
     }
     let cancelled = false;
@@ -131,34 +119,7 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
       .fetchSnapshot(bindingId)
       .then((snap) => {
         if (cancelled) return;
-        const byId = new Map(snap.nodes.map((n) => [n.id, n]));
-        const kids = new Map<string, number>();
-        for (const n of snap.nodes) {
-          const parent = n.parent.type === 'node' ? n.parent.id ?? '' : '';
-          kids.set(parent, (kids.get(parent) ?? 0) + 1);
-        }
-        const trailOf = (node: { parent: ParentRefWire }): string[] => {
-          const out: string[] = [];
-          for (
-            let at = node.parent.type === 'node' ? byId.get(node.parent.id ?? '') : undefined;
-            at;
-            at = at.parent.type === 'node' ? byId.get(at.parent.id ?? '') : undefined
-          ) {
-            out.unshift(at.title);
-            if (out.length > snap.nodes.length) break;
-          }
-          return out;
-        };
-        setFolders(
-          snap.nodes
-            .filter((n) => n.type === 'folder')
-            .map((n) => ({
-              id: n.id,
-              title: n.title,
-              trail: trailOf(n),
-              children: kids.get(n.id) ?? 0,
-            })),
-        );
+        setTree(buildFolderTree(snap.nodes));
         setPicked('');
       })
       .catch((err) => !cancelled && setError(errText(err)))
@@ -307,46 +268,16 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
             onChange={(v) => setSpaceId(v ?? '')}
           />
 
-          <Box>
-            <Group gap="xs" mb="xs">
-              <Text size="xs" fw={500}>
-                文件夹
-              </Text>
-              {loadingTree ? <Loader size="xs" /> : null}
-            </Group>
-            <ScrollArea h={240} type="auto" className="pontis-listBox">
-              {loadingTree ? (
-                <Text size="sm" c="dimmed" p="sm">
-                  正在读取目录……
-                </Text>
-              ) : folders.length === 0 ? (
-                // "This space has no folders" is a claim about the account;
-                // it must not be shown while the read is still running (§8.2).
-                <Text size="sm" c="dimmed" p="sm">
-                  这个空间里还没有文件夹。
-                </Text>
-              ) : (
-                folders.map((f) => (
-                  <Group key={f.id} gap="xs" wrap="nowrap" px="sm">
-                    <Radio
-                      name="start-page-folder"
-                      checked={picked === f.id}
-                      onChange={() => setPicked(f.id)}
-                      aria-label={f.title}
-                    />
-                    <Box style={{ minWidth: 0, flex: 1 }}>
-                      <Text size="sm" truncate>
-                        {f.trail.length ? `${f.trail.join(' / ')} / ${f.title}` : f.title}
-                      </Text>
-                      <Text size="xs" c="dimmed">
-                        {f.children} 个直接子项
-                      </Text>
-                    </Box>
-                  </Group>
-                ))
-              )}
-            </ScrollArea>
-          </Box>
+          <FolderPickerField
+            tree={tree}
+            value={picked}
+            onChange={setPicked}
+            label="文件夹"
+            description="起始页只显示这个文件夹里的书签，子文件夹算在里面。"
+            loading={loadingTree}
+            revealId={config?.folderId}
+            groupName="start-page-folder"
+          />
 
           <Group justify="space-between">
             {config ? (

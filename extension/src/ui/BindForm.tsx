@@ -4,7 +4,8 @@
 
 import { useState } from 'react';
 import { Button, Group, Select, Stack, Text } from '@mantine/core';
-import type { FolderOption } from './mountFolders';
+import { FolderPickerField } from './FolderPickerField';
+import type { FolderTreeNode } from './folderTree';
 
 export interface SpaceOption {
   id: string;
@@ -19,7 +20,7 @@ export function BindForm({
   onBind,
 }: {
   spaces: SpaceOption[];
-  folders: FolderOption[];
+  folders: FolderTreeNode[];
   /** Spaces this device already syncs. Nothing stops a second binding onto a
    *  different folder, so the list says so rather than looking like a bug. */
   boundSpaceIds?: string[];
@@ -52,14 +53,15 @@ export function BindForm({
           onChange={setSpaceId}
           style={{ minWidth: 240 }}
         />
-        <Select
-          label="挂载目录"
-          placeholder="选择书签目录"
-          data={folders}
-          value={folderId}
+        <FolderPickerField
+          tree={folders}
+          value={folderId ?? ''}
           onChange={setFolderId}
-          searchable
-          style={{ minWidth: 240 }}
+          label="挂载目录"
+          description="挂载目录里的书签会和该空间保持同步，目录本身不会被上传。"
+          placeholder="选择书签目录"
+          loading={false}
+          groupName="mount-folder"
         />
       </Group>
       {spaces.length === 0 && (
@@ -67,9 +69,6 @@ export function BindForm({
           这个账号在服务器上还没有空间，请先在 Web 端创建一个。
         </Text>
       )}
-      <Text size="xs" c="dimmed">
-        挂载目录里的书签会和该空间保持同步，目录本身不会被上传。
-      </Text>
       <Group gap="xs">
         <Button onClick={submit} loading={busy} disabled={!spaceId || !folderId}>
           创建绑定

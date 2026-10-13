@@ -13,7 +13,8 @@ import { PontisLogo } from '../../ui/PontisLogo';
 import { createRuntime, errText, wakeWorker } from '../../ui/runtime';
 import { BindForm, type SpaceOption } from '../../ui/BindForm';
 import { PairingForm } from '../../ui/PairingForm';
-import { listMountFolders, type FolderOption } from '../../ui/mountFolders';
+import { mountFolderTree } from '../../ui/mountFolders';
+import type { FolderTreeNode } from '../../ui/folderTree';
 
 const runtime = createRuntime();
 
@@ -23,7 +24,7 @@ export function App() {
   const [deviceLabel, setDeviceLabel] = useState('');
   const [bindingCount, setBindingCount] = useState(0);
   const [spaces, setSpaces] = useState<SpaceOption[]>([]);
-  const [folders, setFolders] = useState<FolderOption[]>([]);
+  const [folders, setFolders] = useState<FolderTreeNode[]>([]);
   const [boundSpaceIds, setBoundSpaceIds] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +51,7 @@ export function App() {
         setSpaces([]);
       }
     }
-    setFolders(await listMountFolders(runtime.adapter));
+    setFolders(await mountFolderTree(runtime.adapter));
   }, []);
 
   useEffect(() => {
