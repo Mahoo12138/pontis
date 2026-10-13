@@ -102,6 +102,9 @@ func TestGoldenRESTFixtures(t *testing.T) {
 	// evaluating a map literal in any particular sequence.
 	fixtures := []restFixture{
 		{"meta", restGET(t, ts, token, "/api/v1/meta")},
+		// The public projection a visitor with no session reads to choose
+		// between the init and register entry points.
+		{"system-status", restGET(t, ts, token, "/api/v1/system/status")},
 		{"me", restGET(t, ts, token, "/api/v1/auth/me")},
 		{"spaces", restGET(t, ts, token, "/api/v1/spaces")},
 		{"nodes", restGET(t, ts, token, "/api/v1/spaces/"+spaceID+"/nodes")},

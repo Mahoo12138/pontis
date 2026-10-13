@@ -45,7 +45,12 @@ export function useUpdateSystemSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (params: UpdateSystemSettingsRequest) => updateSystemSettings(params),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      // /system/status projects registration_mode to visitors without a session;
+      // without this the login page would keep the answer from before the save.
+      qc.invalidateQueries({ queryKey: ['auth', 'status'] });
+    },
   });
 }
 

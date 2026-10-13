@@ -7,6 +7,21 @@ export interface MetaResponse {
   sync_protocol_versions: number[];
 }
 
+// ─── System status ──────────────────────────────────────────
+
+/**
+ * The public projection of the instance settings — all an anonymous visitor
+ * can learn. `allow_registration` is the server's own gate rather than a field
+ * to re-derive: it folds the mode and the initialization state together, so a
+ * page cannot disagree with the endpoint that enforces it. The remaining
+ * `SystemSettings` keys stay behind a session.
+ */
+export interface SystemStatusResponse {
+  initialized: boolean;
+  registration_mode: 'closed' | 'open' | 'invite';
+  allow_registration: boolean;
+}
+
 // ─── Auth ───────────────────────────────────────────────────
 
 export interface User {
@@ -26,6 +41,9 @@ export interface SetupRequest {
   display_name?: string;
   email?: string;
 }
+
+/** Public registration takes the same body as setup; the server decodes both strictly. */
+export type RegisterRequest = SetupRequest;
 
 export interface LoginRequest {
   username: string;
@@ -537,8 +555,9 @@ export interface SystemSettings {
   /**
    * Instance settings live in a key/value text column, so the two numeric
    * policies are stored and returned as `"24"` / `"16"` — while the write side
-   * (UpdateSystemSettingsRequest) takes real numbers. Nothing enforces either
-   * value yet, and the admin page shows them disabled.
+   * (UpdateSystemSettingsRequest) takes real numbers. Neither is enforced yet,
+   * and the admin page shows them disabled. `registration_mode` by contrast
+   * gates /auth/register and is projected publicly by /system/status.
    */
   session_ttl_hours: string;
   max_spaces_per_user: string;
@@ -572,6 +591,12 @@ export interface AdminUserView {
 export interface AdminUserListResponse {
   users: AdminUserView[];
 }
+
+/**
+ * Admin-side account creation takes the setup/registration body. `role` is not
+ * requestable — the account is created as `user` and promoted separately.
+ */
+export type AdminCreateUserRequest = SetupRequest;
 
 // ─── Tasks (doc 13 §4) ───────────────────────────────────────────
 

@@ -1,16 +1,26 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
+  createAdminUser,
   createResetLink,
   listAdminUsers,
   setUserRole,
   setUserStatus,
 } from '@pontis/api/endpoints/admin-users';
+import type { AdminCreateUserRequest } from '@pontis/api';
 
 export function useAdminUsers() {
   return useQuery({
     queryKey: ['admin', 'users'],
     queryFn: () => listAdminUsers(),
     staleTime: 15_000,
+  });
+}
+
+export function useCreateAdminUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (params: AdminCreateUserRequest) => createAdminUser(params),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
   });
 }
 

@@ -7,10 +7,11 @@ import { useSystemSettings, useUpdateSystemSettings } from '../hooks/use-setting
 // Instance-level policy configuration only (CHANGELOG v1.2). User and job
 // management live in their own admin tabs, not as settings items.
 //
-// Every control here is disabled, and that is deliberate: the server stores
-// these three values and echoes them back, but nothing reads them, so a save
-// would look like it worked while behaviour stayed the same. They become
-// enabled together with the code that enforces them.
+// A control is disabled while no server code acts on its key, and its NotLive
+// note says what is missing: the server stores every value here and echoes it
+// back, so an accepted PATCH that changes no behaviour is how an operator
+// learns to distrust this page. They become enabled together with the code that
+// enforces them.
 export default function AdminSystemPage() {
   const { data, isLoading, isError, error, refetch } = useSystemSettings();
   const update = useUpdateSystemSettings();
@@ -24,9 +25,10 @@ export default function AdminSystemPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 480 }}>
       <section>
         <Text className={sectionTitle} mb={4}>注册模式</Text>
-        <Text className={sectionHint} mb="sm">closed 仅允许已有用户登录;open 允许自由注册。</Text>
+        <Text className={sectionHint} mb="sm">
+          closed 仅允许已有用户登录;open 在登录页开放注册入口;invite 暂按 closed 处理。
+        </Text>
         <SegmentedControl
-          disabled
           w={280}
           value={s?.registration_mode ?? 'closed'}
           onChange={(v) => update.mutate({ registration_mode: v as 'closed' | 'open' | 'invite' })}
@@ -37,7 +39,6 @@ export default function AdminSystemPage() {
           ]}
           styles={{ root: { backgroundColor: tokens.hoverBg } }}
         />
-        <NotLive reason="服务端没有注册端点，账号只能由首次初始化和管理员创建。" />
       </section>
       <section>
         <Text className={sectionTitle} mb={4}>会话有效期</Text>

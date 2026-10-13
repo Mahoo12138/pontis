@@ -4,8 +4,8 @@
 设计与决策记录在 [docs/](./docs/README.md)，界面权威见 [PRODUCT.md](PRODUCT.md) 与 [DESIGN.md](DESIGN.md)。
 
 **当前状态：内部 Alpha。** 单个可执行文件已经可以跑起来（构建与演练见下），
-但还没有把真实书签库当作唯一副本的条件，也未开放公网注册。Firefox 适配排在
-Chromium Alpha 之后。
+但还没有把真实书签库当作唯一副本的条件；公开注册默认关闭，要由管理员显式开启。
+Firefox 适配排在 Chromium Alpha 之后。
 
 ## 构建一个产物
 
@@ -57,7 +57,8 @@ link_check_allow_cidrs = []
 
 ## 首次使用
 
-1. 打开 `http://<host>:8080/`，第一个账号即管理员（`/auth/setup` 成功后永久关闭）。
+1. 打开 `http://<host>:8080/`，未初始化的实例会自己跳到初始化页：第一个账号即管理员
+   （`/auth/setup` 成功后永久关闭）。
 2. 建一个 Space（书签容器）。
 3. 在扩展里填实例地址并配对：扩展注册设备 → `POST /device/bindings` 绑定 Space
    → 绑定进入 `pending_initial`。
@@ -67,6 +68,11 @@ link_check_allow_cidrs = []
 
 新增设备重复 3–4。备份恢复后所有绑定回到 `pending_initial`，需要按这条路径重连，
 不会自动 active。
+
+公开注册默认关闭：管理员在 后台 → 系统设置 → 注册模式 切到 `open`，登录页才会出现
+注册入口。这样注册出来的账号是普通用户（拿不到管理员角色），并自带一个默认 Space。
+`GET /api/v1/system/status` 是这些判断的匿名读面——实例是否已初始化、注册是否开放；
+`/settings` 有会话门槛，匿名访客读不到。
 
 ## 开发命令
 

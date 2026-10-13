@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -234,28 +235,39 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 
 // --- handlers: system settings (admin) ---
 
-// These are stored instance policy values. As of now **nothing reads them**:
-// there is no registration endpoint, so registration_mode gates no path; the
-// session lifetime comes from a constant in internal/app; creating a Space
-// does not count against max_spaces_per_user; and new accounts take their
-// locale from the server default, not from default_locale.
+// These are stored instance policy values. `registration_mode` is enforced by
+// /auth/register and reported by /system/status. The other three have no
+// reader yet: the session lifetime comes from a constant in internal/app,
+// creating a Space does not count against max_spaces_per_user, and new
+// accounts take their locale from the server default, not from default_locale.
 //
 // Keeping the storage is deliberate — the enforcement lands next to the key it
-// reads — but the Web UI disables these controls until then, because an
-// accepted PATCH that changes no behaviour is how an operator learns to
-// distrust the settings page.
+// reads — and the Web UI disables a control until the code that acts on it
+// exists, because an accepted PATCH that changes no behaviour is how an
+// operator learns to distrust the settings page.
 var settingDefaults = map[string]string{
-	"registration_mode":   "closed",
+	"registration_mode":   registrationClosed,
 	"default_locale":      "zh-CN",
 	"session_ttl_hours":   "24",
 	"max_spaces_per_user": "16",
 }
 
-func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.Accounts.ListSettings(r.Context())
+// The three registration modes doc 09 §4 allows. V1 enforces `open` and treats
+// both `closed` and `invite` as "no public form"; `invite` is reserved for the
+// redemption path.
+const (
+	registrationClosed = "closed"
+	registrationOpen   = "open"
+	registrationInvite = "invite"
+)
+
+// currentSettings merges the stored rows over the defaults and drops keys the
+// server no longer knows. It is the single reader of system_settings; both the
+// admin surface and the public status endpoint resolve the same values.
+func (s *Server) currentSettings(ctx context.Context) (map[string]string, error) {
+	rows, err := s.Accounts.ListSettings(ctx)
 	if err != nil {
-		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
-		return
+		return nil, err
 	}
 	values := map[string]string{}
 	for k, v := range settingDefaults {
@@ -265,6 +277,15 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		if _, known := settingDefaults[row.Key]; known {
 			values[row.Key] = row.Value
 		}
+	}
+	return values, nil
+}
+
+func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	values, err := s.currentSettings(r.Context())
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": values})
 }
@@ -289,7 +310,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	kv := map[string]string{}
 	if req.RegistrationMode != nil {
 		switch *req.RegistrationMode {
-		case "closed", "open", "invite":
+		case registrationClosed, registrationOpen, registrationInvite:
 			kv["registration_mode"] = *req.RegistrationMode
 		default:
 			s.writeError(w, r, http.StatusBadRequest, "INVALID_VALUE", "unknown registration mode")

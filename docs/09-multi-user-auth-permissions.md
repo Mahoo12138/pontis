@@ -60,6 +60,25 @@ V1 UI 可先提供 closed/open，底层预留 invite。
 
 新用户注册后自动创建一个普通默认 Space，降低首次使用门槛。
 
+落地形态（V1）：
+
+```text
+GET  /api/v1/system/status    匿名: initialized / registration_mode / allow_registration
+POST /api/v1/auth/register    仅 mode=open 且实例已初始化时受理
+POST /api/v1/admin/users      管理员建号: 不看 registration_mode, 一律 role=user
+```
+
+`allow_registration` 由服务端算出，客户端不自行从 mode 推导，避免与执行该判定的
+端点产生分歧；登录页据此决定是否给注册入口，`/settings` 有会话门槛，匿名访客读不到。
+
+注册只能产生 `role=user`：第一个账号仍只由 `/auth/setup` 产生，未初始化实例上的注册
+请求一律 `409 NOT_INITIALIZED`（否则就等于把管理员发给跑得最快的人）。`invite` 暂按
+`closed` 处理。
+
+`closed` 关的是匿名注册，不是实例增加用户的能力：管理员仍可在 `/admin/users` 建号并转告
+初始密码。管理员建出的账号与注册账号同权（默认 Space、role=user），提升角色是页面上另一
+次确认过的操作，不是建号参数。
+
 ## 5. Password
 
 使用 Argon2id 存储 hash。

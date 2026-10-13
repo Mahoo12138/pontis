@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw';
-import type { LoginResponse, MetaResponse, User } from '../types';
+import type { LoginResponse, MetaResponse, SystemStatusResponse, User } from '../types';
 
 const BASE = '/api/v1';
 
@@ -19,6 +19,14 @@ export const mockMeta: MetaResponse = {
   product_version: '0.1.0',
   api_version: 'v1',
   sync_protocol_versions: [1],
+};
+
+export const mockStatus: SystemStatusResponse = {
+  initialized: true,
+  // `open`, where a real instance ships `closed`: the mock exists so the auth
+  // screens can be opened without a Go server, and /register is one of them.
+  registration_mode: 'open',
+  allow_registration: true,
 };
 
 export function mockUser(username: string): User {
@@ -90,4 +98,11 @@ export const mockHandlers = [
   }),
 
   http.get(`${BASE}/meta`, () => HttpResponse.json(mockMeta)),
+
+  http.get(`${BASE}/system/status`, () => HttpResponse.json(mockStatus)),
+
+  http.post(`${BASE}/auth/register`, async ({ request }) => {
+    const body = (await request.json()) as { username?: string };
+    return HttpResponse.json(mockUser(body.username?.trim() || 'newcomer'), { status: 201 });
+  }),
 ];

@@ -1,9 +1,18 @@
 import { client } from '../client';
 import { checkAdminUserList, checkResetLink, checkUser } from '../contract';
-import type { AdminUserListResponse, User } from '../types';
+import type { AdminCreateUserRequest, AdminUserListResponse, User } from '../types';
 
 export function listAdminUsers() {
   return client.get<AdminUserListResponse>('/admin/users', checkAdminUserList);
+}
+
+/**
+ * Create an account from the admin surface. Unlike /auth/register it does not
+ * consult registration_mode — an operator adding someone is the instance
+ * opting in — and the new account is always role=user with the default Space.
+ */
+export function createAdminUser(params: AdminCreateUserRequest) {
+  return client.post<User>('/admin/users', params, checkUser);
 }
 
 // Both mutations answer with the plain user view (id, username, role, status,

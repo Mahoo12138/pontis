@@ -1,15 +1,24 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { TextInput, PasswordInput, Button, Group, Stack, Paper, Text, Alert, Anchor } from '@mantine/core';
 import { useForm } from '@mantine/form';
-import { IconAlertCircle } from '@tabler/icons-react';
-import { useLogin } from '../hooks/use-auth';
+import { IconAlertCircle, IconCircleCheck } from '@tabler/icons-react';
+import { useLogin, useSystemStatus } from '../hooks/use-auth';
 import { PontisLogo } from '../components/common/PontisLogo';
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const loginMutation = useLogin();
+  const { data: status } = useSystemStatus();
   const [error, setError] = useState<string | null>(null);
+
+  // Registration is offered only on a confirmed `open`; the bootstrap link
+  // stays until the instance is confirmed initialized. The asymmetry is
+  // deliberate: a status read that fails must never strand a fresh install
+  // with no way in, and must never grant more access than it can confirm.
+  const allowRegistration = status?.allow_registration ?? false;
+  const showSetupLink = !status?.initialized;
 
   const form = useForm({
     initialValues: { username: '', password: '' },
@@ -29,6 +38,8 @@ export default function LoginPage() {
     }
   });
 
+  const justRegistered = Boolean((location.state as { registered?: boolean } | null)?.registered);
+
   return (
     <div style={{
       display: 'flex',
@@ -44,6 +55,12 @@ export default function LoginPage() {
             <Text fz="lg" fw={600}>Pontis</Text>
           </Group>
           <Text fz="sm" c="dimmed">登录到你的书签工作空间</Text>
+
+          {justRegistered && (
+            <Alert icon={<IconCircleCheck size={16} />} color="healthyGreen" variant="light">
+              账号已创建，用刚才的用户名登录。
+            </Alert>
+          )}
 
           {error && (
             <Alert icon={<IconAlertCircle size={16} />} color="errorRed" variant="light">
@@ -69,9 +86,16 @@ export default function LoginPage() {
             </Stack>
           </form>
 
-          <Text fz="xs" c="dimmed" ta="center">
-            首次使用？<Anchor fz="xs" component={Link} to="/setup">初始化新实例</Anchor>
-          </Text>
+          {allowRegistration && (
+            <Text fz="xs" c="dimmed" ta="center">
+              还没有账号？<Anchor fz="xs" component={Link} to="/register">创建账号</Anchor>
+            </Text>
+          )}
+          {showSetupLink && (
+            <Text fz="xs" c="dimmed" ta="center">
+              首次使用？<Anchor fz="xs" component={Link} to="/setup">初始化新实例</Anchor>
+            </Text>
+          )}
         </Stack>
       </Paper>
     </div>

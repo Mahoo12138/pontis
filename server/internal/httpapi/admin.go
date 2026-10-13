@@ -123,6 +123,42 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, fromUser(updated))
 }
 
+// handleCreateAdminUser is the admin-side counterpart of the public
+// /auth/register. It ignores registration_mode — an operator adding an account
+// is the instance opting in, not a visitor asking — and takes the same four
+// fields setup/register do, so the decoder rejects anything else.
+//
+// The new account is always role=user: CreateUser hands the admin role only to
+// the first account of an instance, and requireAdmin already implies one
+// exists. Promotion stays a separate, confirmed action on this page.
+func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireAdmin(s, w, r); !ok {
+		return
+	}
+	var req setupRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	user, err := s.Auth.CreateUser(r.Context(), auth.CreateUserParams{
+		Username:    req.Username,
+		Password:    req.Password,
+		DisplayName: req.DisplayName,
+		Email:       req.Email,
+	})
+	if err != nil {
+		s.mapAuthError(w, r, err)
+		return
+	}
+
+	if err := s.provisionDefaultSpace(r.Context(), user.ID); err != nil {
+		// The account exists and can sign in; a retry would die on
+		// USERNAME_TAKEN, so report 201 and log the degraded first run.
+		s.Logger.Warn("admin create user: default space provisioning failed",
+			"user_id", user.ID, "error", err)
+	}
+	writeJSON(w, http.StatusCreated, fromUser(user))
+}
+
 func (s *Server) handleCreateResetLink(w http.ResponseWriter, r *http.Request) {
 	if _, ok := requireAdmin(s, w, r); !ok {
 		return

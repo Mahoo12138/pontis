@@ -66,6 +66,7 @@ import type {
   StartPageSnapshotMeta,
   StartPageSnapshotNode,
   StartPageSource,
+  SystemStatusResponse,
   SystemSettings,
   SystemSettingsResponse,
   TaskJobView,
@@ -138,6 +139,16 @@ export const checkMeta: Checker<MetaResponse> = record<MetaResponse>({
   api_version: str,
   sync_protocol_versions: arr(num),
 });
+
+// The anonymous view of the instance. Only these three keys are public — an
+// extra field here would be the client accepting a server that leaked operator
+// policy to visitors.
+export const checkSystemStatus: Checker<SystemStatusResponse> =
+  record<SystemStatusResponse>({
+    initialized: bool,
+    registration_mode: oneOf('closed', 'open', 'invite'),
+    allow_registration: bool,
+  });
 
 export const checkUser: Checker<User> = record<User>({
   id: str,

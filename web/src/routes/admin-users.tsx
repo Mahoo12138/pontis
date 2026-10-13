@@ -1,23 +1,30 @@
 import { useState } from 'react';
 import {
+  Alert,
   Badge,
   Button,
   CopyButton,
   Group,
   Menu,
   Modal,
+  PasswordInput,
   Skeleton,
+  Stack,
   Table,
   Text,
+  TextInput,
   Tooltip,
   UnstyledButton,
 } from '@mantine/core';
+import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import {
+  IconAlertCircle,
   IconCheck,
   IconCopy,
   IconDotsVertical,
   IconKey,
+  IconPlus,
   IconShieldHalf,
   IconUserOff,
   IconUserCheck,
@@ -27,7 +34,13 @@ import ErrorState from '../components/common/ErrorState';
 import { mono } from '../styles/management.css';
 import { tokens } from '../styles/semantic-tokens.css';
 import { useMe } from '../hooks/use-auth';
-import { useAdminUsers, useSetUserStatus, useSetUserRole } from '../hooks/use-admin-users';
+import {
+  useAdminUsers,
+  useCreateAdminUser,
+  useSetUserStatus,
+  useSetUserRole,
+} from '../hooks/use-admin-users';
+import { describeError } from '../lib/errors';
 import { formatRelativeTime } from '../lib/format';
 
 export default function AdminUsersPage() {
@@ -36,6 +49,7 @@ export default function AdminUsersPage() {
   const setStatus = useSetUserStatus();
   const setRole = useSetUserRole();
   const [confirmTarget, setConfirmTarget] = useState<{ user: AdminUserView; action: 'disable' | 'enable' | 'promote' } | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const users = data?.users ?? [];
 
@@ -61,9 +75,18 @@ export default function AdminUsersPage() {
 
   return (
     <>
-      <Text fz={12} c="dimmed" mb="sm">
-        管理员负责用户状态与角色,但无法浏览其他用户的私有书签内容。禁用后用户的会话、Token 与设备同步立即被拒绝,数据保留。
-      </Text>
+      <Group justify="space-between" mb="sm" align="flex-start">
+        <Text fz={12} c="dimmed" maw={560}>
+          管理员负责用户状态与角色,但无法浏览其他用户的私有书签内容。禁用后用户的会话、Token 与设备同步立即被拒绝,数据保留。
+        </Text>
+        <Button
+          size="xs"
+          leftSection={<IconPlus size={14} stroke={1.5} />}
+          onClick={() => setCreateOpen(true)}
+        >
+          新增用户
+        </Button>
+      </Group>
 
       {isError ? (
         <ErrorState error={error} onRetry={() => void refetch()} />
@@ -136,7 +159,92 @@ export default function AdminUsersPage() {
           </Button>
         </Group>
       </Modal>
+
+      <CreateUserModal opened={createOpen} onClose={() => setCreateOpen(false)} />
     </>
+  );
+}
+
+// Admin-side account creation. It is not the registration form: the instance's
+// registration_mode does not apply here, so a closed instance can still be
+// staffed, and the account starts as role=user — promoting is a separate,
+// confirmed action in this page's row menu, never a field of the creation body.
+function CreateUserModal({ opened, onClose }: { opened: boolean; onClose: () => void }) {
+  const create = useCreateAdminUser();
+  const [error, setError] = useState<string | null>(null);
+
+  const form = useForm({
+    initialValues: { username: '', password: '', confirm_password: '', display_name: '', email: '' },
+    validate: {
+      username: (v) => (/^[A-Za-z0-9._-]{3,32}$/.test(v) ? null : '用户名需为 3-32 个字母、数字或 . _ -'),
+      password: (v) => (v.length < 8 ? '密码至少 8 个字符' : null),
+      confirm_password: (v, values) => (v === values.password ? null : '两次输入的密码不一致'),
+    },
+  });
+
+  const handleSubmit = form.onSubmit(async (values) => {
+    setError(null);
+    try {
+      await create.mutateAsync({
+        username: values.username,
+        password: values.password,
+        display_name: values.display_name,
+        email: values.email,
+      });
+      notifications.show({
+        message: `已创建 ${values.username},请把初始密码转告对方`,
+        color: 'coolGray',
+      });
+      form.reset();
+      onClose();
+    } catch (e) {
+      setError(describeError(e) ?? '创建失败');
+    }
+  });
+
+  return (
+    <Modal
+      opened={opened}
+      onClose={onClose}
+      title="新增用户"
+      size={440}
+      styles={{ header: { fontSize: 15, fontWeight: 600 } }}
+    >
+      <Text fz={13} c="dimmed" mb="md">
+        新账号是普通用户角色,带一个默认空间。初始密码由你转告对方,建议其登录后在 设置 中改掉。
+      </Text>
+
+      {error && (
+        <Alert icon={<IconAlertCircle size={16} />} color="errorRed" variant="light" mb="sm">
+          {error}
+        </Alert>
+      )}
+
+      {/* A real <form> so Enter in the password fields submits. */}
+      <form onSubmit={handleSubmit}>
+        <Stack gap="sm">
+          <TextInput label="用户名" placeholder="bob" {...form.getInputProps('username')} />
+          <PasswordInput
+            label="初始密码"
+            placeholder="至少 8 个字符"
+            autoComplete="new-password"
+            {...form.getInputProps('password')}
+          />
+          <PasswordInput
+            label="确认初始密码"
+            placeholder="再输入一次"
+            autoComplete="new-password"
+            {...form.getInputProps('confirm_password')}
+          />
+          <TextInput label="显示名称 (可选)" placeholder="Bob" {...form.getInputProps('display_name')} />
+          <TextInput label="邮箱 (可选)" placeholder="bob@example.com" {...form.getInputProps('email')} />
+          <Group justify="flex-end" mt="xs">
+            <Button variant="subtle" color="coolGray" onClick={onClose}>取消</Button>
+            <Button type="submit" loading={create.isPending}>创建</Button>
+          </Group>
+        </Stack>
+      </form>
+    </Modal>
   );
 }
 

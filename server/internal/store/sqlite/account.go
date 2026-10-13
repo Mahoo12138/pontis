@@ -38,6 +38,16 @@ func (s *AccountStore) UpdatePassword(ctx context.Context, userID, hash string, 
 	return err
 }
 
+// SetDefaultSpaceID points an account at the Space it opens with. The column
+// ships in 000004_auth and users can register before they have created anything,
+// so it is written by the registration path rather than left NULL.
+func (s *AccountStore) SetDefaultSpaceID(ctx context.Context, userID, spaceID string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE users SET default_space_id = ?, updated_at = ? WHERE id = ?`,
+		spaceID, formatTime(at), userID)
+	return err
+}
+
 // DeleteUserSessionsExcept invalidates all of the user's sessions except
 // keepSessionID (the browser that performed the password change).
 func (s *AccountStore) DeleteUserSessionsExcept(ctx context.Context, userID, keepSessionID string) error {

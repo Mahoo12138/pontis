@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import AppShell from './components/app-shell/AppShell';
 import UnknownRoute from './components/common/UnknownRoute';
 import LoginPage from './routes/login';
+import RegisterPage from './routes/register';
 import SetupPage from './routes/setup';
 import ResetPasswordPage from './routes/reset';
 import SpaceExplorerPage from './routes/space-explorer';
@@ -34,6 +35,14 @@ export default function App() {
           element={
             <RequirePublic>
               <LoginPage />
+            </RequirePublic>
+          }
+        />
+        <Route
+          path="/register"
+          element={
+            <RequirePublic>
+              <RegisterPage />
             </RequirePublic>
           }
         />

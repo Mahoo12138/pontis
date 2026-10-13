@@ -8,12 +8,13 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { mockMeta, mockLogin, mockUser } from '../src/mock/handlers';
+import { mockMeta, mockLogin, mockStatus, mockUser } from '../src/mock/handlers';
 import {
   checkAcknowledged,
   checkErrorEnvelope,
   checkLogin,
   checkMeta,
+  checkSystemStatus,
   checkUser,
 } from '../src/contract';
 
@@ -26,6 +27,10 @@ function load(name: string): Record<string, unknown> {
 describe('the mock satisfies the client contract', () => {
   it('answers /meta with what the server answers', () => {
     expect(() => checkMeta(mockMeta, 'body')).not.toThrow();
+  });
+
+  it('answers /system/status with the public projection', () => {
+    expect(() => checkSystemStatus(mockStatus, 'body')).not.toThrow();
   });
 
   it('answers /auth/me with a real user view', () => {
@@ -58,6 +63,7 @@ describe('the mock does not drift from the golden bodies', () => {
   };
 
   it('describes the same instance fields', () => sameKeys(mockMeta, 'meta', []));
+  it('describes the same instance state', () => sameKeys(mockStatus, 'system-status', []));
   it('describes the same user fields', () => sameKeys(mockUser('admin'), 'me', []));
   it('describes the same login fields', () => sameKeys(mockLogin('admin', 0), 'login', []));
 });

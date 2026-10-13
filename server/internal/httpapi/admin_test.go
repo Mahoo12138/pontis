@@ -117,6 +117,80 @@ func TestAdminUserManagement(t *testing.T) {
 	}
 }
 
+func TestAdminCreateUser(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	admin := map[string]string{"Authorization": "Bearer " + f.sessionToken}
+	bob := map[string]string{"Authorization": "Bearer " + f.bobToken}
+
+	// Creating accounts is admin-only, and it does not depend on
+	// registration_mode — this is the path a closed instance still has.
+	code, body := doJSON(t, "POST", f.ts.URL+"/api/v1/admin/users", bob,
+		map[string]string{"username": "mallory", "password": "password123"})
+	if code != http.StatusForbidden || errCode(t, body) != "ADMIN_REQUIRED" {
+		t.Fatalf("bob creates = %d %v", code, body)
+	}
+
+	// The body is the register/setup body: a requested role is refused rather
+	// than silently ignored, so creation can never grant admin.
+	code, body = doJSON(t, "POST", f.ts.URL+"/api/v1/admin/users", admin,
+		map[string]string{"username": "carol", "password": "password123", "role": "admin"})
+	if code != http.StatusBadRequest || errCode(t, body) != "INVALID_JSON" {
+		t.Fatalf("role at creation = %d %v", code, body)
+	}
+
+	code, body = doJSON(t, "POST", f.ts.URL+"/api/v1/admin/users", admin,
+		map[string]string{"username": "carol", "password": "password123", "display_name": "Carol"})
+	if code != http.StatusCreated {
+		t.Fatalf("create carol = %d %v", code, body)
+	}
+	if body["role"] != "user" || body["status"] != "active" || body["id"] == "" {
+		t.Fatalf("carol = %v", body)
+	}
+
+	// Same validation as registration: taken username, bad username, weak password.
+	code, body = doJSON(t, "POST", f.ts.URL+"/api/v1/admin/users", admin,
+		map[string]string{"username": "carol", "password": "password123"})
+	if code != http.StatusConflict || errCode(t, body) != "USERNAME_TAKEN" {
+		t.Fatalf("duplicate username = %d %v", code, body)
+	}
+	code, body = doJSON(t, "POST", f.ts.URL+"/api/v1/admin/users", admin,
+		map[string]string{"username": "ab!", "password": "password123"})
+	if code != http.StatusBadRequest || errCode(t, body) != "INVALID_USERNAME" {
+		t.Fatalf("bad username = %d %v", code, body)
+	}
+	code, body = doJSON(t, "POST", f.ts.URL+"/api/v1/admin/users", admin,
+		map[string]string{"username": "dave", "password": "short"})
+	if code != http.StatusBadRequest || errCode(t, body) != "INVALID_PASSWORD" {
+		t.Fatalf("short password = %d %v", code, body)
+	}
+
+	// The account is immediately usable, and opens with the default Space a
+	// registered account gets.
+	code, body = doJSON(t, "POST", f.ts.URL+"/api/v1/auth/login", nil,
+		map[string]string{"username": "carol", "password": "password123"})
+	if code != http.StatusOK {
+		t.Fatalf("carol login = %d %v", code, body)
+	}
+	carol := map[string]string{"Authorization": "Bearer " + body["token"].(string)}
+	code, body = doJSON(t, "GET", f.ts.URL+"/api/v1/spaces", carol, nil)
+	if code != http.StatusOK {
+		t.Fatalf("carol spaces = %d %v", code, body)
+	}
+	spaces := body["spaces"].([]any)
+	if len(spaces) != 1 || spaces[0].(map[string]any)["name"] != defaultSpaceName {
+		t.Fatalf("carol default space = %v", body)
+	}
+
+	// She appears in the admin list next to the seeded accounts.
+	code, body = doJSON(t, "GET", f.ts.URL+"/api/v1/admin/users", admin, nil)
+	if code != http.StatusOK {
+		t.Fatalf("list = %d %v", code, body)
+	}
+	if len(body["users"].([]any)) != 3 {
+		t.Fatalf("users = %v", body["users"])
+	}
+}
+
 // deviceRoute is one device-credential endpoint plus the status it returns
 // while the account is usable. The transfer case sends an empty body on
 // purpose: it must reach the handler and be refused for its contents, which

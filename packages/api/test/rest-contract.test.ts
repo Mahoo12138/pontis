@@ -40,6 +40,7 @@ import {
   checkSpaceList,
   checkStartPageSnapshot,
   checkSystemSettingsResponse,
+  checkSystemStatus,
   checkTaskList,
   checkTransferResponse,
   checkUndoActivity,
@@ -77,6 +78,7 @@ import type {
   SpaceListResponse,
   StartPageSnapshot,
   SystemSettingsResponse,
+  SystemStatusResponse,
   TaskListResponse,
   TransferResponse,
   UndoActivityResult,
@@ -94,6 +96,7 @@ function load(name: string): unknown {
 // longer matches ./types fails `tsc` before it ever fails here.
 const contract = {
   meta: (v: unknown): MetaResponse => checkMeta(v, 'body'),
+  'system-status': (v: unknown): SystemStatusResponse => checkSystemStatus(v, 'body'),
   me: (v: unknown): User => checkUser(v, 'body'),
   spaces: (v: unknown): SpaceListResponse => checkSpaceList(v, 'body'),
   nodes: (v: unknown): NodeListResponse => checkNodeList(v, 'body'),

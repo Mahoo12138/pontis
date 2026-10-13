@@ -16,6 +16,7 @@ import (
 
 	"pontis/internal/auth"
 	"pontis/internal/backup"
+	"pontis/internal/canonical"
 	"pontis/internal/changeset"
 	"pontis/internal/device"
 	"pontis/internal/jobs"
@@ -118,6 +119,11 @@ func (s *Server) Router() http.Handler {
 	r.Post("/api/v1/auth/setup", s.handleSetup)
 	r.Post("/api/v1/auth/login", s.handleLogin)
 	r.Post("/api/v1/auth/reset", s.handleResetPassword)
+
+	// Public surface for a visitor with no session yet: the login page reads
+	// /system/status to decide between the init and register entry points.
+	r.Get("/api/v1/system/status", s.handleSystemStatus)
+	r.Post("/api/v1/auth/register", s.handleRegister)
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireSession)
 		r.Post("/api/v1/auth/logout", s.handleLogout)
@@ -142,6 +148,7 @@ func (s *Server) Router() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireSession)
 		r.Get("/api/v1/admin/users", s.handleListAdminUsers)
+		r.Post("/api/v1/admin/users", s.handleCreateAdminUser)
 		r.Patch("/api/v1/admin/users/{userID}", s.handleUpdateAdminUser)
 		r.Post("/api/v1/admin/users/{userID}/reset-link", s.handleCreateResetLink)
 	})
@@ -383,6 +390,75 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, fromUser(user))
+}
+
+// defaultSpaceName is what a freshly registered account opens with. Doc 09 §4
+// promises one ordinary Space per new account so the first screen is a
+// workspace and not an empty list; the name is fixed rather than localized
+// because it becomes part of a file name (space.ValidateName).
+const defaultSpaceName = "Personal"
+
+// handleRegister is the public registration path. It is deliberately narrower
+// than /auth/setup: it only ever creates a role=user account on an instance
+// that already has an admin, and only while the operator keeps
+// registration_mode on `open`.
+func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	settings, err := s.currentSettings(r.Context())
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	needs, err := s.Auth.NeedsSetup(r.Context())
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", err.Error())
+		return
+	}
+	if needs {
+		// auth.Service hands the admin role to the first account it creates,
+		// so registration on an uninitialized instance would be an
+		// unauthenticated path to that role. Bootstrap is /auth/setup only.
+		s.writeError(w, r, http.StatusConflict, "NOT_INITIALIZED", "instance has no admin account yet")
+		return
+	}
+	if settings["registration_mode"] != registrationOpen {
+		s.writeError(w, r, http.StatusForbidden, "REGISTRATION_CLOSED", "this instance does not accept new accounts")
+		return
+	}
+
+	// The same four fields setup takes; the decoder rejects anything else.
+	var req setupRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	user, err := s.Auth.CreateUser(r.Context(), auth.CreateUserParams{
+		Username:    req.Username,
+		Password:    req.Password,
+		DisplayName: req.DisplayName,
+		Email:       req.Email,
+	})
+	if err != nil {
+		s.mapAuthError(w, r, err)
+		return
+	}
+
+	if err := s.provisionDefaultSpace(r.Context(), user.ID); err != nil {
+		// The account exists and can sign in. Reporting a failure here would
+		// tell the client to retry, and the retry dies on USERNAME_TAKEN — so
+		// log the degraded first run and answer 201.
+		s.Logger.Warn("register: default space provisioning failed",
+			"user_id", user.ID, "error", err)
+	}
+	writeJSON(w, http.StatusCreated, fromUser(user))
+}
+
+// provisionDefaultSpace gives a new account the Space doc 09 §4 promises and
+// records it as the account's default.
+func (s *Server) provisionDefaultSpace(ctx context.Context, userID string) error {
+	sp, err := s.Spaces.Create(ctx, canonical.UserID(userID), defaultSpaceName)
+	if err != nil {
+		return err
+	}
+	return s.Accounts.SetDefaultSpaceID(ctx, userID, string(sp.ID), time.Now().UTC())
 }
 
 type loginRequest struct {
