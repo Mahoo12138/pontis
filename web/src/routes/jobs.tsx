@@ -87,9 +87,9 @@ export default function JobsPage() {
             <Table.Tr>
               <Table.Th>任务</Table.Th>
               <Table.Th w={110}>状态</Table.Th>
-              <Table.Th w={170}>进度</Table.Th>
+              <Table.Th w={110}>进度</Table.Th>
               <Table.Th w={110}>发起者</Table.Th>
-              <Table.Th w={110}>时间</Table.Th>
+              <Table.Th w={140}>时间</Table.Th>
               <Table.Th w={60} />
             </Table.Tr>
           </Table.Thead>
@@ -177,6 +177,7 @@ function JobRow({ job, onCancel, onRetry }: { job: JobView; onCancel: () => void
   const status = STATUS_META[job.status];
   const active = job.status === 'running' || job.status === 'queued' || job.status === 'retry_wait';
   const retryable = job.status === 'failed' || job.status === 'cancelled';
+  const secondLine = job.error ?? job.phase ?? job.space_name;
   return (
     <Table.Tr>
       <Table.Td>
@@ -189,9 +190,19 @@ function JobRow({ job, onCancel, onRetry }: { job: JobView; onCancel: () => void
               </Text>
             )}
           </Text>
-          {(job.space_name || job.error) && (
-            <Text fz={12} c={job.status === 'failed' ? undefined : 'dimmed'} style={{ color: job.status === 'failed' ? tokens.syncError : undefined }} truncate>
-              {job.error ?? job.space_name}
+          {/* The phase text goes here, not in 进度: it is a sentence the backend
+              writes ("备份完成: …json", "扫描书签"), and for a finished job it is
+              the result rather than any progress. The task column is the widest
+              one, so it is the only place it reads as one line. */}
+          {secondLine && (
+            <Text
+              fz={12}
+              c={job.status === 'failed' ? undefined : 'dimmed'}
+              style={{ color: job.status === 'failed' ? tokens.syncError : undefined }}
+              truncate
+              title={secondLine}
+            >
+              {secondLine}
             </Text>
           )}
         </div>
@@ -207,24 +218,36 @@ function JobRow({ job, onCancel, onRetry }: { job: JobView; onCancel: () => void
         </Group>
       </Table.Td>
       <Table.Td>
-        {job.progress ? (
+        {job.progress && job.progress.total > 0 ? (
           <div>
-            <Progress value={(job.progress.current / job.progress.total) * 100} size={4} color="accentBlue" mb={4} />
+            <Progress
+              value={Math.min(100, (job.progress.current / job.progress.total) * 100)}
+              size={4}
+              color="accentBlue"
+              mb={4}
+            />
             <Text fz={11} c="dimmed">
-              {job.progress.current}/{job.progress.total} · {job.phase}
+              {job.progress.current}/{job.progress.total}
             </Text>
           </div>
         ) : (
-          <Text fz={12} c="dimmed" truncate>{job.phase ?? '—'}</Text>
+          /* 0/0 is not an empty progress bar, it is the absence of one. The
+             backend reports these jobs with a phase sentence instead, which now
+             reads in full beside the task name. */
+          <Text fz={12} c="dimmed">—</Text>
         )}
       </Table.Td>
-      <Table.Td c="dimmed" fz={12}>{job.owner}</Table.Td>
-      <Table.Td c="dimmed" fz={12}>
-        {job.finished_at
-          ? `完成于 ${formatRelativeTime(job.finished_at)}`
-          : job.started_at
-            ? `开始于 ${formatRelativeTime(job.started_at)}`
-            : `计划于 ${formatRelativeTime(job.scheduled_at)}`}
+      {/* `c` and `fz` are Text props; on a Table.Td they fall through to the
+          DOM as unknown attributes. */}
+      <Table.Td><Text fz={12} c="dimmed">{job.owner}</Text></Table.Td>
+      <Table.Td>
+        <Text fz={12} c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+          {job.finished_at
+            ? `完成于 ${formatRelativeTime(job.finished_at)}`
+            : job.started_at
+              ? `开始于 ${formatRelativeTime(job.started_at)}`
+              : `计划于 ${formatRelativeTime(job.scheduled_at)}`}
+        </Text>
       </Table.Td>
       <Table.Td>
         <Menu shadow="md" width={150} position="bottom-end">
