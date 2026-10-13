@@ -1,7 +1,7 @@
 // Popup: binding status at a glance + manual sync (doc 05 §15 trigger).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Anchor, Badge, Box, Button, Group, Stack, Text, Title } from '@mantine/core';
+import { ActionIcon, Badge, Box, Button, Group, Stack, Text, Title } from '@mantine/core';
 import { PontisDB, type BindingRecord } from '../../core/store/db';
 import { createChromiumAdapter } from '../../core/browser/chromium';
 import { countScopeBookmarks } from '../../core/browser/scopeCount';
@@ -88,11 +88,25 @@ export function App() {
         <Title order={4} fw={600}>
           Pontis 同步
         </Title>
-        {waiting.length > 0 && (
-          <Badge color="warningAmber" variant="filled">
-            {`${waiting.length} 个空间待确认`}
-          </Badge>
-        )}
+        <Group gap="xs" wrap="nowrap">
+          {waiting.length > 0 && (
+            <Badge color="warningAmber" variant="filled">
+              {`${waiting.length} 个空间待确认`}
+            </Badge>
+          )}
+          <ActionIcon
+            component="a"
+            href={chromeApi().runtime.getURL('options.html')}
+            target="_blank"
+            variant="subtle"
+            color="gray"
+            size="md"
+            aria-label="打开设置页"
+            title="打开设置页"
+          >
+            <SettingsGlyph />
+          </ActionIcon>
+        </Group>
       </Group>
 
       <Box className="pontis-listBox" mx="md">
@@ -161,34 +175,26 @@ export function App() {
             每个空间的同步都关着，这里不会上传或下载任何东西
           </Text>
         )}
-        {/* The popup can only look. Re-mounting a deleted folder, answering a
-            reconciliation and switching a space off all live on the settings
-            page — a row that says "目录缺失" with nothing to click just sends
-            the person to close the popup and find it themselves. The hash puts
-            them on 同步管理 instead of on a tab they then have to leave. */}
-        {/* Two different destinations, so two links: the start page is a page
-            to open, and its source is approved on the settings tab. Merging
-            them would make "打开起始页" mean "change what it shows". */}
-        <Anchor size="xs" ta="center" href={chromeApi().runtime.getURL('start-page.html')} target="_blank">
-          打开起始页
-        </Anchor>
-        <Anchor
-          size="xs"
-          ta="center"
-          href={`${chromeApi().runtime.getURL('options.html')}#start-page`}
-          target="_blank"
-        >
-          起始页设置
-        </Anchor>
-        <Anchor
-          size="xs"
-          ta="center"
-          href={`${chromeApi().runtime.getURL('options.html')}#sync`}
-          target="_blank"
-        >
-          打开设置页管理绑定
-        </Anchor>
       </Stack>
     </Stack>
+  );
+}
+
+/** The settings mark: two rails with a knob each. Drawn inline rather than
+ * pulled from an icon package because this is the third glyph the extension
+ * needs in total, and a dependency for one 16px path is not worth the bundle. */
+function SettingsGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden focusable="false">
+      <path
+        d="M2 4.5h7M12.5 4.5H14M2 11.5h2.5M8.5 11.5H14"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        fill="none"
+      />
+      <circle cx="10.75" cy="4.5" r="1.75" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="6.25" cy="11.5" r="1.75" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
   );
 }
