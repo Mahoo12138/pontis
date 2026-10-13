@@ -4,7 +4,7 @@
 // allowed to become is a packaging decision, not a setting (§9.2), which is why
 // the entrypoint here is a plain page and `newtab` re-uses it.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Box, Button, Group, Loader, Stack, Text, Title } from '@mantine/core';
 import { chromeApi, type StorageChangeHandler } from '../../runtime/chromeApi';
 import { createRuntime, errText } from '../../ui/runtime';
@@ -337,24 +337,38 @@ function Shell({
   status?: React.ReactNode;
   title: string;
   background?: Record<string, string>;
-  /** The search row. It shares the pinned band with the title rather than
-   * sticking on its own, because a second sticky element needs the first one's
-   * measured height as its offset, and that height moves with the colour
-   * scheme, the zoom level and how long the status line is. */
+  /** The search row. At rest it sits well below the title; scrolling brings it
+   * up to a pin point a short distance under the title row. That pin needs the
+   * title row's actual height as its `top`, and the height moves with the
+   * colour scheme, the zoom level and how long the status text is — so it is
+   * measured and handed to the stylesheet rather than guessed at. */
   search?: React.ReactNode;
 }) {
+  const headRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const head = headRef.current;
+    if (!head) return;
+    const publish = () =>
+      document.documentElement.style.setProperty('--pontis-sp-head-h', `${head.offsetHeight}px`);
+    publish();
+    const observe = new ResizeObserver(publish);
+    observe.observe(head);
+    return () => observe.disconnect();
+  }, []);
+
   return (
     <Box className="pontis-page pontis-spShell" style={background as React.CSSProperties | undefined}>
-      <Box className="pontis-spTopBar">
-        <Group justify="space-between" wrap="nowrap" className="pontis-spHead">
-          <Title order={4} fw={600} className="pontis-spTitle" title={title}>
-            {title}
-          </Title>
-          {status}
-        </Group>
+      <Group ref={headRef} justify="space-between" wrap="nowrap" className="pontis-spHead">
+        <Title order={4} fw={600} className="pontis-spTitle" title={title}>
+          {title}
+        </Title>
+        {status}
+      </Group>
+      <Box className="pontis-spBody">
         {search}
+        {children}
       </Box>
-      <Box className="pontis-spBody">{children}</Box>
     </Box>
   );
 }

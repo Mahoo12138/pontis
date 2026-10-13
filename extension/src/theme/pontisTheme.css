@@ -301,14 +301,13 @@ html[data-mantine-color-scheme='dark'] {
   flex-direction: column;
 }
 
-/* The pinned band: the title row and the search row together. They stick as one
-   block because the search row would otherwise need the title row's measured
-   height as its own sticky offset, and that height moves with the colour
-   scheme, the zoom level and how long the status text is. */
-.pontis-spTopBar {
+.pontis-spHead {
+  /* Stays put while the folder scrolls, so the title and the "how fresh is
+     this" line are never off-screen on a long list. */
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: 3;
+  padding: 14px 28px;
   border-bottom: 1px solid var(--mantine-color-gray-2);
   /* Frosted rather than solid: the background image belongs to the window, and
      an opaque bar would cut it in half. */
@@ -317,17 +316,13 @@ html[data-mantine-color-scheme='dark'] {
 }
 
 @supports not (backdrop-filter: blur(2px)) {
-  .pontis-spTopBar {
+  .pontis-spHead {
     background: var(--pontis-workspace-bg);
   }
 }
 
-html[data-mantine-color-scheme='dark'] .pontis-spTopBar {
+html[data-mantine-color-scheme='dark'] .pontis-spHead {
   border-bottom-color: var(--mantine-color-dark-4);
-}
-
-.pontis-spHead {
-  padding: 14px 28px;
 }
 
 .pontis-spTitle {
@@ -499,12 +494,22 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
 .pontis-spSearchArea {
   display: flex;
   justify-content: center;
-  padding: 4px 28px 18px;
+  position: sticky;
+  /* Where it parks: a short way under the title row, whose height is measured
+   * and published by the page because it moves with the scheme, the zoom and
+   * the length of the status text. */
+  top: calc(var(--pontis-sp-head-h, 58px) + 12px);
+  z-index: 2;
+  /* The drop it starts at. Margin rather than padding, so the sticky offset
+     applies to the field itself and not to empty space above it — otherwise the
+     pinned bar would carry this gap down with it and leave a clear strip for
+     rows to show through. */
+  margin: clamp(48px, 14vh, 150px) 0 24px;
 }
 
 @media (max-height: 700px) {
   .pontis-spSearchArea {
-    padding: 2px 28px 12px;
+    margin-top: 28px;
   }
 }
 
@@ -526,6 +531,9 @@ html[data-mantine-color-scheme='dark'] .pontis-spEntry:hover {
      this only adds a little more ground for the text to sit on and lets the
      wallpaper read through. */
   background: color-mix(in srgb, var(--pontis-workspace-bg) 34%, transparent);
+  /* Once pinned, bookmark rows pass behind this field. Blurring the backdrop
+     keeps them from reading through the placeholder and the typed query. */
+  backdrop-filter: blur(14px) saturate(1.15);
 }
 
 html[data-mantine-color-scheme='dark'] .pontis-spSearchBox {
