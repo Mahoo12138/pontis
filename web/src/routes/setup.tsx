@@ -4,6 +4,7 @@ import {
   TextInput,
   PasswordInput,
   Button,
+  Group,
   Stack,
   Paper,
   Text,
@@ -12,6 +13,7 @@ import {
 import { useForm } from '@mantine/form';
 import { IconAlertCircle } from '@tabler/icons-react';
 import { useSetup } from '../hooks/use-auth';
+import { PontisLogo } from '../components/common/PontisLogo';
 
 export default function SetupPage() {
   const navigate = useNavigate();
@@ -47,7 +49,10 @@ export default function SetupPage() {
     }}>
       <Paper shadow="sm" radius="md" p="xl" w={440}>
         <Stack gap="md">
-          <Text fz="lg" fw={600}>初始化 Pontis</Text>
+          <Group gap="sm">
+            <PontisLogo />
+            <Text fz="lg" fw={600}>初始化 Pontis</Text>
+          </Group>
           <Text fz="sm" c="dimmed">创建第一个管理员账户</Text>
 
           {error && (

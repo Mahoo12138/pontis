@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { TextInput, PasswordInput, Button, Stack, Paper, Text, Alert, Anchor } from '@mantine/core';
+import { TextInput, PasswordInput, Button, Group, Stack, Paper, Text, Alert, Anchor } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { IconAlertCircle } from '@tabler/icons-react';
 import { useLogin } from '../hooks/use-auth';
+import { PontisLogo } from '../components/common/PontisLogo';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -38,7 +39,10 @@ export default function LoginPage() {
     }}>
       <Paper shadow="sm" radius="md" p="xl" w={400}>
         <Stack gap="md">
-          <Text fz="lg" fw={600}>Pontis</Text>
+          <Group gap="sm">
+            <PontisLogo />
+            <Text fz="lg" fw={600}>Pontis</Text>
+          </Group>
           <Text fz="sm" c="dimmed">登录到你的书签工作空间</Text>
 
           {error && (

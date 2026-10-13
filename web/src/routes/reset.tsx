@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Group, Paper, PasswordInput, Stack, Text, Title } from '@mantine/core';
 import { IconAlertCircle, IconCheck } from '@tabler/icons-react';
 import { useResetPassword } from '../hooks/use-auth';
+import { PontisLogo } from '../components/common/PontisLogo';
 
 /**
  * Settle a password-reset link.
@@ -124,9 +125,12 @@ function Shell({ children }: { children: React.ReactNode }) {
     >
       <Paper shadow="sm" radius="md" p="xl" w={420} withBorder>
         <Stack gap="md">
-          <Title order={4} fw={600}>
-            重置密码
-          </Title>
+          <Group gap="sm">
+            <PontisLogo alt="Pontis" />
+            <Title order={4} fw={600}>
+              重置密码
+            </Title>
+          </Group>
           {children}
         </Stack>
       </Paper>

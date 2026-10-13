@@ -36,6 +36,7 @@ import {
   sidebarItemIcon,
 } from '../../styles/sidebar.css';
 import { tokens } from '../../styles/semantic-tokens.css';
+import { PontisLogo } from '../common/PontisLogo';
 
 export default function Sidebar() {
   const navigate = useNavigate();
@@ -90,7 +91,7 @@ export default function Sidebar() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Logo */}
       <div className={sidebarLogo}>
-        <IconLayoutGrid size={20} stroke={1.5} style={{ color: tokens.accent }} />
+        <PontisLogo size={28} />
         Pontis
       </div>
 
