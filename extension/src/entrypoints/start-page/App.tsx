@@ -5,7 +5,7 @@
 // the entrypoint here is a plain page and `newtab` re-uses it.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Box, Button, Group, Loader, Stack, Text, Title } from '@mantine/core';
+import { Alert, Box, Button, Group, Loader, Stack, Text, Title, useComputedColorScheme } from '@mantine/core';
 import { chromeApi, type StorageChangeHandler } from '../../runtime/chromeApi';
 import { createRuntime, errText } from '../../ui/runtime';
 import {
@@ -163,7 +163,10 @@ export function App() {
   const settingsHref = `${chromeApi().runtime.getURL('options.html')}#start-page`;
 
   const headTitle = titleFor(appearance, new Date());
-  const headBackground = backgroundLayers(appearance);
+  // The scheme, not a stored preference: one wallpaper carries two background
+  // colours precisely so that flipping the OS between light and dark needs no
+  // second decision, and this is the one place that knows which one is showing.
+  const headBackground = backgroundLayers(appearance, useComputedColorScheme('light'));
 
   if (loading) {
     return (

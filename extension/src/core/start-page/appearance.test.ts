@@ -5,7 +5,7 @@
 // deleted with the source it belongs to.
 
 import { describe, expect, it } from 'vitest';
-import { PontisDB } from '../store/db';
+import { PontisDB, type StartPageAppearanceRecord } from '../store/db';
 import { clearStartPage, configIdFor } from './provider';
 import {
   backgroundLayers,
@@ -14,9 +14,11 @@ import {
   isStoredBackground,
   loadAppearance,
   saveAppearance,
+  surfaceLayers,
   titleFor,
   validateBackgroundInput,
   DEFAULT_BACKGROUND_OPACITY,
+  DEFAULT_SURFACE_OPACITY,
   MAX_BACKGROUND_INPUT_BYTES,
 } from './appearance';
 
@@ -73,26 +75,102 @@ describe('isStoredBackground', () => {
 });
 
 describe('backgroundLayers', () => {
-  it('is absent when there is no image, and when the image is fully transparent', () => {
-    expect(backgroundLayers(defaultAppearance('x'))).toBeUndefined();
-    expect(backgroundLayers({ ...defaultAppearance('x'), background: PNG, backgroundOpacity: 0 })).toBeUndefined();
+  const look = (patch: Partial<StartPageAppearanceRecord> = {}) => ({
+    ...defaultAppearance('x'),
+    background: PNG,
+    backgroundOpacity: 0.35,
+    ...patch,
   });
 
-  it('veils the image by the theme colour rather than hard-coding one', () => {
-    const layers = backgroundLayers({ ...defaultAppearance('x'), background: PNG, backgroundOpacity: 0.35 })!;
+  it('is absent only when there is no picture at all', () => {
+    expect(backgroundLayers(defaultAppearance('x'), 'light')).toBeUndefined();
+    expect(backgroundLayers({ ...defaultAppearance('x'), backgroundOpacity: 0.35 }, 'light')).toBeUndefined();
+  });
+
+  it('veils the image by the page colour rather than hard-coding one', () => {
+    const layers = backgroundLayers(look(), 'light')!;
     expect(layers.backgroundImage).toContain('color-mix(in srgb, var(--pontis-workspace-bg) 65%, transparent)');
     expect(layers.backgroundImage).toContain(`url("${PNG}")`);
     // Fixed, so a long folder scrolls under the picture instead of carrying it.
     expect(layers.backgroundAttachment).toBe('fixed');
   });
 
-  it('will not put a stored string it does not recognise into the style', () => {
-    const layers = backgroundLayers({
-      ...defaultAppearance('x'),
-      background: 'url(javascript:alert(1))',
-      backgroundOpacity: 1,
+  it('lays the colour read from the picture under both schemes', () => {
+    // The pair is one decision made twice, so the page picks which half to use
+    // from the scheme it is already rendering in.
+    const painted = { tintLight: '#f4f7fb', tintDark: '#161a20' };
+    expect(backgroundLayers(look(painted), 'light')!['--pontis-workspace-bg']).toBe('#f4f7fb');
+    expect(backgroundLayers(look(painted), 'dark')!['--pontis-workspace-bg']).toBe('#161a20');
+    // And the veil is mixed from that same colour, not from a second literal.
+    expect(backgroundLayers(look(painted), 'dark')!.backgroundImage).toContain('var(--pontis-workspace-bg)');
+  });
+
+  it('keeps the colour when the picture is faded out entirely', () => {
+    // Opacity 0 means the photograph is gone, not that the page stops being the
+    // colour that was read out of it, or that its surfaces go transparent.
+    expect(backgroundLayers(look({ tintLight: '#f4f7fb', backgroundOpacity: 0 }), 'light')).toEqual({
+      ...surfaceLayers(DEFAULT_SURFACE_OPACITY),
+      '--pontis-workspace-bg': '#f4f7fb',
     });
+  });
+
+  it('will not take a colour or an image it does not recognise', () => {
+    // A hand-edited row is the threat here: these two reach a custom property
+    // every glass layer on the page is mixed from, and background-image is
+    // fetched from silently.
+    const layers = backgroundLayers(
+      { ...defaultAppearance('x'), background: 'url(javascript:alert(1))', tintLight: 'red', tintDark: '#fff' },
+      'light',
+    );
     expect(layers).toBeUndefined();
+    const half = backgroundLayers({ ...look(), tintLight: 'var(--x); }' }, 'light')!;
+    expect(half['--pontis-workspace-bg']).toBeUndefined();
+    expect(half.backgroundImage).toContain('url(');
+  });
+});
+
+describe('surfaceLayers', () => {
+  it('reproduces the four documented layers at the default', () => {
+    expect(surfaceLayers(DEFAULT_SURFACE_OPACITY)).toEqual({
+      '--pontis-glass-surface': '82%',
+      '--pontis-glass-field': '80%',
+      '--pontis-glass-chrome': '70%',
+      '--pontis-glass-firm': '96%',
+    });
+  });
+
+  it('moves the four together and keeps the steps between them', () => {
+    const dialed = surfaceLayers(0.6);
+    expect(dialed).toEqual({
+      '--pontis-glass-surface': '60%',
+      '--pontis-glass-field': '58%',
+      '--pontis-glass-chrome': '48%',
+      '--pontis-glass-firm': '74%',
+    });
+    // However thin the reader makes them, the header stays the see-through one
+    // and a hovered tile stays firmer than the tile under it.
+    expect(Number.parseFloat(dialed['--pontis-glass-chrome']!)).toBeLessThan(
+      Number.parseFloat(dialed['--pontis-glass-surface']!),
+    );
+    expect(Number.parseFloat(dialed['--pontis-glass-firm']!)).toBeGreaterThan(
+      Number.parseFloat(dialed['--pontis-glass-surface']!),
+    );
+  });
+
+  it('cannot be dialled past solid, and takes nonsense as the default', () => {
+    expect(surfaceLayers(1)['--pontis-glass-firm']).toBe('100%');
+    expect(surfaceLayers(40)['--pontis-glass-surface']).toBe('100%');
+    expect(surfaceLayers(-4)['--pontis-glass-surface']).toBe('0%');
+    expect(surfaceLayers(Number.NaN)['--pontis-glass-surface']).toBe('82%');
+  });
+
+  it('rides along with the rest of the page background', () => {
+    const layers = backgroundLayers(
+      { ...defaultAppearance('x'), background: PNG, backgroundOpacity: 0.35, surfaceOpacity: 0.5 },
+      'light',
+    )!;
+    expect(layers['--pontis-glass-surface']).toBe('50%');
+    expect(layers['--pontis-glass-chrome']).toBe('38%');
   });
 });
 
@@ -131,6 +209,47 @@ describe('loadAppearance / saveAppearance', () => {
     expect((await saveAppearance(db, 'i:d', { backgroundOpacity: Number.NaN })).backgroundOpacity).toBe(
       DEFAULT_BACKGROUND_OPACITY,
     );
+    // The same guard on the second slider, whose default is not the first one's.
+    expect((await saveAppearance(db, 'i:d', { surfaceOpacity: Number.NaN })).surfaceOpacity).toBe(
+      DEFAULT_SURFACE_OPACITY,
+    );
+    expect((await saveAppearance(db, 'i:d', { surfaceOpacity: 0.5 })).surfaceOpacity).toBe(0.5);
+    await db.close();
+  });
+
+  it('gives a row written before the second slider its own default', async () => {
+    const db = await freshDb();
+    const legacy = { ...defaultAppearance('i:d') } as Record<string, unknown>;
+    delete legacy.surfaceOpacity;
+    await db.startPageAppearance.put(legacy as unknown as StartPageAppearanceRecord);
+    const kept = await saveAppearance(db, 'i:d', { titleText: '只是改个标题' });
+    expect(kept.surfaceOpacity).toBe(DEFAULT_SURFACE_OPACITY);
+    // and not the other slider's default, which is a different number.
+    expect(kept.backgroundOpacity).toBe(DEFAULT_BACKGROUND_OPACITY);
+    await db.close();
+  });
+
+  it('keeps the colours read out of the picture, and drops them with it', async () => {
+    const db = await freshDb();
+    await saveAppearance(db, 'i:d', { background: PNG, tintLight: '#ABC123', tintDark: '#101418' });
+    // Normalised on the way in, because the same string reaches the page.
+    expect((await loadAppearance(db, 'i:d')).tintLight).toBe('#abc123');
+
+    await saveAppearance(db, 'i:d', { tintLight: 'rgb(1,2,3)' });
+    const afterBad = await loadAppearance(db, 'i:d');
+    expect(afterBad.tintLight).toBeNull();
+    // A patch that names one colour says nothing about the other.
+    expect(afterBad.tintDark).toBe('#101418');
+
+    // Clearing is a write of null, not an absence.
+    await saveAppearance(db, 'i:d', { tintDark: null });
+    expect((await loadAppearance(db, 'i:d')).tintDark).toBeNull();
+
+    // What was read out of a picture has no meaning once the picture is gone.
+    await saveAppearance(db, 'i:d', { background: null });
+    const bare = await loadAppearance(db, 'i:d');
+    expect(bare.tintLight).toBeNull();
+    expect(bare.tintDark).toBeNull();
     await db.close();
   });
 

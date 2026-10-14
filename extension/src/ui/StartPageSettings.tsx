@@ -11,8 +11,10 @@ import {
   Alert,
   Box,
   Button,
+  ColorInput,
   Divider,
   Group,
+  Input,
   Select,
   Slider,
   Stack,
@@ -32,11 +34,17 @@ import {
   prepareBackground,
   publishAppearanceChange,
   saveAppearance,
+  tintsFromStoredBackground,
 } from '../core/start-page/appearance';
+import { LEGIBILITY_FLOOR, groundLegibility, normalizeTint } from '../core/start-page/tint';
 import type { StartPageAppearanceRecord, StartPageConfigRecord } from '../core/store/db';
 
 const runtime = createRuntime();
 const deps = { db: runtime.db, bootstrap: runtime.bootstrap, client: runtime.client };
+
+/** The picker's top row: the theme's own two grounds, so "back to no colour"
+ * is a choice in the same control as the colours read out of a picture. */
+const GROUND_SWATCHES = ['#ffffff', '#f8f9fa', '#e7e9ec', '#d1d5db', '#374151', '#202329', '#17191c', '#111315'];
 
 export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
   const [config, setConfig] = useState<StartPageConfigRecord | null>(null);
@@ -54,6 +62,9 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
   const [appearance, setAppearance] = useState<StartPageAppearanceRecord>(() => defaultAppearance(''));
   const [titleDraft, setTitleDraft] = useState('');
   const [opacityDraft, setOpacityDraft] = useState(0);
+  const [surfaceDraft, setSurfaceDraft] = useState(0);
+  const [tintLightDraft, setTintLightDraft] = useState('');
+  const [tintDarkDraft, setTintDarkDraft] = useState('');
 
   const reload = useCallback(async () => {
     const b = await runtime.bootstrap.get();
@@ -69,7 +80,16 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
     setAppearance(look);
     setTitleDraft(look.titleText);
     setOpacityDraft(Math.round(look.backgroundOpacity * 100));
+    setSurfaceDraft(Math.round(look.surfaceOpacity * 100));
+    setTintLightDraft(look.tintLight ?? '');
+    setTintDarkDraft(look.tintDark ?? '');
   }, []);
+
+  /** The two colour fields show what the row holds, in the one form they take. */
+  const showTints = (row: StartPageAppearanceRecord) => {
+    setTintLightDraft(row.tintLight ?? '');
+    setTintDarkDraft(row.tintDark ?? '');
+  };
 
   useEffect(() => {
     void reload();
@@ -180,7 +200,12 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
   // themselves through chrome.storage so an already-open page repaints. Nothing
   // here touches the source or the cached tree.
   const applyAppearance = async (
-    patch: Partial<Pick<StartPageAppearanceRecord, 'titleText' | 'background' | 'backgroundOpacity'>>,
+    patch: Partial<
+      Pick<
+        StartPageAppearanceRecord,
+        'titleText' | 'background' | 'backgroundOpacity' | 'surfaceOpacity' | 'tintLight' | 'tintDark'
+      >
+    >,
   ) => {
     if (!config) return null;
     const next = await saveAppearance(runtime.db, config.id, patch);
@@ -205,7 +230,14 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
         setError(BACKGROUND_ERROR_TEXT[prepared.error]);
         return;
       }
-      await applyAppearance({ background: prepared.dataUrl });
+      // A new picture is a new colour: what was read out of the old one is
+      // replaced rather than kept as a hand-tint over something else.
+      const next = await applyAppearance({
+        background: prepared.dataUrl,
+        tintLight: prepared.tints?.light ?? null,
+        tintDark: prepared.tints?.dark ?? null,
+      });
+      if (next) showTints(next);
     } catch (err) {
       setError(errText(err));
     } finally {
@@ -213,9 +245,65 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
     }
   };
 
-  const removeBackground = () => void applyAppearance({ background: null });
+  const removeBackground = async () => {
+    const next = await applyAppearance({ background: null });
+    if (next) showTints(next);
+  };
 
   const saveOpacity = (percent: number) => void applyAppearance({ backgroundOpacity: percent / 100 });
+
+  const saveSurface = (percent: number) => void applyAppearance({ surfaceOpacity: percent / 100 });
+
+  /** Take the colour back out of the wallpaper the page is already showing. */
+  const reextractTints = async () => {
+    if (!config || !appearance.background) return;
+    setBusy('tint');
+    setError(null);
+    try {
+      const tints = await tintsFromStoredBackground(appearance.background);
+      const next = await applyAppearance({
+        tintLight: tints?.light ?? null,
+        tintDark: tints?.dark ?? null,
+      });
+      if (next) showTints(next);
+      if (!tints) setError('这张图片看不出主色调，已改用主题底色。');
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Typed, not picked, can be mid-edit: an unfinished hex keeps the stored
+  // colour rather than quietly clearing it, and the field says why.
+  const lightInvalid = tintLightDraft !== '' && normalizeTint(tintLightDraft) === null;
+  const darkInvalid = tintDarkDraft !== '' && normalizeTint(tintDarkDraft) === null;
+
+  const saveTints = async () => {
+    if (!config) return;
+    const light = lightInvalid ? appearance.tintLight : normalizeTint(tintLightDraft);
+    const dark = darkInvalid ? appearance.tintDark : normalizeTint(tintDarkDraft);
+    if (light === appearance.tintLight && dark === appearance.tintDark) {
+      showTints(appearance);
+      return;
+    }
+    const next = await applyAppearance({ tintLight: light, tintDark: dark });
+    if (next) showTints(next);
+  };
+
+  // §0.6's floor, reported rather than enforced: a colour or a thinness chosen
+  // on purpose stays chosen, but the page says what it costs the text on it.
+  // Both are measured at the worst case the spec allows — a black photograph at
+  // full opacity — so the answer moves with the two sliders, not just the hues.
+  const cover = Math.min(1, Math.max(0, surfaceDraft / 100));
+  const illegible: string[] = [];
+  for (const [label, typed, scheme] of [
+    ['浅色配色', tintLightDraft, 'light'],
+    ['深色配色', tintDarkDraft, 'dark'],
+  ] as const) {
+    const hex = normalizeTint(typed);
+    if (hex && groundLegibility(hex, scheme, cover) < LEGIBILITY_FLOOR) illegible.push(label);
+  }
 
   if (!paired) {
     return (
@@ -297,10 +385,10 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
       <Divider label="外观" labelPosition="left" />
 
       {config ? (
-        <Stack gap="sm">
+        <Stack gap="md">
           <TextInput
+            className="pontis-spField"
             label="标题"
-            maw={360}
             maxLength={60}
             placeholder={greetingFor(new Date())}
             description={`留空则按时间显示问候语，现在是「${greetingFor(new Date())}」。`}
@@ -315,61 +403,126 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
             }}
           />
 
-          <Box>
-            <Text size="sm" fw={500} mb={6}>
-              背景图片
-            </Text>
-            <Group gap="sm" wrap="nowrap" align="flex-start">
+          {/* One row for the wallpaper and everything that only means something
+              because a wallpaper does. The two layers hang under the picture —
+              one step in, one step tighter than the groups beside them — so the
+              page says which decisions depend on which. */}
+          <Input.Wrapper
+            label="背景图片"
+            description="图片只保存在这台浏览器里，不会上传到 Server。"
+          >
+            <Group gap="sm" wrap="nowrap" align="center">
               {appearance.background ? (
                 <img className="pontis-spBgThumb" src={appearance.background} alt="当前背景预览" />
               ) : (
                 <Box className="pontis-spBgThumb pontis-spBgThumbEmpty" />
               )}
-              <Stack gap={4}>
-                <Group gap="xs">
-                  <Button size="xs" variant="light" loading={busy === 'background'} component="label">
-                    选择图片
-                    <input
-                      type="file"
-                      accept="image/*"
-                      hidden
-                      onChange={(e) => {
-                        void chooseBackground(e.currentTarget.files?.[0]);
-                        // So picking the same file again still fires a change.
-                        e.currentTarget.value = '';
-                      }}
-                    />
+              <Group gap="xs">
+                <Button size="xs" variant="light" loading={busy === 'background'} component="label">
+                  选择图片
+                  <input
+                    type="file"
+                    accept="image/*"
+                    hidden
+                    onChange={(e) => {
+                      void chooseBackground(e.currentTarget.files?.[0]);
+                      // So picking the same file again still fires a change.
+                      e.currentTarget.value = '';
+                    }}
+                  />
+                </Button>
+                {appearance.background ? (
+                  <Button size="xs" variant="subtle" color="gray" onClick={() => void removeBackground()}>
+                    移除
                   </Button>
-                  {appearance.background ? (
-                    <Button size="xs" variant="subtle" color="gray" onClick={() => void removeBackground()}>
-                      移除
-                    </Button>
-                  ) : null}
-                </Group>
-                <Text size="xs" c="dimmed">
-                  图片只保存在这台浏览器里，不会上传到 Server。
-                </Text>
-              </Stack>
+                ) : null}
+              </Group>
             </Group>
-          </Box>
+
+            {appearance.background ? (
+              <Box className="pontis-spNested">
+                <SliderField
+                  label="背景不透明度"
+                  hint="壁纸透出来的量：越低越淡，文字越容易读。"
+                  value={opacityDraft}
+                  min={0}
+                  step={5}
+                  onChange={setOpacityDraft}
+                  onChangeEnd={saveOpacity}
+                />
+                <SliderField
+                  label="底面不透明度"
+                  hint="标题栏、搜索框和每个磁贴上铺多少底色；四档之间保持原有的层次。"
+                  value={surfaceDraft}
+                  min={40}
+                  step={1}
+                  onChange={setSurfaceDraft}
+                  onChangeEnd={saveSurface}
+                />
+              </Box>
+            ) : null}
+          </Input.Wrapper>
 
           {appearance.background ? (
-            <Box maw={300}>
-              <Text size="sm" fw={500} mb={6}>
-                背景不透明度
-              </Text>
-              <Slider
-                min={0}
-                max={100}
-                step={5}
-                value={opacityDraft}
-                onChange={setOpacityDraft}
-                onChangeEnd={saveOpacity}
-                label={(v: number) => `${v}%`}
-              />
-              <Text size="xs" c="dimmed" mt={4}>
-                数值越低背景越淡，文字越容易读。
-              </Text>
+            <Box>
+              {/* The two colours the picture was read for, side by side because
+                  they are one decision made twice — the same hue at the two ends
+                  of the lightness scale — and a change to one is invisible in
+                  the other. */}
+              <Input.Wrapper
+                label="背景底色"
+                description="从图片的主色调算出，浅深各一档；可直接改，清空回到主题底色，移除图片后一并清除。"
+              >
+                <Group gap="sm" align="flex-end">
+                  <ColorInput
+                    label="浅色配色"
+                    maw={168}
+                    format="hex"
+                    withAsterisk={false}
+                    swatches={GROUND_SWATCHES}
+                    swatchesPerRow={8}
+                    placeholder="主题底色"
+                    value={tintLightDraft}
+                    error={lightInvalid ? '请用 #rrggbb' : undefined}
+                    onChange={setTintLightDraft}
+                    onBlur={() => void saveTints()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void saveTints();
+                      }
+                    }}
+                  />
+                  <ColorInput
+                    label="深色配色"
+                    maw={168}
+                    format="hex"
+                    withAsterisk={false}
+                    swatches={GROUND_SWATCHES}
+                    swatchesPerRow={8}
+                    placeholder="主题底色"
+                    value={tintDarkDraft}
+                    error={darkInvalid ? '请用 #rrggbb' : undefined}
+                    onChange={setTintDarkDraft}
+                    onBlur={() => void saveTints()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void saveTints();
+                      }
+                    }}
+                  />
+                  <Button size="xs" variant="light" loading={busy === 'tint'} onClick={() => void reextractTints()}>
+                    按图片重新提取
+                  </Button>
+                </Group>
+              </Input.Wrapper>
+              {illegible.length > 0 ? (
+                <Text size="xs" c="red" mt={6}>
+                  在这个底色与底面不透明度下，{illegible.join('、')}上的次要文字会低于 {LEGIBILITY_FLOOR}
+                  :1 的可读底线。把底色调回接近白或接近黑，或把底面调浓一些。
+                </Text>
+              ) : null}
             </Box>
           ) : null}
         </Stack>
@@ -417,5 +570,47 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
           : '当前安装的是标准同步版本，不会接管新标签页。想让新标签页显示 Pontis 起始页，请另行安装「Pontis (起始页)」构建；停用本扩展不会影响浏览器原有的新标签页。'}
       </Text>
     </Stack>
+  );
+}
+
+/**
+ * A slider in the same shape as the fields around it: label, hint, control.
+ *
+ * The value it is set to goes in the label rather than only in the thumb,
+ * because a thumb's position is not a readout — and because Mantine's Slider
+ * has no label of its own, the floating one it does have disappears the moment
+ * the pointer is let go.
+ */
+function SliderField({
+  label,
+  hint,
+  value,
+  min,
+  step,
+  onChange,
+  onChangeEnd,
+}: {
+  label: string;
+  hint: string;
+  value: number;
+  min: number;
+  step: number;
+  onChange: (value: number) => void;
+  onChangeEnd: (value: number) => void;
+}) {
+  return (
+    <Input.Wrapper
+      labelElement="div"
+      labelProps={{ className: 'pontis-spFieldLabelRow' }}
+      label={
+        <span className="pontis-spFieldLabel">
+          <span>{label}</span>
+          <span className="pontis-spFieldValue">{value}%</span>
+        </span>
+      }
+      description={hint}
+    >
+      <Slider min={min} max={100} step={step} value={value} onChange={onChange} onChangeEnd={onChangeEnd} />
+    </Input.Wrapper>
   );
 }

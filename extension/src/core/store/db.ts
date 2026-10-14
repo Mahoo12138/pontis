@@ -381,6 +381,17 @@ export interface StartPageAppearanceRecord {
   background: string | null;
   /** 0–1. How much of the image is allowed through the page's own colour. */
   backgroundOpacity: number;
+  /** 0–1. How much of that colour the title bar, the search field and each
+   * bookmark tile lay down in turn; the four glass layers step off this one. */
+  surfaceOpacity: number;
+  /**
+   * The page's background colour, one per scheme, read out of `background` and
+   * then editable. `#rrggbb` or null for "use the theme's own colour" — the row
+   * is re-validated on every read, because these reach a CSS custom property the
+   * whole page is glazed with.
+   */
+  tintLight: string | null;
+  tintDark: string | null;
   updatedAt: number;
 }
 

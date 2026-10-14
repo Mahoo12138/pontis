@@ -220,11 +220,16 @@ html[data-mantine-color-scheme='dark'] {
    layer. The three are stepped on purpose: the header is chrome and lets the
    most light through, the field and the reading surface are where words have
    to be parsed, so they hold enough ground to stand on whatever is behind
-   them. */
+   them. `firm` is what a tile or a crumb rises to on hover.
+
+   The start page can be told to lay more or less ground down than these; when
+   it is, the four are re-stepped from one number on the shell, keeping the
+   distances between them. */
 :root {
   --pontis-glass-chrome: 70%;
   --pontis-glass-field: 80%;
   --pontis-glass-surface: 82%;
+  --pontis-glass-firm: 96%;
 }
 
 /* A page is a 56px bar over a padded content column, capped at the width the
@@ -421,6 +426,55 @@ html[data-mantine-color-scheme='dark'] .pontis-spHead {
   );
 }
 
+/* --- Settings: the 外观 rows -------------------------------------------- */
+
+/* Every row on this tab is label, hint, control — the order Mantine's own
+   fields use — including the two whose control is a slider and so has no
+   InputWrapper of its own. */
+.pontis-spField {
+  max-width: 360px;
+}
+
+/* A slider's value belongs in its label, right-aligned on the same baseline:
+   the thumb's position is not a readout, and this is where someone decides how
+   firm the ground under their bookmarks is. Tabular figures so the number does
+   not shuffle while the thumb is dragged. The label element itself has to be
+   told to span the row, or it shrinks to its text and the value sits beside the
+   name instead of in the column the two rows share. */
+.pontis-spFieldLabelRow {
+  display: flex;
+  width: 100%;
+}
+
+.pontis-spFieldLabel {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+}
+
+.pontis-spFieldValue {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--pontis-text-secondary);
+}
+
+/* The two layers that exist only because a wallpaper does hang under it, one
+   step in and one step tighter than the groups around them. The rule is what
+   makes the subordination legible at the width this page reaches on a large
+   monitor, where the eye has nothing between the heading and the sliders. */
+.pontis-spNested {
+  margin-top: 12px;
+  padding-left: 14px;
+  border-left: 1px solid var(--pontis-subtle-border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 346px;
+}
+
 .pontis-spBody {
   flex: 1;
   width: 100%;
@@ -480,7 +534,7 @@ html[data-mantine-color-scheme='dark'] .pontis-spHead {
 }
 
 .pontis-spCrumb:hover {
-  background: color-mix(in srgb, var(--pontis-workspace-bg) 96%, transparent);
+  background: color-mix(in srgb, var(--pontis-workspace-bg) var(--pontis-glass-firm), transparent);
   color: var(--mantine-color-text);
 }
 
@@ -530,7 +584,7 @@ html[data-mantine-color-scheme='dark'] .pontis-spHead {
 /* Hover stays a background change and nothing else (spec section 10): the tile
    firms up rather than picking up a shadow. */
 .pontis-spEntry:hover {
-  background: color-mix(in srgb, var(--pontis-workspace-bg) 96%, transparent);
+  background: color-mix(in srgb, var(--pontis-workspace-bg) var(--pontis-glass-firm), transparent);
 }
 
 .pontis-spEntryIcon {
