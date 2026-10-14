@@ -330,6 +330,13 @@ outbox 抽干、两个 Profile 的书签栏都还在。这里刻意让服务端�
 会在有人看之前就把 outbox 抽干，"改动不见了"和"改动被丢了"读起来一模一样。它**没有**覆盖
 IndexedDB schema 迁移——那需要两个真实发布版本才能验证。
 
+重启必须走 CDP `Browser.close`，不能 SIGKILL。Chromium 的书签存储是干净退出时才保证落盘：
+实测运行中 `Default/Bookmarks` 根本还不存在，`Browser.close` 之后才有 5 条。被杀掉的 profile
+重启后从一个**空书签模型**开始，而扩展自己的 IndexedDB 因 Dexie 即时写入仍然完好——这个组合
+看起来完全就是"升级把用户书签清空了"，其实是测试自己造出来的。脚本因此会在 quit 前后与重启后
+各读一次磁盘上的 `Bookmarks` / `Bookmarks.bak` 条数，并在重启前先读一次浏览器里的书签栏；
+下次再见到"栏为空"，能一眼分清是产品删的还是测试删的。
+
 另一个曾经手工踩出来的坑仍然成立：第二个 profile 若从第一个 rsync 而来，会连同第一个设备
 的 binding 行一起复制过去，于是同一 profile 里出现两个同 Space 的 binding，旧的那个每轮
 `NOT_BINDING_OWNER`。这不是 bug 的复现路径而是 profile 复制的产物，但它暴露了同一件事：

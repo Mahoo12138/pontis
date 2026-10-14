@@ -414,6 +414,58 @@ class Browser {
     this.browserSession?.close();
     killGroup(this.proc);
   }
+  /**
+   * Close the way a person does. `stop()` SIGKILLs, and a dirty exit is exactly
+   * when Chromium decides to restore `Bookmarks.bak` over `Bookmarks` on the
+   * next start — which then reads as "the extension wiped my bar". Only the
+   * cleanup path may kill; anything a check depends on has to shut down cleanly.
+   */
+  async quit() {
+    try {
+      await this.sendBrowser('Browser.close');
+    } catch {
+      /* the socket dies with the browser; that is the expected answer */
+    }
+    await this.waitForExit();
+    this.browserSession?.close();
+    this.browserSession = null;
+  }
+  waitForExit(timeoutMs = 20_000) {
+    return new Promise((resolve) => {
+      if (this.proc?.exitCode !== null) return resolve();
+      const timer = setTimeout(() => {
+        killGroup(this.proc);
+        resolve();
+      }, timeoutMs);
+      timer.unref?.();
+      this.proc?.once('exit', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+}
+
+/**
+ * What Chromium's own bookmark store says, read off the profile on disk.
+ *
+ * The browser and the extension can both report how many bookmarks exist, but
+ * neither can say *why* a restarted profile came up empty. The store file can:
+ * `Bookmarks` is the last clean write and `Bookmarks.bak` what a dirty shutdown
+ * falls back to, so a live file with 5 urls and a backup with 0 names the
+ * harness as the cause rather than the product.
+ */
+function bookmarkStore(profileDir) {
+  const out = {};
+  for (const name of ['Bookmarks', 'Bookmarks.bak']) {
+    try {
+      const raw = readFileSync(path.join(profileDir, 'Default', name), 'utf8');
+      out[name] = (raw.match(/"url"\s*:/g) || []).length;
+    } catch {
+      out[name] = null;
+    }
+  }
+  return out;
 }
 
 // --- page driving ------------------------------------------------------------
@@ -842,10 +894,20 @@ async function main() {
       'A: the offline edit is queued before the upgrade', JSON.stringify(queued.ops));
 
     const extIdBefore = await a.page.evaluate('return chrome.runtime.id');
-    a.browser.stop();
+    // Read the bar while this browser instance is still alive. Without this the
+    // first post-restart read is also the first check, so an empty bar cannot be
+    // placed: wiped by the upgrade, or already gone before it.
+    const barBeforeRestart = JSON.parse(await a.page.evaluate(treeTitles));
+    check(barBeforeRestart.includes(offlineTitle),
+      `A: the bar holds the offline edit before the restart (bar: ${barBeforeRestart.join(', ') || 'empty'})`);
+    const profileDir = a.browser.dir;
+    log(`  A store on disk before quit: ${JSON.stringify(bookmarkStore(profileDir))}`);
+    await a.browser.quit();
+    log(`  A store after quit:          ${JSON.stringify(bookmarkStore(profileDir))}`);
     rebuildExtensionAtSamePath();
     a.browser = new Browser('A', 9401, { reuseProfile: true });
     await a.browser.start();
+    log(`  A store after restart:       ${JSON.stringify(bookmarkStore(profileDir))}`);
 
     // The server stays down through the restart. That is the harder case the
     // doc cares about, and it makes the outbox assertions deterministic: with a
