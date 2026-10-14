@@ -30,6 +30,20 @@ export default defineConfig({
   // of the other and the two cannot overwrite each other's artifact.
   outDir: newtabBuild ? '.output-newtab' : e2eOrigin ? '.e2e-output' : '.output',
   modules: ['@wxt-dev/module-react'],
+  // The release build names its own ZIP instead of inheriting
+  // `{{name}}-{{version}}-{{browser}}`, which is derived from the package name
+  // and so came out as `pontisextension-0.1.0-chrome.zip`. Staging has to open
+  // a known path, and "glob the output dir and take the newest" silently ships
+  // a stale or wrong-variant package (distribution doc §5).
+  zip: {
+    artifactTemplate: newtabBuild
+      ? 'pontis-chromium-newtab-{{version}}.zip'
+      : 'pontis-chromium-{{version}}.zip',
+    // Sources are only zipped for Firefox targets by default; a sources
+    // archive is exactly the "extra file mixed into the release" staging is
+    // told to refuse (doc §5 step 7).
+    zipSources: false,
+  },
   hooks: {
     'entrypoints:resolved'(_wxt, entrypoints) {
       if (newtabBuild) return;

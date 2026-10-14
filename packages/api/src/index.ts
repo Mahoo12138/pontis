@@ -20,6 +20,8 @@ export type {
   DeviceBindingView,
   DeviceOverview,
   DeviceOverviewResponse,
+  DistributionArtifact,
+  DistributionResponse,
   Binding,
   BindingListResponse,
   CreateBindingRequest,

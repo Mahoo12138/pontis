@@ -42,19 +42,13 @@ import {
   useRestoreBackup,
   useToggleBackupProtected,
 } from '../hooks/use-backups';
-import { formatRelativeTime } from '../lib/format';
+import { formatRelativeTime, formatSize } from '../lib/format';
 
 const KIND_META: Record<Backup['kind'], { label: string; color: string; hint: string }> = {
   manual: { label: '手动', color: 'accentBlue', hint: '保留到手动删除' },
   scheduled: { label: '定时', color: 'coolGray', hint: '按保留策略滚动清理' },
   safety: { label: '安全', color: 'warningAmber', hint: '高风险操作前自动创建,约保留 30 天' },
 };
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
 
 export default function SpaceBackupsPage() {
   const { spaceId } = useParams();

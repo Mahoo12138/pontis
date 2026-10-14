@@ -19,6 +19,7 @@ import {
   checkCreateToken,
   checkJobAccepted,
   checkDeviceOverviewResponse,
+  checkDistributionExtensions,
   checkDuplicates,
   checkErrorEnvelope,
   checkExport,
@@ -58,6 +59,7 @@ import type {
   BindingListResponse,
   CreateTokenResponse,
   DeviceOverviewResponse,
+  DistributionResponse,
   DuplicatesResponse,
   ExportResponse,
   ImportApplyResponse,
@@ -104,6 +106,10 @@ const contract = {
   'root-slots': (v: unknown): RootSlotListResponse => checkRootSlotList(v, 'body'),
   activity: (v: unknown): ActivityListResponse => checkActivityList(v, 'body'),
   'device-overview': (v: unknown): DeviceOverviewResponse => checkDeviceOverviewResponse(v, 'body'),
+  // Extension distribution: the list the install page renders, and the same
+  // read with nothing staged (`start-page-snapshot-empty` is the same idea).
+  'distribution-extensions': (v: unknown): DistributionResponse =>
+    checkDistributionExtensions(v, 'body'),
   bindings: (v: unknown): BindingListResponse => checkBindingList(v, 'body'),
   tokens: (v: unknown): ApiTokenListResponse => checkApiTokenList(v, 'body'),
   backups: (v: unknown): BackupListResponse => checkBackupList(v, 'body'),

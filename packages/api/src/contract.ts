@@ -26,6 +26,8 @@ import type {
   DeviceBindingView,
   DeviceOverview,
   DeviceOverviewResponse,
+  DistributionArtifact,
+  DistributionResponse,
   DuplicatesResponse,
   DuplicateGroup,
   ExportResponse,
@@ -261,6 +263,31 @@ export const checkDeviceOverview: Checker<DeviceOverview> = record<DeviceOvervie
 
 export const checkDeviceOverviewResponse: Checker<DeviceOverviewResponse> =
   record<DeviceOverviewResponse>({ devices: arr(checkDeviceOverview) });
+
+export const checkDistributionArtifact: Checker<DistributionArtifact> =
+  record<DistributionArtifact>({
+    platform: str,
+    version: str,
+    file: str,
+    sha256: str,
+    size_bytes: num,
+    manifest_version: num,
+    min_server_version: str,
+    supported_browsers: arr(str),
+    sync_protocol_versions: arr(num),
+  });
+
+export const checkDistributionExtensions: Checker<DistributionResponse> =
+  record<DistributionResponse>({
+    release: str,
+    commit: str,
+    generated_at: str,
+    server_version: str,
+    http_api_version: str,
+    // The server answers `[]` when this binary carries no package. A null here
+    // would render as an empty install page instead of a contract failure.
+    artifacts: arr(checkDistributionArtifact),
+  });
 
 export const checkBinding: Checker<Binding> = record<Binding>({
   id: str,

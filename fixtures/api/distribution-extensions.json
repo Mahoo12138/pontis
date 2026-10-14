@@ -1,0 +1,24 @@
+{
+  "artifacts": [
+    {
+      "file": "/downloads/extensions/chromium/v0.1.0.zip",
+      "manifest_version": 3,
+      "min_server_version": "0.1.0",
+      "platform": "chromium",
+      "sha256": "da364a7e114149cfb104b80b1b6f334a2076b13cd5c203b932afb3498bd0661c",
+      "size_bytes": 1024,
+      "supported_browsers": [
+        "chrome"
+      ],
+      "sync_protocol_versions": [
+        1
+      ],
+      "version": "0.1.0"
+    }
+  ],
+  "commit": "0000000000000000000000000000000000000000",
+  "generated_at": "2026-01-01T00:00:00Z",
+  "http_api_version": "v1",
+  "release": "v0.1.0",
+  "server_version": "0.1.0"
+}

@@ -322,6 +322,14 @@ Dexie"是唯一合法顺序（`remoteChangeApplier` 的 `readOrder()` / `writeOr
 注意它是**拉式**的：B 的创建落到 rev 4 之后，A 只有在自己再跑一轮时才会收到，所以脚本在
 服务端确认之后又点了一次"立即同步"——这不是掩盖问题，协议本来就不往设备推。
 
+收敛之后脚本还要再走一遍**发布升级**（扩展分发文档 §10.2、§14.2）：停掉服务端，在 A 的
+书签栏造一条离线改动（确认它进了 outbox），删掉扩展目录重新构建到**同一路径**，重启浏览器
+（此时服务端仍然不可达），然后断言扩展 ID、`bootstrap.deviceId`、binding 状态、本地映射数、
+applied 水位线与 outbox 里那条改动全部原样保留；再恢复服务端、同步，断言那条改动上传成功、
+outbox 抽干、两个 Profile 的书签栏都还在。这里刻意让服务端在整个重启期间保持离线：否则新代码
+会在有人看之前就把 outbox 抽干，"改动不见了"和"改动被丢了"读起来一模一样。它**没有**覆盖
+IndexedDB schema 迁移——那需要两个真实发布版本才能验证。
+
 另一个曾经手工踩出来的坑仍然成立：第二个 profile 若从第一个 rsync 而来，会连同第一个设备
 的 binding 行一起复制过去，于是同一 profile 里出现两个同 Space 的 binding，旧的那个每轮
 `NOT_BINDING_OWNER`。这不是 bug 的复现路径而是 profile 复制的产物，但它暴露了同一件事：
@@ -358,9 +366,10 @@ CI（`.github/workflows/ci.yml`）不另立一套命令，跑的就是根命令�
 | `pnpm test:go` | `go test ./...` |
 | `pnpm test:go:race` | `go test -race ./...`，并发与任务队列的边界只在带 race 时才算测过 |
 | `pnpm test:fixtures` | 两组 golden 协议/REST fixture 的漂移检查 |
-| `pnpm e2e:dual-profile` | 两个真实 Chromium profile 经真服务端收敛（见 §10；要开窗口，CI 不跑） |
-| `pnpm build` | web 的 `tsc --noEmit && vite build`（**不等于**可部署产物，见 PR-F1） |
-| `pnpm --filter @pontis/extension build` | `wxt build` → `extension/.output/chrome-mv3` |
+| `pnpm e2e:dual-profile` | 两个真实 Chromium profile 经真服务端收敛，并跑一遍同目录替换文件的发布升级连续性（见 §10；要开窗口） |
+| `pnpm build` | 可部署产物：web 的 `vite build` → 扩展 `wxt zip` → 两份产物分别暂存进 `server/internal/{webui,distribution}/*` → `go build`（PR-F1 已落地） |
+| `pnpm --filter @pontis/extension build` | `wxt build` → `extension/.output/chrome-mv3`（解压目录，开发时手动加载用） |
+| `pnpm --filter @pontis/extension zip` | `wxt zip` → `extension/.output/pontis-chromium-<version>.zip`，包名由 `wxt.config.ts` 的 `zip.artifactTemplate` 钉死 |
 
 `-r --no-bail` 是刻意的：默认的 `-r` 在第一个失败包停下，后面的包根本没跑到，
 聚合命令的退出码因而会替人撒谎。曾经有两个包声明了 `test` 脚本却没有任何测试
@@ -369,6 +378,25 @@ CI（`.github/workflows/ci.yml`）不另立一套命令，跑的就是根命令�
 
 没有 lint 命令。`eslint` 既不是任何包的依赖，仓库里也没有配置文件，那条脚本
 从来跑不起来；要么按原设计把它装齐并写完配置，要么就别留一个必然失败的入口。
+
+### 发布产物里的扩展安装包
+
+规范见仓库根的 [扩展分发与 Release 方案 V1](../pontis-extension-distribution-release-v1.md)，
+这里只记落地的形状：
+
+- `scripts/stage-distribution.mjs` 读 `extension/.output/pontis-chromium-<version>.zip`，
+  校验包结构（顶层 `manifest.json`、MV3、权限集合、无 `host_permissions`、无 `key`、
+  条目路径合法、不含私钥类文件），算 SHA-256，然后把 ZIP 与 `manifest.json`
+  一起写进 `server/internal/distribution/artifacts/`。校验不过就中断构建——
+  装错包是用户要拿真书签去换的东西。
+- 该目录只提交 `.gitkeep`，ZIP 是构建产物；`go:embed` 需要目录里至少有一个匹配项，
+  所以未跑过发布构建的检出会得到「本实例没有内嵌安装包」而不是编译失败。
+- 接口：`GET /api/v1/distribution/extensions` 给清单（服务端自己的
+  `server_version`/`http_api_version`/`sync_protocol_versions` 由 Go 注入，不由构建脚本抄），
+  `GET|HEAD /downloads/extensions/<platform>/v<version>.zip` 给字节。两者都要会话，
+  下载 URL 按版本不可变，路径只与编译期清单比对，不拼磁盘路径。
+- E2E 构建（`Pontis (E2E)`，预授权 origin）与新标签页构建都不是发布产物，
+  staging 的名称与 manifest 断言会把它们挡在 Release 之外。
 
 ## 起始页的真实浏览器矩阵
 

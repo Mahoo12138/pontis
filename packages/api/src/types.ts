@@ -139,6 +139,41 @@ export interface DeviceOverviewResponse {
   devices: DeviceOverview[];
 }
 
+// ─── Extension distribution ─────────────────────────────────
+
+/**
+ * One installable package this instance carries. `file` is its download URL and
+ * never changes for a version, so it is safe to hand to a browser as a link.
+ * `min_server_version` and `sync_protocol_versions` are what a client compares
+ * before pointing a user at the package — version strings are not compared with
+ * each other (docs/extension-distribution §7).
+ */
+export interface DistributionArtifact {
+  platform: string;
+  version: string;
+  file: string;
+  sha256: string;
+  size_bytes: number;
+  manifest_version: number;
+  min_server_version: string;
+  supported_browsers: string[];
+  sync_protocol_versions: number[];
+}
+
+/**
+ * The release embedded in the running server. An empty `artifacts` is a real
+ * state, not a failure: a binary built without the extension package carries
+ * nothing, and the install page has to say that rather than show a broken list.
+ */
+export interface DistributionResponse {
+  release: string;
+  commit: string;
+  generated_at: string;
+  server_version: string;
+  http_api_version: string;
+  artifacts: DistributionArtifact[];
+}
+
 // ─── Bindings ───────────────────────────────────────────────
 
 export interface Binding {

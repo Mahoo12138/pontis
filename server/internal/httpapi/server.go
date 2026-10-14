@@ -19,6 +19,7 @@ import (
 	"pontis/internal/canonical"
 	"pontis/internal/changeset"
 	"pontis/internal/device"
+	"pontis/internal/distribution"
 	"pontis/internal/jobs"
 	"pontis/internal/library"
 	"pontis/internal/organizer"
@@ -67,6 +68,11 @@ type Server struct {
 	// claim. Nil in a checkout that never staged a build; the server then
 	// answers with a hint instead of an empty page.
 	Web fs.FS
+
+	// Distribution is the extension package this binary carries, validated at
+	// boot. A checkout that never ran a release build holds nothing, and the
+	// download endpoints say so rather than failing.
+	Distribution *distribution.Source
 
 	// Deploy is the deployment mode: external origin, TLS behind a proxy, and
 	// which peers may report it. It gates the session cookie's Secure
@@ -167,6 +173,19 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/v1/tokens", s.handleListTokens)
 		r.Post("/api/v1/tokens", s.handleCreateToken)
 		r.Delete("/api/v1/tokens/{tokenID}", s.handleRevokeToken)
+	})
+
+	// Extension packages this binary carries. They sit next to the device
+	// routes because that is where a person goes to install one, and behind the
+	// same session check as the page that links to them. The whole /downloads
+	// namespace is claimed, not just the versions that exist: a path under it
+	// that falls through to the Web app would hand a browser an HTML page where
+	// it expected a package, which is a broken download nobody can read.
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireSession)
+		r.Get("/api/v1/distribution/extensions", s.handleDistributionExtensions)
+		r.Get("/downloads/*", s.handleExtensionDownload)
+		r.Head("/downloads/*", s.handleExtensionDownload)
 	})
 
 	// Spaces (web session).

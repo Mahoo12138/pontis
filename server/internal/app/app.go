@@ -19,6 +19,7 @@ import (
 	"pontis/internal/changeset"
 	"pontis/internal/config"
 	"pontis/internal/device"
+	"pontis/internal/distribution"
 	"pontis/internal/httpapi"
 	"pontis/internal/library"
 	"pontis/internal/logging"
@@ -116,10 +117,21 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 
+	// The extension package embedded in this binary. A manifest that does not
+	// validate is a broken release build, but it is not a reason a bookmark
+	// server refuses to start: say it once in the log and hand out nothing.
+	extensionRelease, err := distribution.Load()
+	if err != nil {
+		logger.Error("embedded extension release is unusable; this instance offers no download",
+			"error", err)
+		extensionRelease = distribution.Empty()
+	}
+
 	api := &httpapi.Server{
 		// Paths the API does not claim are served from the Web dist embedded
 		// in this binary (doc 21 §12: one artifact, no Node on the target).
 		Web:           webui.Assets(),
+		Distribution:  extensionRelease,
 		Deploy:        deploy,
 		Auth:          auth.NewService(sqlite.NewAuthStore(db), sessionTTL),
 		Devices:       device.NewService(deviceStore),

@@ -32,6 +32,7 @@ import {
 import type { BindingHealth, DeviceBindingView, DeviceOverview } from '@pontis/api';
 import Header from '../components/app-shell/Header';
 import ErrorState from '../components/common/ErrorState';
+import ExtensionInstall from '../components/devices/ExtensionInstall';
 import { contentRegion } from '../styles/app-shell.css';
 import {
   pagePad,
@@ -241,6 +242,13 @@ export default function DevicesPage() {
             </Table.Tbody>
           </Table>
         )}
+
+        {/* Install surface stays on this page for both states: an account with
+            no devices yet is the one that needs the package, and a list full of
+            devices is where you go when adding one. */}
+        <div style={{ marginTop: 28 }}>
+          <ExtensionInstall />
+        </div>
       </div>
 
       <AddDeviceModal

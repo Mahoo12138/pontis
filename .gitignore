@@ -26,6 +26,11 @@ web/test-results/
 server/internal/webui/dist/*
 !server/internal/webui/dist/.gitkeep
 
+# extension package staged for go:embed, same arrangement: the ZIP is a build
+# output and is never committed, only the placeholder is
+server/internal/distribution/artifacts/*
+!server/internal/distribution/artifacts/.gitkeep
+
 # extension build output / generated types
 extension/.output/
 extension/.output-newtab/

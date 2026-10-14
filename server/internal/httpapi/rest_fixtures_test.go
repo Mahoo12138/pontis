@@ -42,7 +42,11 @@ type restFixture struct {
 }
 
 func TestGoldenRESTFixtures(t *testing.T) {
-	_, ts := newTestServer(t)
+	srv, ts := newTestServer(t)
+	// The download catalog has to be captured with a package in it: the fixture
+	// is what proves the Web client's declared shape matches the body a release
+	// binary really emits, and `[]` would only ever prove the array is an array.
+	srv.Distribution = testDistribution(t)
 
 	token := restBootstrap(t, ts)
 
@@ -111,6 +115,9 @@ func TestGoldenRESTFixtures(t *testing.T) {
 		{"root-slots", restGET(t, ts, token, "/api/v1/spaces/"+spaceID+"/root-slots")},
 		{"activity", restGET(t, ts, token, "/api/v1/spaces/"+spaceID+"/activity")},
 		{"device-overview", restGET(t, ts, token, "/api/v1/devices/overview")},
+		// What the install page reads to decide between "download this" and
+		// "this instance carries no package".
+		{"distribution-extensions", restGET(t, ts, token, "/api/v1/distribution/extensions")},
 		{"bindings", restGET(t, ts, deviceToken, "/api/v1/device/bindings")},
 		{"tokens", restGET(t, ts, token, "/api/v1/tokens")},
 		{"backups", restGET(t, ts, token, "/api/v1/spaces/"+spaceID+"/backups")},

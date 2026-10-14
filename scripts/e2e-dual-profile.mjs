@@ -155,6 +155,16 @@ function buildExtensionArtifact() {
   }
 }
 
+/**
+ * Rebuild the package the way an upgrade delivers it: the directory is emptied
+ * first, so a chunk the new build no longer emits cannot be left behind
+ * (doc §10.2 step 4 describes exactly that residue).
+ */
+function rebuildExtensionAtSamePath() {
+  rmSync(EXT_DIR, { recursive: true, force: true });
+  buildExtensionArtifact();
+}
+
 // --- the server --------------------------------------------------------------
 
 let serverProc;
@@ -182,6 +192,12 @@ async function startServer() {
     await new Promise((r) => setTimeout(r, 100));
   }
   die('server did not answer /api/v1/meta');
+}
+
+/** Take the server away without touching its data directory or the profiles. */
+function stopServer() {
+  if (serverProc) killGroup(serverProc);
+  serverProc = undefined;
 }
 
 async function api(method, pathname, { body, token } = {}) {
@@ -291,12 +307,16 @@ class Session {
 }
 
 class Browser {
-  constructor(name, debugPort) {
+  constructor(name, debugPort, { reuseProfile = false } = {}) {
     this.name = name;
     this.debugPort = debugPort;
     this.dir = path.join(WORK, `profile-${name}`);
-    rmSync(this.dir, { recursive: true, force: true });
-    mkdirSync(this.dir, { recursive: true });
+    // The upgrade run restarts over an existing profile on purpose — wiping it
+    // would delete the very state the run is there to prove survives.
+    if (!reuseProfile) {
+      rmSync(this.dir, { recursive: true, force: true });
+      mkdirSync(this.dir, { recursive: true });
+    }
   }
   async start() {
     // A port already answering means a browser from an earlier run is still
@@ -427,6 +447,15 @@ const HELPERS = `
   };
   const optionRect = (text) => rectOf([...document.querySelectorAll('[role="option"]')]
     .find((o) => (o.textContent || '').includes(text)));
+  // The mount field is not a Select: its layer is a Popover of radio rows, one
+  // per folder, so the role=option lookup above finds nothing in it. The row's
+  // label is the click target — Mantine keeps the input itself visually hidden.
+  const folderRect = (group, title) => {
+    const input = [...document.querySelectorAll('input[type=radio]')]
+      .filter((i) => i.getAttribute('name') === group)
+      .find((i) => ((i.getAttribute('aria-label') || '').trim() === title));
+    return input ? rectOf(input.closest('label') || input) : null;
+  };
   const typeInto = (label, value) => {
     const root = fieldRoot(label);
     if (!root) return 'no field: ' + label;
@@ -473,6 +502,20 @@ async function pickOption(session, field, option, what) {
   throw new Error(`${what}: select ${field} never offered an option matching ${option}`);
 }
 
+/** Open the folder layer and choose one of its rows. */
+async function pickFolder(session, field, group, title, what) {
+  await clickAt(session, await session.evaluate(`${HELPERS}return selectRect(${JSON.stringify(field)});`),
+    `${what}: folder field ${field}`);
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const box = await session.evaluate(
+      `${HELPERS}return folderRect(${JSON.stringify(group)}, ${JSON.stringify(title)});`);
+    if (box) return clickAt(session, box, `${what}: folder ${title}`);
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error(`${what}: the folder layer never offered a row named ${title}`);
+}
+
 async function waitStep(session, expr, want, what, timeoutMs = 90_000, failOn = '') {
   const deadline = Date.now() + timeoutMs;
   let last = '';
@@ -493,6 +536,22 @@ async function runStep(session, expr, label) {
   const out = await session.evaluate(`${HELPERS}\nreturn ${expr};`);
   check(!String(out).startsWith('no ') && out !== 'false', label, String(out));
   return out;
+}
+
+/**
+ * Run a step, and if it fails say what the screen actually showed. Pairing
+ * throws before main()'s finally is reached, so without this a run that stops
+ * at a guide step reports only the expression that timed out — and the page is
+ * what a person would read next.
+ */
+async function stepShowingPage(what, page, fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    const text = String(await page.evaluate(`${HELPERS}return bodyText()`).catch(() => 'unreadable'));
+    log(`  --- ${what}: page said --- ${text.split('\n').filter(Boolean).slice(0, 24).join(' / ')}`);
+    throw err;
+  }
 }
 
 const treeTitles = `
@@ -538,11 +597,13 @@ async function pairProfile(name, info) {
   // own proof that pairing succeeded.
   await waitStep(page, "bodyText()", '已连接', `${name}: pairing`, 60_000, '操作失败');
 
-  // Step 2 opens itself, and its two selects are the signal they are filled in.
-  await waitStep(page, `[...document.querySelectorAll('.mantine-Select-root')].length >= 2`,
-    'true', `${name}: guide step 2 mounted`, 20_000);
+  // Step 2 opens itself. Both fields are the signal it is ready: 同步空间 is a
+  // Select and 挂载目录 a folder field, and the run needs one of each.
+  await stepShowingPage(`${name}: guide step 2`, page, () => waitStep(page,
+    `!!fieldRoot('同步空间') && !!fieldRoot('挂载目录')`,
+    'true', `${name}: guide step 2 mounted`, 20_000));
   await pickOption(page, '同步空间', 'E2E Converge', name);
-  await pickOption(page, '挂载目录', 'Bookmarks Bar', name);
+  await pickFolder(page, '挂载目录', 'mount-folder', 'Bookmarks Bar', name);
   log(`  step ${name}: 创建绑定 → ${await clickButton(page, '创建绑定', name)}`);
 
   await waitStep(page, `buttonReady('完成并打开设置页')`, 'true',
@@ -733,6 +794,107 @@ async function main() {
       check(text.includes('E2E Converge'), `${name}: popup lists the bound space`, text.slice(0, 160));
       check(!/需要恢复|等待确认|目录缺失/.test(text), `${name}: binding needs no human`, text.slice(0, 160));
     }
+
+    // ─── 升级：同目录替换文件后重新加载 ─────────────────────────────
+    // The release upgrade path a person walks (distribution doc §10.2): replace
+    // the files in the same permanent directory, reload, keep using the same
+    // install. Success is not "the page opens again" — it is the device
+    // identity, the Binding, the local mapping, the watermark and an edit made
+    // while the server was unreachable all still being there afterwards
+    // (§14.2). This is the part a unit test cannot stand in for: it is about
+    // what survives in a real profile.
+    //
+    // It reloads by restarting the browser over the same profile directory
+    // rather than through an extension-reload call: an unpacked package is
+    // re-read at startup either way, and doing it this round also covers §14.1's
+    // separate gate — still installed and still connected after a restart.
+    // What this does NOT prove is a schema migration, which needs two released
+    // versions to move between.
+    log('upgrade: snapshotting profile A, then editing with the server down');
+    const before = JSON.parse(await a.page.evaluate(REPLICA_DUMP));
+    const bootstrapBefore = await a.page.evaluate(
+      `return (await chrome.storage.local.get('bootstrap')).bootstrap?.deviceId || 'none';`);
+    check(before.bindings.length > 0, 'A: a binding exists to preserve', JSON.stringify(before.bindings));
+    check(before.nodes.length > 0, 'A: local mappings exist to preserve', `${before.nodes.length} rows`);
+    check(bootstrapBefore !== 'none', 'A: a device identity exists to preserve', bootstrapBefore);
+
+    stopServer();
+    const offlineTitle = 'Offline Across Upgrade';
+    await a.page.evaluate(`${HELPERS}return ${createIn(offlineTitle)}`);
+    // One sync attempt against a dead server, so the edit is in the outbox
+    // rather than only in the bookmark bar.
+    await a.page.evaluate(`return await chrome.runtime.sendMessage({ type: 'pontis/manual-sync' })
+      .catch(() => 'unreachable');`);
+    await new Promise((r) => setTimeout(r, 3000));
+    const queued = JSON.parse(await a.page.evaluate(REPLICA_DUMP));
+    check(queued.ops.some((o) => (o.title || '').includes(offlineTitle)),
+      'A: the offline edit is queued before the upgrade', JSON.stringify(queued.ops));
+
+    const extIdBefore = await a.page.evaluate('return chrome.runtime.id');
+    a.browser.stop();
+    rebuildExtensionAtSamePath();
+    a.browser = new Browser('A', 9401, { reuseProfile: true });
+    await a.browser.start();
+
+    // The server stays down through the restart. That is the harder case the
+    // doc cares about, and it makes the outbox assertions deterministic: with a
+    // reachable server the new code drains it before anyone can look, and
+    // "the edit is gone" would then read exactly like "the edit was dropped".
+    // If the id had changed, this url would not resolve at all; the assertion
+    // after it is what says so out loud.
+    a.page = await a.browser.page(`chrome-extension://${extIdBefore}/options.html#sync`);
+    await waitStep(a.page, 'bodyText()', '账号管理', 'A: settings page after the upgrade', 30_000);
+    const extIdAfter = await a.page.evaluate('return chrome.runtime.id');
+    check(extIdAfter === extIdBefore, 'A: extension id survived the file replacement',
+      `${extIdBefore} → ${extIdAfter}`);
+
+    const after = JSON.parse(await a.page.evaluate(REPLICA_DUMP));
+    const bootstrapAfter = await a.page.evaluate(
+      `return (await chrome.storage.local.get('bootstrap')).bootstrap?.deviceId || 'none';`);
+    check(bootstrapAfter === bootstrapBefore, 'A: same device identity after the upgrade',
+      `${bootstrapBefore} → ${bootstrapAfter}`);
+    check(after.bindings.length === before.bindings.length
+      && after.bindings[0].state === 'active',
+      'A: binding survived and is still active', JSON.stringify(after.bindings));
+    check(after.nodes.length >= before.nodes.length,
+      'A: local node mappings survived', `${before.nodes.length} → ${after.nodes.length}`);
+    check(after.bindings[0].applied > 0 && after.bindings[0].applied >= before.bindings[0].applied,
+      'A: the applied watermark carried over',
+      `${before.bindings[0].applied} → ${after.bindings[0].applied}`);
+    check(after.ops.some((o) => (o.title || '').includes(offlineTitle)),
+      'A: the offline edit is still queued, not silently dropped', JSON.stringify(after.ops));
+    const barHeld = JSON.parse(await a.page.evaluate(treeTitles));
+    check(barHeld.includes(offlineTitle),
+      `A: the bar still holds the offline edit (bar: ${barHeld.join(', ') || 'empty'})`);
+
+    await startServer();
+
+    // The device list is the server's own witness: an upgrade that quietly
+    // re-paired would add a third device.
+    const devices = (await api('GET', '/api/v1/devices/overview', { token })).devices
+      .map((d) => d.name).sort();
+    check(devices.length === 2 && devices.some((d) => d === 'E2E A') && devices.some((d) => d === 'E2E B'),
+      'A: the server still knows exactly the two devices', devices.join(','));
+
+    let uploaded = [];
+    for (let i = 0; i < 60; i++) {
+      uploaded = await serverTree(spaceId, token);
+      if (uploaded.includes(offlineTitle)) break;
+      await syncBoth();
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    check(uploaded.includes(offlineTitle),
+      'A: the offline edit reached the server after the upgrade', uploaded.join(','));
+    const drained = JSON.parse(await a.page.evaluate(REPLICA_DUMP));
+    check(!drained.ops.some((o) => (o.title || '').includes(offlineTitle)),
+      'A: the outbox emptied', JSON.stringify(drained.ops));
+    const barAfter = JSON.parse(await a.page.evaluate(treeTitles));
+    check(barAfter.includes(offlineTitle),
+      `A: the edit is still in the bar once converged (bar: ${barAfter.join(', ') || 'empty'})`);
+    // Nothing about the upgrade should have cost the other device anything.
+    const barB = JSON.parse(await b.page.evaluate(treeTitles));
+    check(barB.includes(offlineTitle),
+      `B: the other profile received the edit too (bar: ${barB.join(', ') || 'empty'})`);
   } finally {
     if (failed) {
       // The page and the replica store are what a human would read next: a red
@@ -747,7 +909,9 @@ async function main() {
     if (KEEP) log(`--keep: profiles and data under ${WORK}`);
     a.browser.stop();
     b.browser.stop();
-    serverProc.kill();
+    // The upgrade phase stops and restarts the server, so this one may already
+    // be gone; `die()` also skips this block, which is why shutdownAll exists.
+    serverProc?.kill();
   }
 
   if (failed) {

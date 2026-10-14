@@ -31,6 +31,13 @@ export function formatRelativeTime(dateStr: string, locale: string = 'zh-CN'): s
   });
 }
 
+/** Format a byte count for a metadata line: 981 B, 285 KB, 1.4 MB. */
+export function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 /** Format a date as short time (e.g. "14:25"). */
 export function formatShortTime(dateStr: string): string {
   const date = new Date(dateStr);

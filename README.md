@@ -13,14 +13,19 @@ Firefox 适配排在 Chromium Alpha 之后。
 
 ```sh
 pnpm install
-pnpm build          # web 编译 → 暂存进 server/internal/webui/dist → go build
+pnpm build          # web 编译 → 扩展打包 → 两份产物暂存进 server/ → go build
 ./server/pontis -config config.toml
 ```
 
-`pnpm build` 依次做三件事：`@pontis/web` 的 `vite build`、
-`scripts/stage-web-dist.mjs` 把 dist 拷进 `server/internal/webui/dist`
-（`go:embed` 只能看见本包目录）、`go build -o server/pontis ./cmd/server`。
-单独跑 `pnpm build:web` 只产出 `web/dist/`，**那不是可部署产物**。
+`pnpm build` 依次做五件事：`@pontis/web` 的 `vite build`、`@pontis/extension` 的
+`wxt zip`、`scripts/stage-web-dist.mjs` 与 `scripts/stage-distribution.mjs` 分别把
+Web dist 和扩展 ZIP 拷进各自的 `server/internal/*/`（`go:embed` 只能看见本包目录）、
+最后 `go build -o server/pontis ./cmd/server`。单独跑 `pnpm build:web` 只产出
+`web/dist/`，**那不是可部署产物**。
+
+扩展安装包是随二进制一起交付的：用户在 Web 的「设备」页下载本实例内嵌的那一份，
+按开发者模式手动加载。校验、清单与下载接口的形状见
+[扩展分发与 Release 方案](pontis-extension-distribution-release-v1.md) 与 docs/21 §12。
 
 没有配置文件的机器上直接 `./server/pontis` 也能起：默认监听 `:8080`，数据目录
 `./data`。
@@ -91,7 +96,8 @@ Node 22 + `packageManager` 里钉住的 pnpm。
 | `pnpm dev:test` | 一键启动独立 Go + Vite 测试环境，关闭 Mock |
 | `pnpm e2e:api` | 对已启动的测试环境执行真实 HTTP API E2E |
 | `pnpm dev:extension` | WXT 扩展开发模式 |
-| `pnpm build:extension` | `wxt build` → `extension/.output/chrome-mv3` |
+| `pnpm build:extension` | `wxt build` → `extension/.output/chrome-mv3`（解压目录，开发时手动加载） |
+| `pnpm build:extension:zip` | `wxt zip` → `extension/.output/pontis-chromium-<version>.zip`（发布产物） |
 
 `pnpm test` 用 `--no-bail`：默认的 `-r` 在第一个失败包停下，后面的包根本没跑到，
 聚合退出码会替人撒谎。
