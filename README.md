@@ -31,6 +31,31 @@ pnpm build          # web 编译 → 扩展打包 → 两份产物暂存进 serv
 没有配置文件的机器上直接 `./server/pontis` 也能起：默认监听 `:8080`，数据目录
 `./data`。
 
+## 部署
+
+打一个 `vX.Y.Z` 的 tag 就会产出全部目标产物（`.github/workflows/release.yml`）：四个平台的
+裸二进制挂到 GitHub Release，多架构镜像推到 `ghcr.io/<owner>/pontis`，两者都带 `latest`
+之外的版本标签。发布说明取自 `docs/releases/<tag>.md`，缺这个文件工作流会直接失败——
+安装方式、已知限制与升级说明是发布的一部分，不是事后补的装饰。
+
+```sh
+docker run -d --name pontis -p 8080:8080 -v pontis-data:/data \
+  ghcr.io/mahoo12138/pontis:v0.1.0
+```
+
+镜像的最终层只有服务端二进制、TLS 根证书和一个数据目录，没有 Node.js、pnpm 或 WXT 运行时。
+它以 uid `65532` 运行：具名卷的属主继承自镜像，可直接写；改用宿主目录 bind mount 时属主由
+宿主决定，需要先让该目录对 65532 可写，否则启动日志会报写不进数据目录。
+
+裸二进制下载后先核对摘要再运行：
+
+```sh
+sha256sum --check SHA256SUMS
+```
+
+浏览器扩展不随这些渠道分发——它只从你自己的实例的「设备」页下载，保证装的一定是与运行
+实例配套的那一份。
+
 ## 配置
 
 `-config` 指向一个 TOML（不存在则跳过），同名项可用 `PONTIS_*` 环境变量覆盖。
@@ -57,9 +82,15 @@ link_check_allow_cidrs = []
 
 `database_path` 由 `data_dir` 推导，不可配置。
 
-`public_url` 与 `trusted_proxies` 目前只是被读进配置，服务端没有任何地方消费
-它们（`X-Forwarded-For` 的信任、以及对外可见BaseUrl 都还没接线）。在它们有实现
-之前不要把部署依赖建立在它们之上。
+`public_url` 与 `trusted_proxies` 都已接线：前者决定带 Cookie 的写请求必须携带的
+Origin、会话 Cookie 是否标记 `Secure`，以及密码重置链接里的主机名；后者列出允许
+通过 `X-Forwarded-Proto` 报告外部协议的对端。放在反向代理后面时两者都要配：
+`Secure` 是按请求算出来的，配错的方向两种都不安静——HTTP 实例上多打 `Secure`，
+登录会静默失效（Cookie 根本不会回传）；HTTPS 上漏打，会话 Token 就可能被降级请求
+带出去。Origin 不匹配时写请求直接返回 `ORIGIN_MISMATCH`。
+
+仍然成立的边界：`X-Forwarded-For` 没有任何消费者——服务端不记录也不按客户端地址
+限流，所以 `trusted_proxies` 目前只影响协议判断，不构成日志或限流上的信任链。
 
 ## 首次使用
 

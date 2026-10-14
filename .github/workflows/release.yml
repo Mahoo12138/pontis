@@ -1,0 +1,205 @@
+name: Release
+
+# 打一个 vX.Y.Z 的 tag 就产出全部目标产物：四平台裸二进制、多架构镜像、GitHub Release。
+# 触发条件是 tag 本身，所以没有任何一步依赖人手往仓库里塞产物——文档 §14.4 要求
+# "Release Build 来自确定 Tag 与依赖锁文件，不含手工覆盖产物"。
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    name: Build and publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    env:
+      # 能交叉编译全靠 SQLite 驱动是纯 Go（库以 WASM 内置）：关掉 CGO，四个平台
+      # 就都只是 GOOS/GOARCH 的差别，不需要为每个目标准备一套 C 工具链。
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: true
+          cache-dependency-path: server/go.sum
+
+      # 版本必须只有一个来源事实：tag、Go 常量、五个 package.json。跑起来的实例
+      # 在 /meta 报一个版本、下载页报另一个、更新提示拿两者比较，是没法追溯的发布。
+      - name: 版本一致性
+        run: node scripts/assert-release-version.mjs "${GITHUB_REF_NAME}"
+
+      # 发布说明不是收尾的装饰，是 §14.4 的验收项：安装方式、已知限制、升级说明。
+      # 缺文件就停下，逼这次发布把它写下来，而不是事后凭记忆补。
+      - name: 发布说明必须存在
+        run: |
+          if [ ! -f "docs/releases/${GITHUB_REF_NAME}.md" ]; then
+            echo "missing docs/releases/${GITHUB_REF_NAME}.md — write the release notes first"
+            exit 1
+          fi
+
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      # 与 CI 同一批命令：tag 构建不另立一套门槛，否则"发布跑过的检查"和"合并跑过的
+      # 检查"会变成两件事。
+      - name: 质量门槛
+        run: |
+          pnpm typecheck
+          pnpm test
+          cd server && go vet ./... && go test -race ./...
+
+      - name: 编译前端与两个扩展包并暂存进 server/
+        env:
+          PONTIS_RELEASE: ${{ github.ref_name }}
+          PONTIS_RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          pnpm build:web
+          pnpm build:extension:zip
+          pnpm build:extension:zip:newtab
+          node scripts/stage-web-dist.mjs
+          node scripts/stage-distribution.mjs
+
+      - name: 交叉编译服务端二进制
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
+            os="${target%/*}"; arch="${target#*/}"
+            out="pontis-server-$os-$arch"
+            [ "$os" = windows ] && out="$out.exe"
+            (cd server && GOOS=$os GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w" -o "../dist/$out" ./cmd/server)
+          done
+          (cd dist && sha256sum pontis-server-* > SHA256SUMS && cat SHA256SUMS)
+
+      # 先出单架构镜像并真的跑起来：这一步查的是"下载页里那个摘要，是否就是
+      # 容器里那份字节"，而不是镜像能不能 build 出来。
+      - name: 构建镜像（amd64，用于冒烟）
+        run: |
+          docker build \
+            --build-arg RELEASE="${GITHUB_REF_NAME}" \
+            --build-arg COMMIT="${GITHUB_SHA}" \
+            -t pontis:smoke .
+
+      - name: 冒烟：容器启动、Web 可访问、两个安装包可下载且摘要一致
+        run: |
+          set -eu
+          docker rm -f pontis-smoke >/dev/null 2>&1 || true
+          docker volume rm pontis-smoke-data >/dev/null 2>&1 || true
+          # 端口让 Docker 自己挑，再用 docker port 读回来：写死一个端口时，如果它
+          # 已经被别的进程占着，curl 会去给那个进程打分，全绿也什么也没证明。
+          docker run -d --name pontis-smoke -p 127.0.0.1::8080 \
+            -v pontis-smoke-data:/data pontis:smoke >/dev/null
+          port=$(docker port pontis-smoke 8080/tcp | head -1 | sed -E 's/.*:([0-9]+)$/\1/')
+          base="http://127.0.0.1:$port"
+          for _ in $(seq 1 60); do
+            if [ "$(curl -sf "$base/healthz" || true)" = '{"status":"ok"}' ]; then break; fi
+            sleep 1
+          done
+          # 精确比对而不是 curl -sf：一个 HTML 错误页也会让 -f 满意。
+          test "$(curl -sf "$base/healthz")" = '{"status":"ok"}' \
+            || { echo "healthz did not answer as Pontis at $base"; docker logs pontis-smoke; exit 1; }
+          curl -sf "$base/api/v1/meta" | grep -q '"product_version":"0\.' \
+            || { echo "not our server on $port"; exit 1; }
+
+          curl -sf "$base/devices" | grep -q 'id="root"'
+          # 初始化会往 /data 写 SQLite：这一步成功，就是容器确实写得了那个卷。
+          curl -sf -X POST "$base/api/v1/auth/setup" \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"release-smoke-password","email":"ci@example.com"}' >/dev/null
+          token=$(curl -sf -X POST "$base/api/v1/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"release-smoke-password"}' \
+            | sed -E 's/.*"token":"([^"]+)".*/\1/')
+
+          curl -sf "$base/api/v1/distribution/extensions" \
+            -H "Authorization: Bearer $token" > served-catalog.json
+          # 容器里报的批次与提交，必须就是这次构建打进去的那两个值。
+          grep -q "\"release\":\"${GITHUB_REF_NAME}\"" served-catalog.json
+          grep -q "\"commit\":\"${GITHUB_SHA}\"" served-catalog.json
+
+          for variant in sync start-page; do
+            url=$(jq -r ".artifacts[] | select(.variant==\"$variant\") | .file" served-catalog.json)
+            want=$(jq -r ".artifacts[] | select(.variant==\"$variant\") | .sha256" served-catalog.json)
+            test "$url" != "null" || { echo "catalog has no $variant artifact"; exit 1; }
+            # 未登录拿不到包，与安装页同一套政策。
+            anon=$(curl -s -o /dev/null -w '%{http_code}' "$base$url")
+            test "$anon" = 401 || { echo "$variant: anonymous got $anon, want 401"; exit 1; }
+            curl -sf "$base$url" -H "Authorization: Bearer $token" -o "served-$variant.zip"
+            got=$(sha256sum "served-$variant.zip" | cut -d' ' -f1)
+            # 只比容器自己报的摘要与容器自己发的字节。不拿工作区里暂存的那份来比：
+            # 那是另一次构建的产物，ZIP 时间戳就足以让两者不同（见发布说明的
+            # "构建不可复现"）。
+            test "$got" = "$want" \
+              || { echo "$variant: downloaded $got, catalog promised $want"; exit 1; }
+            unzip -Z1 "served-$variant.zip" | grep -q '^manifest.json$'
+          done
+          docker rm -f pontis-smoke >/dev/null
+          docker volume rm pontis-smoke-data >/dev/null
+
+      # §14.4：最终镜像里不该有 Node.js、pnpm 或 WXT 运行时。镜像是 distroless，
+      # 没有 shell 可以 exec 进去找，所以直接把文件表导出来看。
+      - name: 镜像里没有前端工具链
+        run: |
+          set -eu
+          cid=$(docker create pontis:smoke)
+          docker export "$cid" | tar -t > /tmp/image-files.txt
+          docker rm "$cid" >/dev/null
+          if grep -qE '^usr/(local/)?bin/(node|npm|pnpm|corepack)$' /tmp/image-files.txt; then
+            echo "the final image still carries a Node toolchain:"
+            grep -E '^usr/(local/)?bin/(node|npm|pnpm|corepack)$' /tmp/image-files.txt
+            exit 1
+          fi
+          grep -q '^pontis$' /tmp/image-files.txt || { echo "the server binary is missing"; exit 1; }
+          echo "image holds the binary and no Node runtime"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ghcr 的命名空间必须小写，而仓库拥有者的登录名不一定。
+      - name: 镜像地址
+        run: echo "IMAGE=ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: 推送多架构镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.ref_name }}
+            ${{ env.IMAGE }}:latest
+          build-args: |
+            RELEASE=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+
+      # 只附服务端二进制。扩展安装包仍只从实例自己的设备页下发：包体不含秘密，
+      # 但多一个公开渠道就多一个"装的和运行实例不是同一份"的机会。
+      - name: 发布 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Pontis ${GITHUB_REF_NAME}" \
+            --notes-file "docs/releases/${GITHUB_REF_NAME}.md" \
+            dist/pontis-server-linux-amd64 \
+            dist/pontis-server-linux-arm64 \
+            dist/pontis-server-darwin-arm64 \
+            dist/pontis-server-windows-amd64.exe \
+            dist/SHA256SUMS

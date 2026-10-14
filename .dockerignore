@@ -1,0 +1,32 @@
+# The build context is the whole monorepo; this keeps out only what the image
+# rebuilds itself or has no business carrying. Source directories stay in, even
+# the ones no build step reads today — excluding them saves kilobytes and costs
+# a "works locally, fails in the image" hunt the next time one does get read.
+
+# Installed by `pnpm install --frozen-lockfile` inside the build. A host
+# node_modules would shadow that and drag in this machine's paths.
+**/node_modules
+
+# VCS and local scratch.
+.git
+.github
+.test-env
+.DS_Store
+
+# Databases and runtime data: never inputs to a build.
+*.db
+*.db-wal
+*.db-shm
+server/data
+
+# Build outputs the Dockerfile produces itself, so a stale copy on the host
+# cannot end up inside the image.
+web/dist
+extension/.output
+extension/.output-newtab
+extension/.e2e-output
+extension/.wxt
+server/internal/webui/dist
+server/internal/distribution/artifacts
+server/pontis
+server/pontis.exe

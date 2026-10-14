@@ -407,6 +407,25 @@ CI（`.github/workflows/ci.yml`）不另立一套命令，跑的就是根命令�
 - E2E 构建（`Pontis (E2E)`，预授权 origin）与新标签页构建都不是发布产物，
   staging 的名称与 manifest 断言会把它们挡在 Release 之外。
 
+### 发布：打 tag 出全部产物
+
+`.github/workflows/release.yml` 由 `vX.Y.Z` tag 触发，一条链产出四个平台的裸二进制与
+`linux/amd64`+`linux/arm64` 镜像，并把二进制与 `docs/releases/<tag>.md` 组成 GitHub Release。
+它不另立门槛：跑的还是 §12 那批根命令，只是额外要求两件事——
+
+- `node scripts/assert-release-version.mjs <tag>`：tag、Go 的 `ProductVersion` 与五个
+  `package.json` 必须给出同一个版本。版本有六个来源时，"发布的是哪个版本"就变成看问谁。
+- `docs/releases/<tag>.md` 必须存在：安装方式、已知限制与升级说明是 §14.4 的验收项。
+
+镜像构建完先在 runner 上真跑起来（Docker 自己挑端口，避免撞上别的进程后替别人打分）：
+`/healthz` 精确比对、初始化写库以证明数据卷可写、两个安装包匿名 401 且下载字节与容器
+自己报的摘要一致。镜像里没有 Node 工具链这一条靠 `docker export | tar -t` 检查——
+distroless 最终层没有 shell，exec 进去查是做不到的。
+
+交叉编译之所以只是 `GOOS/GOARCH` 的差别，是因为 SQLite 驱动
+（`github.com/ncruces/go-sqlite3`）是纯 Go、把库以 WASM 内置，所以 `CGO_ENABLED=0`
+全程成立；换成需要 CGO 的驱动，这一步就要为每个目标平台准备一套工具链。
+
 ## 起始页的真实浏览器矩阵
 
 [起始页 V1](./features/start-page-v1.md) §19-§20 的验收不能由 UI 快照测试或 Fake API 测试替代：
