@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import type { Node, ParentRef } from '@pontis/api';
 import Header from '../components/app-shell/Header';
@@ -10,6 +9,7 @@ import NodeContextMenu from '../components/explorer/NodeContextMenu';
 import type { ContextMenuPos } from '../components/explorer/NodeContextMenu';
 import { NewNodeModal, ConfirmDeleteDialog } from '../components/explorer/node-modals';
 import type { NewNodeMode } from '../components/explorer/node-modals';
+import MoveNodesModal from '../components/explorer/MoveNodesModal';
 import TransferModal from '../components/explorer/TransferModal';
 import ImportModal from '../components/transfer/ImportModal';
 import ExportModal from '../components/transfer/ExportModal';
@@ -21,7 +21,6 @@ import {
   consumePendingFocus,
 } from '../components/command-palette/CommandPalette';
 import { contentRegion } from '../styles/app-shell.css';
-import { tokens } from '../styles/semantic-tokens.css';
 import { useNodes, useRootSlots } from '../hooks/use-nodes';
 import { useSpaces } from '../hooks/use-spaces';
 import { useNodeCrud } from '../hooks/use-node-crud';
@@ -47,7 +46,8 @@ export default function SpaceExplorerPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [menu, setMenu] = useState<(ContextMenuPos & { nodeId: string }) | null>(null);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorId, setInspectorId] = useState<string | null>(null);
+  const [moveTargets, setMoveTargets] = useState<Node[] | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [transferNode, setTransferNode] = useState<Node | null>(null);
@@ -166,6 +166,29 @@ export default function SpaceExplorerPage() {
     crud.update.mutate({ nodeId: id, params: { title } });
   };
 
+  const alreadyInside = (node: Node, parent: ParentRef) =>
+    parent.type === 'node'
+      ? node.parent_id === parent.id
+      : node.parent_id === null && node.root_key === parent.key;
+
+  const handleMoveConfirm = (parent: ParentRef, label: string) => {
+    const nodeIds = (moveTargets ?? []).filter((node) => !alreadyInside(node, parent)).map((node) => node.id);
+    if (nodeIds.length === 0) {
+      setMoveTargets(null);
+      return;
+    }
+    crud.move.mutate(
+      { nodeIds, params: { parent } },
+      {
+        onSuccess: () => {
+          setMoveTargets(null);
+          if (parent.type === 'node' && parent.id) state.expand(parent.id);
+          notifications.show({ message: `已移动 ${nodeIds.length} 项到「${label}」`, color: 'coolGray' });
+        },
+      },
+    );
+  };
+
   const copyUrl = (node: Node) => {
     if (!node.url) return;
     navigator.clipboard
@@ -174,7 +197,15 @@ export default function SpaceExplorerPage() {
       .catch(() => notifications.show({ title: '复制失败', message: '浏览器拒绝了剪贴板访问', color: 'errorRed' }));
   };
 
-  const menuNode = menu ? (index.byId.get(menu.nodeId) ?? null) : null;
+  // A press inside the multi-selection keeps every row as a menu target;
+  // the details panel stays on the node it was opened for.
+  const menuNodes = useMemo(() => {
+    if (!menu) return [];
+    const ids = state.selected.has(menu.nodeId) ? selectedIds : [menu.nodeId];
+    return ids.map((id) => index.byId.get(id)).filter((node): node is Node => Boolean(node));
+  }, [menu, state.selected, selectedIds, index]);
+
+  const inspectorNode = inspectorId ? (index.byId.get(inspectorId) ?? null) : null;
 
   return (
     <>
@@ -186,15 +217,22 @@ export default function SpaceExplorerPage() {
       <Toolbar
         filter={filter}
         onFilterChange={setFilter}
-        inspectorOpen={inspectorOpen}
-        onToggleInspector={() => setInspectorOpen((v) => !v)}
         onImport={() => setImportOpen(true)}
         onExport={() => setExportOpen(true)}
         onCheckLinks={() => navigate(`/spaces/${spaceId}/organizer`)}
         onBackups={() => navigate(`/spaces/${spaceId}/backups`)}
       />
-      <div className={contentRegion} style={{ display: 'flex' }}>
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+      {/* The list scrolls on its own: the details panel stays where it is. */}
+      <div className={contentRegion} style={{ display: 'flex', overflow: 'hidden' }}>
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflowY: 'auto',
+          }}
+        >
           {isError ? (
             <ErrorState error={error} onRetry={() => void refetch()} />
           ) : (
@@ -203,46 +241,46 @@ export default function SpaceExplorerPage() {
             index={index}
             state={state}
             renamingId={renamingId}
+            inspectorOpen={inspectorNode !== null}
+            onCloseInspector={() => setInspectorId(null)}
             onStartRename={setRenamingId}
             onCommitRename={handleCommitRename}
             onDeleteKey={() => setDeleteOpen(true)}
             onContextMenu={(x, y, id) => setMenu({ x, y, nodeId: id })}
+            onOpenDetails={(node) => setInspectorId(node.id)}
           />
           )}
         </div>
 
-        {inspectorOpen &&
-          (singleSelected ? (
-            <Inspector node={singleSelected} onClose={() => setInspectorOpen(false)} onCopyUrl={copyUrl} />
-          ) : (
-            <aside
-              style={{
-                width: tokens.inspectorWidth,
-                flexShrink: 0,
-                borderLeft: `1px solid ${tokens.subtleBorder}`,
-                backgroundColor: tokens.workspaceBg,
-                padding: '16px',
-              }}
-            >
-              <Text fz="xs" c={tokens.textSecondary}>
-                选中单个项目后查看详情。
-              </Text>
-            </aside>
-          ))}
+        {inspectorNode && (
+          <Inspector node={inspectorNode} onClose={() => setInspectorId(null)} onCopyUrl={copyUrl} />
+        )}
       </div>
 
       <NodeContextMenu
         pos={menu}
-        node={menuNode}
+        nodes={menuNodes}
         onClose={() => setMenu(null)}
         onCopyUrl={copyUrl}
         onRename={(n) => setRenamingId(n.id)}
+        onOpenDetails={(n) => setInspectorId(n.id)}
         onCreateInside={(n, mode) => {
           setCreateParent(n);
           setCreateMode(mode);
         }}
         onDelete={() => setDeleteOpen(true)}
+        onMove={(targets) => setMoveTargets(targets)}
         onTransfer={(n) => setTransferNode(n)}
+      />
+
+      <MoveNodesModal
+        opened={moveTargets !== null}
+        nodes={moveTargets ?? []}
+        index={index}
+        rootSlots={slotsData?.root_slots ?? []}
+        pending={crud.move.isPending}
+        onClose={() => setMoveTargets(null)}
+        onSubmit={handleMoveConfirm}
       />
 
       <NewNodeModal

@@ -51,6 +51,32 @@ export function buildTreeIndex(nodes: Node[]): TreeIndex {
 
 export type ExplorerFilter = 'all' | 'folders' | 'bookmarks';
 
+/** A folder offered as a move target, with its tree indent. */
+export interface FolderOption {
+  node: Node;
+  depth: number;
+}
+
+/**
+ * Every folder in the tree, in document order — the move-target list.
+ *
+ * `forbidden` (a selected folder plus its descendants) drops the whole
+ * subtree under it, which is what keeps a folder from being moved into
+ * itself; the server rejects that too, but the picker should not offer it.
+ */
+export function listFolders(index: TreeIndex, forbidden: ReadonlySet<string> = new Set()): FolderOption[] {
+  const out: FolderOption[] = [];
+  const walk = (items: Node[], depth: number) => {
+    for (const node of items) {
+      if (node.type !== 'folder' || forbidden.has(node.id)) continue;
+      out.push({ node, depth });
+      walk(index.childrenOf(node.id), depth + 1);
+    }
+  };
+  walk(index.roots, 0);
+  return out;
+}
+
 /**
  * Flatten the tree into the visible row list.
  *

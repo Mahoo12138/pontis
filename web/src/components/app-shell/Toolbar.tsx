@@ -1,13 +1,11 @@
-import { Group, SegmentedControl, Tooltip } from '@mantine/core';
-import { IconArrowsSort, IconLink, IconInfoCircle, IconFileImport, IconFileExport, IconArchive } from '@tabler/icons-react';
+import { Group, SegmentedControl } from '@mantine/core';
+import { IconArrowsSort, IconLink, IconFileImport, IconFileExport, IconArchive } from '@tabler/icons-react';
 import { toolbarRegion } from '../../styles/app-shell.css';
 import { tokens } from '../../styles/semantic-tokens.css';
 
 interface ToolbarProps {
   filter: 'all' | 'folders' | 'bookmarks';
   onFilterChange: (filter: 'all' | 'folders' | 'bookmarks') => void;
-  inspectorOpen?: boolean;
-  onToggleInspector?: () => void;
   onImport?: () => void;
   onExport?: () => void;
   onCheckLinks?: () => void;
@@ -17,8 +15,6 @@ interface ToolbarProps {
 export default function Toolbar({
   filter,
   onFilterChange,
-  inspectorOpen,
-  onToggleInspector,
   onImport,
   onExport,
   onCheckLinks,
@@ -109,20 +105,6 @@ export default function Toolbar({
           <IconLink size={14} stroke={1.5} />
           检查失效链接
         </Group>
-        <Tooltip label={inspectorOpen ? '关闭详情' : '打开详情'}>
-          <Group
-            gap={4}
-            onClick={onToggleInspector}
-            style={{
-              fontSize: '12px',
-              cursor: 'pointer',
-              color: inspectorOpen ? tokens.accent : tokens.textSecondary,
-            }}
-          >
-            <IconInfoCircle size={14} stroke={1.5} />
-            详情
-          </Group>
-        </Tooltip>
       </Group>
     </div>
   );

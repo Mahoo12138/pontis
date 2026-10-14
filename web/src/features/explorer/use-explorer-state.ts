@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { KeyboardEvent, MouseEvent } from 'react';
+import type { KeyboardEvent } from 'react';
 import { flattenVisible } from './tree';
 import type { ExplorerFilter, ExplorerRow, TreeIndex } from './tree';
 import { openUrlSafely } from '../../lib/safe-url';
+
+/** The modifier state a press carries; pointer and mouse events both do. */
+export interface PressModifiers {
+  shiftKey: boolean;
+  metaKey: boolean;
+  ctrlKey: boolean;
+}
 
 /**
  * Finder/IDE-style list state: focus cursor, multi-selection with an
@@ -13,11 +20,12 @@ import { openUrlSafely } from '../../lib/safe-url';
  *  - plain click   → single select, becomes anchor + focus
  *  - ⌘/ctrl click  → toggle row in selection
  *  - shift click   → select anchor..row over visible rows
+ *  - rubber-band   → selectRows replaces the selection with the swept rows
  *
  * Keyboard: ↑/↓ move focus (shift extends selection), → expands or
  * enters a folder, ← collapses or jumps to parent, Enter opens
- * (folder toggles, bookmark opens safely), Space toggles selection,
- * ⌘/ctrl+A selects all visible rows, Escape clears.
+ * (folder toggles, bookmark opens safely), F2 renames, Space toggles
+ * selection, ⌘/ctrl+A selects all visible rows, Escape clears.
  */
 export function useExplorerState(index: TreeIndex, filter: ExplorerFilter) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -80,8 +88,8 @@ export function useExplorerState(index: TreeIndex, filter: ExplorerFilter) {
     [rowIds],
   );
 
-  const handleClick = useCallback(
-    (e: MouseEvent, id: string) => {
+  const press = useCallback(
+    (e: PressModifiers, id: string) => {
       setFocusId(id);
       if (e.shiftKey && anchorId) {
         setSelected(selectRange(anchorId, id));
@@ -100,6 +108,19 @@ export function useExplorerState(index: TreeIndex, filter: ExplorerFilter) {
     },
     [anchorId, selectRange],
   );
+
+  /**
+   * Rubber-band result: the swept rows become the whole selection.
+   * `focus` parks the keyboard cursor on the row under the pointer so
+   * shift/arrows continue from where the drag ended; an empty sweep clears.
+   */
+  const selectRows = useCallback((ids: string[], focus?: string) => {
+    setSelected(new Set(ids));
+    if (focus) {
+      setFocusId(focus);
+      setAnchorId(focus);
+    }
+  }, []);
 
   const focusRow = useCallback(
     (id: string, opts: { extend?: boolean } = {}) => {
@@ -218,7 +239,8 @@ export function useExplorerState(index: TreeIndex, filter: ExplorerFilter) {
     collapse,
     expand,
     focusRow,
-    handleClick,
+    press,
+    selectRows,
     handleKeyDown,
     clearSelection,
   };

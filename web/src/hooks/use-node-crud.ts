@@ -44,8 +44,9 @@ export function useNodeCrud(spaceId: string | undefined) {
   });
 
   const move = useMutation({
-    mutationFn: ({ nodeId, params }: { nodeId: string; params: MoveNodeRequest }) =>
-      moveNode(spaceId!, nodeId, params),
+    mutationFn: async ({ nodeIds, params }: { nodeIds: string[]; params: MoveNodeRequest }) => {
+      for (const nodeId of nodeIds) await moveNode(spaceId!, nodeId, params);
+    },
     onSuccess: invalidate,
     onError,
   });

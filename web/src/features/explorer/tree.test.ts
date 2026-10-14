@@ -3,7 +3,7 @@
 // rows, and no node may vanish because its parent is not in the list.
 
 import { describe, expect, it } from 'vitest';
-import { buildTreeIndex, flattenVisible } from './tree';
+import { buildTreeIndex, flattenVisible, listFolders } from './tree';
 import type { Node } from '@pontis/api';
 
 function node(over: Partial<Node> & { id: string }): Node {
@@ -106,5 +106,26 @@ describe('flattenVisible', () => {
   it('keeps folders but drops bookmark rows under the folders filter', () => {
     const rows = flattenVisible(tree, new Set(['main']), 'folders');
     expect(titles(rows)).toEqual(['main', 'reading']);
+  });
+});
+
+describe('listFolders', () => {
+  const tree = buildTreeIndex([
+    folder('main', null, 0),
+    folder('reading', 'main', 0),
+    folder('work', null, 1),
+    node({ id: 'example', parent_id: 'reading', position: 0 }),
+  ]);
+
+  it('walks every folder with its indent and skips bookmarks', () => {
+    expect(listFolders(tree).map((f) => [f.node.id, f.depth])).toEqual([
+      ['main', 0],
+      ['reading', 1],
+      ['work', 0],
+    ]);
+  });
+
+  it('drops a forbidden folder together with everything under it', () => {
+    expect(listFolders(tree, new Set(['main'])).map((f) => f.node.id)).toEqual(['work']);
   });
 });

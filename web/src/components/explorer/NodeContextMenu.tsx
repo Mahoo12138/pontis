@@ -7,7 +7,9 @@ import {
   IconTrash,
   IconBookmark,
   IconFolderPlus,
+  IconInfoCircle,
   IconTransferOut,
+  IconArrowsMove,
 } from '@tabler/icons-react';
 import type { Node } from '@pontis/api';
 import { openUrlSafely } from '../../lib/safe-url';
@@ -21,12 +23,18 @@ export interface ContextMenuPos {
 
 interface NodeContextMenuProps {
   pos: ContextMenuPos | null;
-  node: Node | null;
+  /**
+   * Rows the menu acts on. A press inside the multi-selection keeps all of
+   * them; a press on an unselected row narrows it to that one.
+   */
+  nodes: Node[];
   onClose: () => void;
   onCopyUrl: (node: Node) => void;
   onRename: (node: Node) => void;
+  onOpenDetails: (node: Node) => void;
   onCreateInside: (node: Node, mode: 'bookmark' | 'folder') => void;
-  onDelete: (node: Node) => void;
+  onDelete: (nodes: Node[]) => void;
+  onMove: (nodes: Node[]) => void;
   onTransfer: (node: Node) => void;
 }
 
@@ -36,12 +44,14 @@ const ROW_H = 30;
 /** Cursor-anchored context menu for explorer rows (floating surface). */
 export default function NodeContextMenu({
   pos,
-  node,
+  nodes,
   onClose,
   onCopyUrl,
   onRename,
+  onOpenDetails,
   onCreateInside,
   onDelete,
+  onMove,
   onTransfer,
 }: NodeContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
@@ -97,24 +107,35 @@ export default function NodeContextMenu({
     else if (e.key === 'Tab') { e.preventDefault(); }
   };
 
-  if (!pos || !node) return null;
+  if (!pos || nodes.length === 0) return null;
 
-  const isFolder = node.type === 'folder';
-  const items: { icon: ReactNode; label: string; danger?: boolean; run: () => void }[] = isFolder
+  // noUncheckedIndexedAccess: the guard above is the proof it exists.
+  const node = nodes[0]!;
+  const batch = nodes.length > 1;
+  const items: { icon: ReactNode; label: string; danger?: boolean; run: () => void }[] = batch
     ? [
-        { icon: <IconBookmark size={14} />, label: '新建书签', run: () => onCreateInside(node, 'bookmark') },
-        { icon: <IconFolderPlus size={14} />, label: '新建文件夹', run: () => onCreateInside(node, 'folder') },
-        { icon: <IconEdit size={14} />, label: '重命名', run: () => onRename(node) },
-        { icon: <IconTransferOut size={14} />, label: '转移到空间…', run: () => onTransfer(node) },
-        { icon: <IconTrash size={14} />, label: '删除', danger: true, run: () => onDelete(node) },
+        { icon: <IconArrowsMove size={14} />, label: '移动到文件夹…', run: () => onMove(nodes) },
+        { icon: <IconTrash size={14} />, label: `删除 ${nodes.length} 项`, danger: true, run: () => onDelete(nodes) },
       ]
-    : [
-        { icon: <IconExternalLink size={14} />, label: '打开链接', run: () => openUrlSafely(node.url ?? '') },
-        { icon: <IconCopy size={14} />, label: '复制链接', run: () => onCopyUrl(node) },
-        { icon: <IconEdit size={14} />, label: '重命名', run: () => onRename(node) },
-        { icon: <IconTransferOut size={14} />, label: '转移到空间…', run: () => onTransfer(node) },
-        { icon: <IconTrash size={14} />, label: '删除', danger: true, run: () => onDelete(node) },
-      ];
+    : node.type === 'folder'
+      ? [
+          { icon: <IconBookmark size={14} />, label: '新建书签', run: () => onCreateInside(node, 'bookmark') },
+          { icon: <IconFolderPlus size={14} />, label: '新建文件夹', run: () => onCreateInside(node, 'folder') },
+          { icon: <IconEdit size={14} />, label: '重命名', run: () => onRename(node) },
+          { icon: <IconArrowsMove size={14} />, label: '移动到文件夹…', run: () => onMove([node]) },
+          { icon: <IconTransferOut size={14} />, label: '转移到空间…', run: () => onTransfer(node) },
+          { icon: <IconInfoCircle size={14} />, label: '查看详情', run: () => onOpenDetails(node) },
+          { icon: <IconTrash size={14} />, label: '删除', danger: true, run: () => onDelete([node]) },
+        ]
+      : [
+          { icon: <IconExternalLink size={14} />, label: '打开链接', run: () => openUrlSafely(node.url ?? '') },
+          { icon: <IconCopy size={14} />, label: '复制链接', run: () => onCopyUrl(node) },
+          { icon: <IconEdit size={14} />, label: '重命名', run: () => onRename(node) },
+          { icon: <IconArrowsMove size={14} />, label: '移动到文件夹…', run: () => onMove([node]) },
+          { icon: <IconTransferOut size={14} />, label: '转移到空间…', run: () => onTransfer(node) },
+          { icon: <IconInfoCircle size={14} />, label: '查看详情', run: () => onOpenDetails(node) },
+          { icon: <IconTrash size={14} />, label: '删除', danger: true, run: () => onDelete([node]) },
+        ];
 
   const estH = items.length * ROW_H + 10;
   const x = Math.min(pos.x, window.innerWidth - MENU_W - 8);
@@ -125,7 +146,7 @@ export default function NodeContextMenu({
       ref={ref}
       role="menu"
       aria-orientation="vertical"
-      aria-label={`${node.title} 的操作`}
+      aria-label={batch ? `已选中的 ${nodes.length} 项` : `${node.title} 的操作`}
       onKeyDown={onKeyDown}
       style={{
         position: 'fixed',
