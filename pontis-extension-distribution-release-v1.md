@@ -35,11 +35,13 @@ Pontis 已采用 Go Server、内嵌 React Web UI 和 WXT 浏览器扩展。初�
 | 平台 | V1 分发产物 | 用户安装方式 | 更新策略 | 状态 |
 |---|---|---|---|---|
 | Chrome | Chromium MV3 ZIP | 解压至固定目录，开启开发者模式，加载已解压扩展 | 原目录替换文件并重新加载 | 首批支持 |
-| Edge | 同一 Chromium MV3 ZIP（通过实机兼容测试后） | `edge://extensions` 加载已解压扩展 | 同上 | 首批支持 |
+| Edge | 同一 Chromium MV3 ZIP | `edge://extensions` 加载已解压扩展 | 同上 | 首装与同步已实测通过；重启待人工确认，暂不盖章 |
 | Firefox Desktop | **Mozilla Unlisted 签名的 XPI** | 网站下载签名 XPI 或「从文件安装」 | 初期手动；后续可设计自托管更新清单 | 完成签名后支持 |
 | Safari | 不提供 | — | — | V1 范围外 |
 
 Chrome 官方将本地加载未打包扩展定位为开发与自用路径；普通消费者的直接扩展安装通常需要 Chrome Web Store，受管理环境有企业策略例外。因此下载页必须标明「手动安装／开发者模式」，不能宣称「一键安装」。
+
+**2026-10-14 Edge 实测结果。** 在全新 Edge Profile 中以两个实例跑完整流程：加载已解压扩展、配对、创建绑定、初始对账、双向收敛与离线改动排队全部通过。但**替换文件之后**的验证没有完成——进一步单独复现发现：对该 Profile 完全不改动文件、只是退出再启动 Edge，扩展页面就会被 `ERR_BLOCKED_BY_CLIENT`（"This page has been blocked by Microsoft Edge"）拦下，而 Chrome 同样的重启路径正常。因此这条限制与 Pontis 的升级流程无关，是 Edge 对未打包扩展的加载方式本身。自动化无法点开 `edge://extensions` 的原生文件选择框，所以「用界面按钮加载的扩展重启后是否也被拦」尚未确定：若不被拦，只是命令行加载路径的限制，用户不受影响；若同样被拦，Edge 的手动安装就不能承诺跨重启存活。在人工确认之前，`supported_browsers` 只记 `chrome`，分发清单与安装页都不给 Edge 盖章。
 
 Firefox 的未公开上架与未签名是两个概念。可以申请 Mozilla 的 Unlisted 签名，之后自行托管最终签名的 XPI；未经签名的开发 ZIP 不能作为正式 Firefox Release 提供。
 
@@ -322,22 +324,22 @@ ghcr.io/<owner>/pontis:vX.Y.Z
 
 ### 14.1 安装与分发
 
-- [ ] Chromium ZIP 顶层有有效的 `manifest.json`，不是源码包。
-- [ ] Web 下载页面、下载链接、版本、SHA-256、安装说明一致。
-- [ ] Docker 内下载的字节与 Release 生成文件 SHA-256 完全一致。
-- [ ] 新 Chrome Profile 安装、登录、首次绑定、首次同步完整通过。
-- [ ] 新 Edge Profile 完成同样操作。
-- [ ] 浏览器重启后扩展仍保持正常安装与连接。
-- [ ] 用户未安装扩展时也能访问相关安装说明；正式下载权限符合产品策略。
+- [x] Chromium ZIP 顶层有有效的 `manifest.json`，不是源码包。（2026-10-14：staging 脚本以此为硬条件，CI 亦断言）
+- [x] Web 下载页面、下载链接、版本、SHA-256、安装说明一致。（2026-10-14：真浏览器点按钮落盘的文件，摘要与页面公布值逐字节一致）
+- [ ] Docker 内下载的字节与 Release 生成文件 SHA-256 完全一致。（裸二进制已验证一致；Docker 镜像尚未构建）
+- [x] 新 Chrome Profile 安装、登录、首次绑定、首次同步完整通过。（2026-10-14：`scripts/e2e-dual-profile.mjs`，连跑两次全绿）
+- [ ] 新 Edge Profile 完成同样操作。（首装、配对、绑定、初始对账、双向收敛、离线排队均通过；重启一步被 Edge 拦下，见 §2 实测结果）
+- [x] 浏览器重启后扩展仍保持正常安装与连接。（Chrome 通过：升级阶段就是离线重启浏览器后继续。Edge 在同一路径下拦截扩展页面）
+- [x] 用户未安装扩展时也能访问相关安装说明；正式下载权限符合产品策略。（安装区在普通用户「设备」页，无设备时同样渲染；清单与下载都要求会话）
 
 ### 14.2 数据连续性与升级
 
-- [ ] 固定安装目录同路径升级后 Extension ID 保持稳定。
-- [ ] 同 Profile 中 Device ID、Binding、Local Mapping、watermark 保留。
-- [ ] 升级前存在离线 Pending Operations，升级后不会被无提示丢弃。
+- [x] 固定安装目录同路径升级后 Extension ID 保持稳定。（2026-10-14：删目录重建至同一路径并重启浏览器，ID 不变）
+- [x] 同 Profile 中 Device ID、Binding、Local Mapping、watermark 保留。（同上：`bootstrap.deviceId`、binding 状态、映射行数、applied 水位线均保留）
+- [x] 升级前存在离线 Pending Operations，升级后不会被无提示丢弃。（同上：离线造的改动重启后仍在 outbox，恢复服务端后成功上传）
 - [ ] 下载失败、ZIP 损坏、解压失败、替换中断不会破坏旧扩展安装。
 - [ ] IndexedDB Migration 失败时保留数据并显示可恢复错误。
-- [ ] 服务端离线时扩展仍保留本地状态，恢复联网后继续同步。
+- [x] 服务端离线时扩展仍保留本地状态，恢复联网后继续同步。（升级阶段整个重启窗口内服务端保持不可达，恢复后一轮同步即追平）
 - [ ] Server 与 Extension 各自升级的兼容矩阵通过测试。
 - [ ] 不兼容的 Sync Protocol 显示明确错误，不静默清空本地数据。
 

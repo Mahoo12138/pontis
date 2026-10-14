@@ -603,7 +603,18 @@ async function pairProfile(name, info) {
     `!!fieldRoot('同步空间') && !!fieldRoot('挂载目录')`,
     'true', `${name}: guide step 2 mounted`, 20_000));
   await pickOption(page, '同步空间', 'E2E Converge', name);
-  await pickFolder(page, '挂载目录', 'mount-folder', 'Bookmarks Bar', name);
+  // The bar is whatever this browser's locale calls it. The run used to say
+  // "Bookmarks Bar" out loud, which is what Chrome for Testing answers in an
+  // English build — a Chinese Edge, or a Chinese Chrome, has a different row and
+  // the mount step then fails in a browser that is working perfectly.
+  const barTitle = await page.evaluate(`
+    const [root] = await chrome.bookmarks.getTree();
+    const bar = (root.children || []).find((c) => !c.url);
+    return bar ? bar.title : '';
+  `);
+  if (!barTitle) die(`${name}: the bookmark bar has no title to mount`);
+  log(`  step ${name}: mounting the bar as ${JSON.stringify(barTitle)}`);
+  await pickFolder(page, '挂载目录', 'mount-folder', barTitle, name);
   log(`  step ${name}: 创建绑定 → ${await clickButton(page, '创建绑定', name)}`);
 
   await waitStep(page, `buttonReady('完成并打开设置页')`, 'true',
