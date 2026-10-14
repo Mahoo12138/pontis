@@ -204,6 +204,38 @@ func TestDistributionCatalogWithNothingStaged(t *testing.T) {
 	}
 }
 
+func TestDeviceCredentialReadsTheReleaseRoute(t *testing.T) {
+	ts, token := stagedDistribution(t)
+	created := restPOST(t, ts, token, "/api/v1/devices", map[string]string{
+		"name": "Chrome@Home", "browser": "chrome", "platform": "macos",
+	})
+	deviceToken, _ := created["token"].(string)
+	if deviceToken == "" {
+		t.Fatalf("device registration returned no credential: %v", created)
+	}
+
+	// The extension holds a device credential and never a session, so this is
+	// the only catalog it can reach — and reaching it is what lets the settings
+	// page say "this instance has a newer package".
+	code, body := doJSON(t, http.MethodGet, ts.URL+"/api/v1/device/extensions",
+		map[string]string{"Authorization": "Bearer " + deviceToken}, nil)
+	if code != http.StatusOK {
+		t.Fatalf("device catalog = %d %v", code, body)
+	}
+	artifacts, ok := body["artifacts"].([]any)
+	if !ok || len(artifacts) != 1 {
+		t.Fatalf("device catalog artifacts = %v, want one entry", body["artifacts"])
+	}
+
+	// Credentials stay typed: a device credential is not a web session and does
+	// not unlock the session-only surface.
+	code, _ = doJSON(t, http.MethodGet, ts.URL+"/api/v1/distribution/extensions",
+		map[string]string{"Authorization": "Bearer " + deviceToken}, nil)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("device credential on the session route = %d, want 401", code)
+	}
+}
+
 func TestExtensionDownloadServesTheStagedBytes(t *testing.T) {
 	ts, token := stagedDistribution(t)
 

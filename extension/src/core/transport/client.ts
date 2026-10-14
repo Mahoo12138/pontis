@@ -32,6 +32,10 @@ import {
   parseStartPageSnapshot,
   type StartPageSnapshotWire,
 } from '../start-page/wire';
+import {
+  parseExtensionRelease,
+  type ExtensionReleaseWire,
+} from '../update/release';
 
 /** What a conditional GET answers when the bytes have not changed.
  *
@@ -321,6 +325,20 @@ export class ApiClient
     return this.request<ReconciliationEnvelopeWire>(`/api/v1/sync/reconciliations/${sessionId}/complete`, {
       method: 'POST',
       validate: parseReconciliationEnvelope,
+    });
+  }
+
+  /**
+   * The release this instance can upgrade the extension to (doc §10.3). Read
+   * with the device credential: an extension never holds a web session, and the
+   * session-only catalog route is unreachable from here by design.
+   *
+   * Metadata in, a hint out. Nothing in this code path fetches the package the
+   * answer names.
+   */
+  deviceExtensions(): Promise<ExtensionReleaseWire> {
+    return this.request<ExtensionReleaseWire>('/api/v1/device/extensions', {
+      validate: parseExtensionRelease,
     });
   }
 

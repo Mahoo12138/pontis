@@ -395,6 +395,10 @@ CI（`.github/workflows/ci.yml`）不另立一套命令，跑的就是根命令�
   `server_version`/`http_api_version`/`sync_protocol_versions` 由 Go 注入，不由构建脚本抄），
   `GET|HEAD /downloads/extensions/<platform>/v<version>.zip` 给字节。两者都要会话，
   下载 URL 按版本不可变，路径只与编译期清单比对，不拼磁盘路径。
+- 扩展侧另有一条同内容的设备作用域读取 `GET /api/v1/device/extensions`：设备凭据不是
+  Web 会话，会话入口它永远到不了。设置页据此在「这台浏览器」里提示本实例有更新版本，
+  只做点分数字的逐段比较，相等或更旧即沉默，任何失败（离线、旧服务端无此路由、响应不合
+  形状）都表现为「没有提示」。它从不下载包体，更不执行包里任何代码。
 - E2E 构建（`Pontis (E2E)`，预授权 origin）与新标签页构建都不是发布产物，
   staging 的名称与 manifest 断言会把它们挡在 Release 之外。
 

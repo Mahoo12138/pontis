@@ -273,6 +273,13 @@ func (s *Server) Router() http.Handler {
 		// approval and no account re-authentication is involved (§11.2).
 		r.Get("/api/v1/device/start-page/snapshot", s.handleDeviceStartPageSnapshot)
 
+		// The release this instance can upgrade the extension to. Same body as
+		// the web-facing catalog, mounted here because a device credential is
+		// not a session: without this route the extension could never reach the
+		// list doc §10.3 asks it to read. It is a read of public package
+		// metadata, not a device-scoped resource, so it filters nothing.
+		r.Get("/api/v1/device/extensions", s.handleDistributionExtensions)
+
 		// Reconciliation lifecycle (doc 08 §9-§14): the only way a
 		// pending_initial binding becomes active.
 		r.Post("/api/v1/sync/bindings/{bindingID}/reconciliations", s.handleCreateReconciliation)

@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Alert,
+  Anchor,
   Badge,
   Box,
   Button,
@@ -31,6 +32,11 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { countScopeBookmarks } from '../../core/browser/scopeCount';
+import {
+  offerUpdate,
+  platformForBuild,
+  type UpdateOffer,
+} from '../../core/update/release';
 import type { ReconciliationIssueWire } from '../../core/protocol/types';
 import {
   isSyncEnabled,
@@ -74,7 +80,7 @@ function initialTab(): Tab {
 }
 
 export function App() {
-  const { chrome, db, bootstrap, adapter, pairing } = runtime;
+  const { chrome, db, bootstrap, client, adapter, pairing } = runtime;
 
   const [tab, setTab] = useState<Tab>(initialTab);
 
@@ -94,6 +100,9 @@ export function App() {
   const [serverHost, setServerHost] = useState('');
   /** The registered device name, read back from storage for the header. */
   const [deviceLabel, setDeviceLabel] = useState('');
+  /** A newer package this instance carries, if it carries one. See below. */
+  const [update, setUpdate] = useState<UpdateOffer | null>(null);
+  const [installUrl, setInstallUrl] = useState('');
   /** Which action is running: only its own button spins. */
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -161,6 +170,35 @@ export function App() {
     return () => {
       clearInterval(id);
       clearInterval(countId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Ask the instance once whether it carries a newer package — on open, not on
+  // the 2s refresh clock, because this is a page view rather than state that
+  // moves. Every failure is silence: an offline server, an instance that predates
+  // this route, and a body that will not parse all leave the page saying nothing,
+  // which is the correct answer for all three. A missing hint costs nothing; a
+  // wrong one sends someone to upgrade to a version they already have.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const b = await bootstrap.get();
+      if (!b.serverUrl || !b.deviceToken || cancelled) return;
+      setInstallUrl(`${b.serverUrl.replace(/\/+$/, '')}/devices#install-extension`);
+      try {
+        const release = await client.deviceExtensions();
+        const offer = offerUpdate(release, {
+          platform: platformForBuild(),
+          version: chrome.runtime.getManifest().version,
+        });
+        if (!cancelled) setUpdate(offer);
+      } catch {
+        if (!cancelled) setUpdate(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -410,6 +448,30 @@ export function App() {
                         <Text size="xs" c="dimmed">
                           {`${bindings.length} 个空间绑定在这台设备上`}
                         </Text>
+                      </Group>
+                    </MetaRow>
+                    {/* The version this copy was installed from, and — only when
+                        this instance really carries a newer package — the way to
+                        it. Nothing here downloads or runs anything: the link goes
+                        to the install page, where the upgrade is a person's own
+                        action (doc §10.3). */}
+                    <MetaRow label="版本">
+                      <Group gap="xs" wrap="nowrap">
+                        <Text size="sm" className="pontis-mono">
+                          {chrome.runtime.getManifest().version}
+                        </Text>
+                        {update && installUrl && (
+                          <>
+                            <Text size="xs" c="dimmed">
+                              {update.protocolMismatch
+                                ? `本实例提供 ${update.version}，但其同步协议与本版本不匹配`
+                                : `本实例提供 ${update.version}`}
+                            </Text>
+                            <Anchor size="xs" href={installUrl} target="_blank" rel="noreferrer">
+                              升级说明
+                            </Anchor>
+                          </>
+                        )}
                       </Group>
                     </MetaRow>
                     <Group gap="xs" mt="xs">

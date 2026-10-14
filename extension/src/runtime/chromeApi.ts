@@ -38,6 +38,10 @@ export interface ChromeRuntimeApi {
   };
   sendMessage(message: unknown): Promise<unknown>;
   getURL(path: string): string;
+  /** The manifest this copy was installed from. Its `version` is what an
+   * offered release is compared against — read from the browser rather than
+   * baked into the bundle, so the two cannot drift apart. */
+  getManifest(): { version: string };
 }
 
 /**
