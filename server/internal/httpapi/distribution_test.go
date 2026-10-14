@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	testArtifactURL  = "/downloads/extensions/chromium/v0.1.0.zip"
-	testArtifactName = "pontis-chromium-v0.1.0.zip"
+	testArtifactURL  = "/downloads/extensions/chromium/sync/v0.1.0.zip"
+	testArtifactName = "pontis-chromium-sync-v0.1.0.zip"
 	testArtifactBody = "PK\x03\x04 fake extension bytes"
 )
 
@@ -38,6 +38,7 @@ func testDistribution(t *testing.T) *distribution.Source {
 		"generated_at": "2026-10-14T00:00:00.000Z",
 		"artifacts": []any{map[string]any{
 			"platform":           "chromium",
+			"variant":            "sync",
 			"version":            "0.1.0",
 			"file":               testArtifactURL,
 			"name":               testArtifactName,
@@ -56,7 +57,7 @@ func testDistribution(t *testing.T) *distribution.Source {
 		"artifacts/" + testArtifactName: {Data: []byte(testArtifactBody)},
 		// Present in the directory but absent from the manifest: the closest a
 		// test can come to a file the download API must refuse to name.
-		"artifacts/pontis-chromium-v9.9.9.zip": {Data: []byte("not in the manifest")},
+		"artifacts/pontis-chromium-sync-v9.9.9.zip": {Data: []byte("not in the manifest")},
 	})
 	if err != nil {
 		t.Fatalf("load test distribution: %v", err)
@@ -166,6 +167,11 @@ func TestDistributionCatalogDescribesTheInstance(t *testing.T) {
 	}
 	if artifact["version"] != "0.1.0" || artifact["platform"] != "chromium" {
 		t.Errorf("artifact = %v", artifact)
+	}
+	// Which of the two packages this is. A client can only pick its own update
+	// by matching platform and variant together.
+	if artifact["variant"] != "sync" {
+		t.Errorf("variant = %v, want sync", artifact["variant"])
 	}
 	if browsers, ok := artifact["supported_browsers"].([]any); !ok || len(browsers) != 1 {
 		t.Errorf("supported_browsers = %v, want one entry", artifact["supported_browsers"])
@@ -301,10 +307,10 @@ func TestExtensionDownloadOnlyKnowsTheManifest(t *testing.T) {
 	// v9.9.9 really is embedded next to the release package. It must stay
 	// unreachable, and so must anything spelled differently enough to look new.
 	for _, target := range []string{
-		"/downloads/extensions/chromium/v9.9.9.zip",
-		"/downloads/extensions/chromium/v0.2.0.zip",
+		"/downloads/extensions/chromium/sync/v9.9.9.zip",
+		"/downloads/extensions/chromium/sync/v0.2.0.zip",
 		"/downloads/extensions/firefox/v0.1.0.xpi",
-		"/downloads/extensions/chromium/../artifacts/pontis-chromium-v9.9.9.zip",
+		"/downloads/extensions/chromium/../artifacts/pontis-chromium-sync-v9.9.9.zip",
 		"/downloads/extensions/chromium/%2e%2e/manifest.json",
 		"/downloads/",
 	} {

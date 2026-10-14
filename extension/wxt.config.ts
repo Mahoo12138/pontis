@@ -47,8 +47,15 @@ export default defineConfig({
   hooks: {
     'entrypoints:resolved'(_wxt, entrypoints) {
       if (newtabBuild) return;
-      const at = entrypoints.findIndex((e) => e.name === 'newtab');
-      if (at >= 0) entrypoints.splice(at, 1);
+      // The standard package ships neither the override page nor the start page
+      // it renders. Dropping `newtab` alone would leave `start-page.html` in the
+      // bundle with nothing linking to it — the settings tab that used to be the
+      // only entry is hidden in this build — so an ordinary install would carry
+      // a page it can never show.
+      for (const name of ['newtab', 'start-page']) {
+        const at = entrypoints.findIndex((e) => e.name === name);
+        if (at >= 0) entrypoints.splice(at, 1);
+      }
     },
     // The settings page says which of the two this build is. A reader cannot
     // tell from the icon, and §8.3 refuses a label that guesses.

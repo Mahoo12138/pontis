@@ -267,6 +267,7 @@ export const checkDeviceOverviewResponse: Checker<DeviceOverviewResponse> =
 export const checkDistributionArtifact: Checker<DistributionArtifact> =
   record<DistributionArtifact>({
     platform: str,
+    variant: str,
     version: str,
     file: str,
     sha256: str,

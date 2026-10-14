@@ -1,7 +1,7 @@
-// Stages the built extension package where the Go binary embeds it.
+// Stages the built extension packages where the Go binary embeds them.
 //
 // Same constraint as stage-web-dist: `go:embed` cannot reach outside its own
-// package, so a release build copies the ZIP into
+// package, so a release build copies the ZIPs into
 // server/internal/distribution/artifacts and writes the manifest the download
 // API serves (distribution doc §3, §4).
 //
@@ -29,24 +29,45 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
- * What ships in this batch. One Chromium ZIP: the new-tab build is a second
- * artifact that has not been split into its own thin extension yet, so it is
- * not staged (start-page doc §0.4). Firefox needs an AMO-signed XPI and is out
- * of V1 — an unsigned ZIP renamed to `.xpi` is explicitly not a package
- * (doc §11).
+ * What ships in this batch: two Chromium packages built from one codebase.
+ *
+ * Taking over the new tab cannot be a switch inside the standard extension —
+ * `chrome_url_overrides` is read when the extension installs and no API changes
+ * it afterwards — so it is its own artifact, and a person who wants both
+ * behaviours pays two installs (start-page doc §0.2, §0.4). Firefox needs an
+ * AMO-signed XPI and is out of V1: an unsigned ZIP renamed to `.xpi` is not a
+ * package (doc §11).
  */
+const PACKAGES = [
+  {
+    variant: 'sync',
+    outDir: '.output',
+    zipBase: 'pontis-chromium',
+    manifestName: 'Pontis',
+    takesOverNewTab: false,
+    buildCommand: 'pnpm --filter @pontis/extension zip',
+  },
+  {
+    variant: 'start-page',
+    outDir: '.output-newtab',
+    zipBase: 'pontis-chromium-newtab',
+    manifestName: 'Pontis (起始页)',
+    takesOverNewTab: true,
+    buildCommand: 'pnpm --filter @pontis/extension zip:newtab',
+  },
+];
+
 const PLATFORM = 'chromium';
-const MANIFEST_NAME = 'Pontis';
 const MANIFEST_VERSION = 3;
 // Compared as sets. `tabs` is not on this list by design: the permission
 // boundary in start-page doc §16.4 is a stated constraint, and a build that
- // grew one should fail a release build rather than ship and be noticed later.
+// grew one should fail a release build rather than ship and be noticed later.
 const PERMISSIONS = ['alarms', 'bookmarks', 'search', 'storage'];
-// Oldest server this package is tested against. It is a declaration, not a
+// Oldest server these packages are tested against. It is a declaration, not a
 // derivation: the extension compares it with `/meta`, so it changes when the
 // extension stops working against an older server, not when a server releases.
 const MIN_SERVER_VERSION = '0.1.0';
-// Browsers this artifact has been *installed in* end to end. The Chromium ZIP
+// Browsers these packages have been *installed in* end to end. The Chromium ZIP
 // loads in Edge too, but doc §16.2 makes shared support a test result rather
 // than an assumption, so Edge joins this list when someone runs it.
 const SUPPORTED_BROWSERS = ['chrome'];
@@ -54,49 +75,54 @@ const SUPPORTED_BROWSERS = ['chrome'];
 const artifactsDir = join(root, 'server', 'internal', 'distribution', 'artifacts');
 
 function main() {
-  const source = join(root, 'extension', '.output', `pontis-chromium-${extensionVersion()}.zip`);
-
-  const zip = readArchive(source);
-  const manifest = readEntryManifest(zip);
-
-  verify(zip, manifest);
-
-  const version = String(manifest.version);
-  const fileName = `pontis-chromium-v${version}.zip`;
-  const url = `/downloads/extensions/${PLATFORM}/v${version}.zip`;
-
-  // The copy is what the binary carries; hashing the bytes before the copy and
-  // again after is the only way the download API can mean anything when it
-  // reports a digest.
-  const bytes = readFileSync(source);
-  const sha256 = createHash('sha256').update(bytes).digest('hex');
-
-  stage(source, fileName, bytes);
+  const expected = extensionVersion();
+  resetArtifactsDir();
+  const artifacts = PACKAGES.map((pkg) => stagePackage(pkg, expected));
 
   const release = {
     release: releaseTag(),
     commit: commitSha(),
     generated_at: new Date().toISOString(),
-    artifacts: [
-      {
-        platform: PLATFORM,
-        version,
-        file: url,
-        name: fileName,
-        sha256,
-        size_bytes: bytes.length,
-        manifest_version: manifest.manifest_version,
-        min_server_version: MIN_SERVER_VERSION,
-        supported_browsers: [...SUPPORTED_BROWSERS],
-      },
-    ],
+    artifacts,
   };
-
   writeFileSync(join(artifactsDir, 'manifest.json'), `${JSON.stringify(release, null, 2)}\n`);
+  for (const a of artifacts) {
+    console.log(`staged ${a.name} (${a.size_bytes} bytes, sha256 ${a.sha256.slice(0, 16)}…)`);
+  }
+  console.log(`-> ${artifactsDir}`);
+}
 
-  console.log(
-    `staged ${fileName} (${bytes.length} bytes, sha256 ${sha256.slice(0, 16)}…) -> ${artifactsDir}`,
-  );
+function stagePackage(pkg, expectedVersion) {
+  const source = join(root, 'extension', pkg.outDir, `${pkg.zipBase}-${expectedVersion}.zip`);
+  const zip = readArchive(source, pkg);
+  const manifest = readEntryManifest(zip);
+  verify(zip, manifest, pkg, expectedVersion);
+
+  const version = String(manifest.version);
+  const fileName = `pontis-${PLATFORM}-${pkg.variant}-v${version}.zip`;
+  // The variant sits inside the URL. Two packages that differ only by what they
+  // take over must never share an address, and each address stays immutable for
+  // its version (doc §6).
+  const url = `/downloads/extensions/${PLATFORM}/${pkg.variant}/v${version}.zip`;
+
+  // The copy is what the binary carries; hashing the bytes before the copy and
+  // again after is the only way the download API can mean anything when it
+  // reports a digest.
+  const bytes = readFileSync(source);
+  copyFileSync(source, join(artifactsDir, fileName));
+
+  return {
+    platform: PLATFORM,
+    variant: pkg.variant,
+    version,
+    file: url,
+    name: fileName,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    size_bytes: bytes.length,
+    manifest_version: manifest.manifest_version,
+    min_server_version: MIN_SERVER_VERSION,
+    supported_browsers: [...SUPPORTED_BROWSERS],
+  };
 }
 
 // --- inputs ------------------------------------------------------------------
@@ -147,11 +173,11 @@ const EOCD_SIGNATURE = 0x06054b50;
 const CENTRAL_SIGNATURE = 0x02014b50;
 const LOCAL_SIGNATURE = 0x04034b50;
 
-function readArchive(path) {
+function readArchive(path, pkg) {
   if (!existsSync(path) || !statSync(path).isFile()) {
     fail(
-      `${path} is not a file — run \`pnpm --filter @pontis/extension zip\` first. ` +
-        'The name comes from zip.artifactTemplate in extension/wxt.config.ts.',
+      `${path} is not a file — run \`${pkg.buildCommand}\` first. The name comes from ` +
+        'zip.artifactTemplate in extension/wxt.config.ts.',
     );
   }
   const buffer = readFileSync(path);
@@ -228,21 +254,36 @@ function readEntryManifest(zip) {
 
 // --- checks ------------------------------------------------------------------
 
-function verify(zip, manifest) {
+function verify(zip, manifest, pkg, expectedVersion) {
   if (manifest.manifest_version !== MANIFEST_VERSION) {
     fail(`${zip.path}: manifest_version is ${manifest.manifest_version}, expected ${MANIFEST_VERSION}`);
   }
-  if (manifest.name !== MANIFEST_NAME) {
+  if (manifest.name !== pkg.manifestName) {
     fail(
-      `${zip.path}: manifest name is ${JSON.stringify(manifest.name)}, expected ${JSON.stringify(MANIFEST_NAME)} — ` +
-        'the E2E or new-tab build is not a release artifact',
+      `${zip.path}: manifest name is ${JSON.stringify(manifest.name)}, expected ` +
+        `${JSON.stringify(pkg.manifestName)} — the wrong variant, or the E2E build, staged as ${pkg.variant}`,
     );
   }
-  if (manifest.version !== extensionVersion()) {
-    fail(`${zip.path}: manifest version ${manifest.version} != extension/package.json ${extensionVersion()}`);
+  if (manifest.version !== expectedVersion) {
+    fail(`${zip.path}: manifest version ${manifest.version} != extension/package.json ${expectedVersion}`);
   }
   if (typeof manifest.version !== 'string' || !/^\d+\.\d+\.\d+/.test(manifest.version)) {
     fail(`${zip.path}: manifest version ${JSON.stringify(manifest.version)} is not a dotted triple`);
+  }
+
+  // The one property that actually distinguishes the two packages. A sync build
+  // shipped as `start-page` would quietly never take over the tab; a takeover
+  // build shipped as `sync` would start owning the tab on a machine that never
+  // asked it to, which is the failure start-page doc §9.2 refuses.
+  const overrides = manifest.chrome_url_overrides ?? {};
+  if (Boolean(overrides.newtab) !== pkg.takesOverNewTab) {
+    fail(
+      `${zip.path}: chrome_url_overrides.newtab is ${overrides.newtab ? 'present' : 'absent'}, but the ` +
+        `${pkg.variant} package is labelled ${pkg.takesOverNewTab ? 'as taking' : 'as not taking'} over the tab`,
+    );
+  }
+  if (pkg.takesOverNewTab && !zip.entries.has('newtab.html')) {
+    fail(`${zip.path}: the manifest claims a new-tab override but the package has no newtab.html`);
   }
 
   const declared = [...(manifest.permissions ?? [])].sort().join(',');
@@ -290,17 +331,16 @@ function verify(zip, manifest) {
 
 // --- output ------------------------------------------------------------------
 
-function stage(source, fileName, bytes) {
+function resetArtifactsDir() {
   // Rebuilt from scratch, so nothing an earlier batch left behind can still be
   // downloaded (doc §5 step 7).
   rmSync(artifactsDir, { recursive: true, force: true });
   mkdirSync(artifactsDir, { recursive: true });
-  copyFileSync(source, join(artifactsDir, fileName));
   // Same placeholder as the web dist: `go:embed` needs one match in a checkout
   // that has never run a release build.
   writeFileSync(
     join(artifactsDir, '.gitkeep'),
-    'Placeholder so `go build ./...` works before a release build stages the extension package here.\n',
+    'Placeholder so `go build ./...` works before a release build stages the extension packages here.\n',
   );
 }
 

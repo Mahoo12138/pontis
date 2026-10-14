@@ -10,7 +10,7 @@ import (
 	"testing/fstest"
 )
 
-const testURL = "/downloads/extensions/chromium/v0.1.0.zip"
+const testURL = "/downloads/extensions/chromium/sync/v0.1.0.zip"
 
 // staged builds a distribution directory the way the release script does: one
 // package, one manifest, and the digest computed over the bytes it wrote.
@@ -19,9 +19,10 @@ func staged(t *testing.T, payload string, mutate func(map[string]any)) fstest.Ma
 	sum := sha256.Sum256([]byte(payload))
 	entry := map[string]any{
 		"platform":           "chromium",
+		"variant":            "sync",
 		"version":            "0.1.0",
 		"file":               testURL,
-		"name":               "pontis-chromium-v0.1.0.zip",
+		"name":               "pontis-chromium-sync-v0.1.0.zip",
 		"sha256":             hex.EncodeToString(sum[:]),
 		"size_bytes":         len(payload),
 		"manifest_version":   3,
@@ -42,9 +43,9 @@ func staged(t *testing.T, payload string, mutate func(map[string]any)) fstest.Ma
 		t.Fatalf("marshal manifest: %v", err)
 	}
 	return fstest.MapFS{
-		"artifacts/.gitkeep":                   &fstest.MapFile{Data: []byte("placeholder\n")},
-		"artifacts/manifest.json":              &fstest.MapFile{Data: raw},
-		"artifacts/pontis-chromium-v0.1.0.zip": &fstest.MapFile{Data: []byte(payload)},
+		"artifacts/.gitkeep":                        &fstest.MapFile{Data: []byte("placeholder\n")},
+		"artifacts/manifest.json":                   &fstest.MapFile{Data: raw},
+		"artifacts/pontis-chromium-sync-v0.1.0.zip": &fstest.MapFile{Data: []byte(payload)},
 	}
 }
 
@@ -85,8 +86,8 @@ func TestLookupIsTheManifestNotThePath(t *testing.T) {
 	// with a different spelling. The whitelist is the only thing standing between
 	// a request and those bytes, so none of them may resolve.
 	for _, path := range []string{
-		"/artifacts/pontis-chromium-v0.1.0.zip",
-		"/downloads/extensions/chromium/v9.9.9.zip",
+		"/artifacts/pontis-chromium-sync-v0.1.0.zip",
+		"/downloads/extensions/chromium/sync/v9.9.9.zip",
 		"/downloads/extensions/firefox/v0.1.0.xpi",
 		"/downloads/extensions/../../artifacts/manifest.json",
 		"/downloads/",
@@ -108,9 +109,9 @@ func TestCleanMatchesTheManifestForm(t *testing.T) {
 	// declares, which is the property that matters.
 	for _, path := range []string{
 		testURL,
-		"//downloads/extensions/chromium/v0.1.0.zip",
-		"/downloads/extensions/chromium/v0.1.0/../v0.1.0.zip",
-		"/downloads/extensions/chromium/v0.1.0.zip/",
+		"//downloads/extensions/chromium/sync/v0.1.0.zip",
+		"/downloads/extensions/chromium/sync/v0.1.0/../v0.1.0.zip",
+		"/downloads/extensions/chromium/sync/v0.1.0.zip/",
 	} {
 		if _, ok := src.Lookup(path); !ok {
 			t.Errorf("Lookup(%q) missed the one declared URL", path)
@@ -124,9 +125,10 @@ func TestRejectsAManifestThatCannotBeTrusted(t *testing.T) {
 		mutate func(map[string]any)
 	}{
 		{"no platform", drop("platform")},
+		{"no variant", drop("variant")},
 		{"no version", drop("version")},
 		{"url outside the download namespace",
-			set("file", "/artifacts/pontis-chromium-v0.1.0.zip")},
+			set("file", "/artifacts/pontis-chromium-sync-v0.1.0.zip")},
 		{"name that walks out of the embed", set("name", "../secrets.txt")},
 		{"name with a header-breaking character", set("name", `we"ird.zip`)},
 		{"name that is not a package", set("name", "source.tar.gz")},
@@ -149,21 +151,73 @@ func TestRejectsAManifestThatCannotBeTrusted(t *testing.T) {
 func TestRejectsTwoArtifactsSharingAURL(t *testing.T) {
 	// One version URL is a promise that it always means one package.
 	_, err := LoadFrom(staged(t, "zip-bytes", func(manifest map[string]any) {
-		first := manifest["artifacts"].([]any)[0].(map[string]any)
-		second := map[string]any{}
-		for k, v := range first {
-			second[k] = v
+		manifest["artifacts"] = []any{
+			manifest["artifacts"].([]any)[0],
+			cloneOf(manifest["artifacts"].([]any)[0]),
 		}
-		manifest["artifacts"] = []any{first, second}
 	}))
 	if err == nil {
 		t.Fatal("duplicate download URLs must fail the build")
 	}
 }
 
+func TestRejectsTwoArtifactsClaimingTheSameKind(t *testing.T) {
+	// A client picks its own update by platform and variant. Two artifacts
+	// wearing the same pair leave it no answer that is not a guess, even when
+	// their URLs are distinct.
+	_, err := LoadFrom(staged(t, "zip-bytes", func(manifest map[string]any) {
+		first := manifest["artifacts"].([]any)[0].(map[string]any)
+		second := cloneOf(first)
+		second["variant"] = "sync"
+		second["version"] = "0.2.0"
+		second["file"] = "/downloads/extensions/chromium/sync/v0.2.0.zip"
+		second["name"] = "pontis-chromium-sync-v0.2.0.zip"
+		manifest["artifacts"] = []any{first, second}
+	}))
+	if err == nil {
+		t.Fatal("two chromium/sync artifacts must fail the build")
+	}
+	if !strings.Contains(err.Error(), "cannot tell them apart") {
+		t.Errorf("error %q does not name the collision", err)
+	}
+}
+
+func TestTwoVariantsCoexist(t *testing.T) {
+	// The real release: a sync package and a new-tab takeover package, same
+	// browser, different variant, each with its own immutable URL.
+	fsys := staged(t, "zip-bytes", func(manifest map[string]any) {
+		first := manifest["artifacts"].([]any)[0].(map[string]any)
+		second := cloneOf(first)
+		second["variant"] = "start-page"
+		second["file"] = "/downloads/extensions/chromium/start-page/v0.1.0.zip"
+		second["name"] = "pontis-chromium-start-page-v0.1.0.zip"
+		manifest["artifacts"] = []any{first, second}
+	})
+	fsys["artifacts/pontis-chromium-start-page-v0.1.0.zip"] = &fstest.MapFile{Data: []byte("other bytes")}
+	src, err := LoadFrom(fsys)
+	if err != nil {
+		t.Fatalf("two variants should be a valid batch: %v", err)
+	}
+	if got := len(src.Artifacts()); got != 2 {
+		t.Errorf("Artifacts() = %d, want 2", got)
+	}
+	if _, ok := src.Lookup("/downloads/extensions/chromium/start-page/v0.1.0.zip"); !ok {
+		t.Error("the takeover package is not downloadable")
+	}
+}
+
+func cloneOf(entry any) map[string]any {
+	source := entry.(map[string]any)
+	out := map[string]any{}
+	for k, v := range source {
+		out[k] = v
+	}
+	return out
+}
+
 func TestRejectsAMissingFile(t *testing.T) {
 	fsys := staged(t, "zip-bytes", nil)
-	delete(fsys, "artifacts/pontis-chromium-v0.1.0.zip")
+	delete(fsys, "artifacts/pontis-chromium-sync-v0.1.0.zip")
 	if _, err := LoadFrom(fsys); err == nil {
 		t.Fatal("a manifest naming bytes the build did not stage must fail the build")
 	}
@@ -179,7 +233,7 @@ func TestRefusesToServeBytesThatDoNotMatchTheDigest(t *testing.T) {
 	}
 	artifact, _ := src.Lookup(testURL)
 	fsys := staged(t, "zip-bytes", nil)
-	fsys["artifacts/pontis-chromium-v0.1.0.zip"] = &fstest.MapFile{Data: []byte("tampered, longer payload")}
+	fsys["artifacts/pontis-chromium-sync-v0.1.0.zip"] = &fstest.MapFile{Data: []byte("tampered, longer payload")}
 	tampered, err := LoadFrom(fsys)
 	if err != nil {
 		t.Fatalf("load after tampering: %v", err)

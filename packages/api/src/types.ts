@@ -150,6 +150,13 @@ export interface DeviceOverviewResponse {
  */
 export interface DistributionArtifact {
   platform: string;
+  /**
+   * Which package within a platform. Chromium ships two: `sync` is the ordinary
+   * extension and `start-page` is the one that takes over the new tab. A client
+   * selects its own update by matching platform and variant together — either
+   * alone is ambiguous.
+   */
+  variant: string;
   version: string;
   file: string;
   sha256: string;

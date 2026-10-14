@@ -44,8 +44,13 @@ var fileNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*\.zip$`)
 // Artifact is one downloadable package. `file` is the public download URL and
 // `name` the file inside the embedded directory; the two are kept apart so no
 // handler ever resolves a request path against the filesystem.
+//
+// Platform and variant together say what a package is for: the same Chromium
+// build ships as a sync package and as a new-tab takeover package, and a client
+// can only pick its own update by matching both.
 type Artifact struct {
 	Platform          string   `json:"platform"`
+	Variant           string   `json:"variant"`
 	Version           string   `json:"version"`
 	URL               string   `json:"file"`
 	Name              string   `json:"name"`
@@ -126,6 +131,8 @@ func (s *Source) add(fsys fs.FS, a Artifact) error {
 	switch {
 	case a.Platform == "":
 		return fmt.Errorf("distribution: artifact %q declares no platform", a.URL)
+	case a.Variant == "":
+		return fmt.Errorf("distribution: artifact %q declares no variant", a.URL)
 	case a.Version == "":
 		return fmt.Errorf("distribution: artifact %q declares no version", a.URL)
 	case !strings.HasPrefix(a.URL, downloadPrefix):
@@ -141,6 +148,15 @@ func (s *Source) add(fsys fs.FS, a Artifact) error {
 		// Two packages behind one URL would make the "immutable version URL"
 		// promise a coin flip.
 		return fmt.Errorf("distribution: two artifacts share the URL %q", a.URL)
+	}
+	for _, held := range s.order {
+		// A client selects its own update by platform and variant, so two
+		// artifacts claiming the same pair leave it with no answer that is not
+		// a guess.
+		if held.Platform == a.Platform && held.Variant == a.Variant {
+			return fmt.Errorf("distribution: two %s/%s artifacts are staged; a client cannot tell them apart",
+				a.Platform, a.Variant)
+		}
 	}
 	// Checked at boot rather than at request time: a manifest that names a file
 	// the build did not stage is a broken release, and the operator should hear

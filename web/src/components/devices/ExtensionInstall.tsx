@@ -32,12 +32,29 @@ import { formatSize } from '../../lib/format';
  * not need an admin role to get it. Everything on screen describes *this*
  * instance's own release: the package, its digest and its version come from the
  * binary that is answering, not from a browser store.
+ *
+ * Two Chromium packages are offered, and the page's job is to make the choice
+ * legible rather than to sell the second one: they are the same code packaged
+ * two ways, and installing both is a real cost (§0.4 of the start-page doc),
+ * which is said out loud below.
  */
 
 const BROWSER_LABEL: Record<string, string> = {
   chrome: 'Chrome',
   edge: 'Edge',
   firefox: 'Firefox',
+};
+
+/** What each package is for, in the reader's terms rather than the manifest's. */
+const VARIANT_META: Record<string, { title: string; blurb: string }> = {
+  sync: {
+    title: '标准同步扩展',
+    blurb: '把书签栏同步到 Pontis 空间,不改动新标签页。',
+  },
+  'start-page': {
+    title: '起始页扩展',
+    blurb: '在同步之外,把新标签页换成 Pontis 起始页。',
+  },
 };
 
 export default function ExtensionInstall() {
@@ -53,8 +70,12 @@ export default function ExtensionInstall() {
   }
 
   const artifacts = data?.artifacts ?? [];
-  const chromium = artifacts.find((a) => a.platform === 'chromium') ?? null;
+  const chromium = artifacts.filter((a) => a.platform === 'chromium');
+  const sync = chromium.find((a) => a.variant === 'sync') ?? null;
+  const startPage = chromium.find((a) => a.variant === 'start-page') ?? null;
   const firefox = artifacts.find((a) => a.platform === 'firefox') ?? null;
+  const builtAt = data?.generated_at ?? '';
+  const commit = data?.commit ?? '';
 
   return (
     <section id="install-extension">
@@ -64,15 +85,24 @@ export default function ExtensionInstall() {
         升级时保持同一目录即可沿用现有设备身份与本地数据。
       </Text>
 
-      {chromium ? (
-        <ChromiumRelease artifact={chromium} builtAt={data?.generated_at ?? ''} commit={data?.commit ?? ''} />
-      ) : (
-        <NothingStaged />
-      )}
+      {chromium.length > 0 && <ChooseOneNote both={Boolean(sync && startPage)} />}
 
-      {chromium && <FirstInstallSteps />}
+      {chromium.map((artifact) => (
+        <PackageRow
+          key={artifact.variant}
+          artifact={artifact}
+          builtAt={builtAt}
+          commit={commit}
+        />
+      ))}
 
-      {chromium && <UpgradeSteps />}
+      {startPage && <TakeoverEnableNote />}
+
+      {chromium.length === 0 && <NothingStaged />}
+
+      {chromium.length > 0 && <FirstInstallSteps />}
+
+      {chromium.length > 0 && <UpgradeSteps />}
 
       <FirefoxRelease artifact={firefox} />
     </section>
@@ -81,7 +111,7 @@ export default function ExtensionInstall() {
 
 // ─── What this instance carries ──────────────────────────────
 
-function ChromiumRelease({
+function PackageRow({
   artifact,
   builtAt,
   commit,
@@ -90,6 +120,10 @@ function ChromiumRelease({
   builtAt: string;
   commit: string;
 }) {
+  const meta = VARIANT_META[artifact.variant] ?? {
+    title: artifact.variant,
+    blurb: '本实例提供的另一个扩展安装包。',
+  };
   // The list is what the build tested, not what the format supports: the same
   // Chromium package loads in Edge, and doc §16.2 makes shared support a test
   // result. So Edge is named as untested rather than hidden or claimed.
@@ -103,16 +137,17 @@ function ChromiumRelease({
           <IconBrandChrome size={16} stroke={1.5} style={{ color: tokens.textSecondary, flexShrink: 0 }} />
           <div style={{ minWidth: 0 }}>
             <Group gap={8} wrap="nowrap">
-              <Text fz={13} fw={500}>Chrome / Edge</Text>
+              <Text fz={13} fw={500}>{meta.title}</Text>
               <Text className={mono} fz={12} style={{ color: tokens.textSecondary }}>
                 v{artifact.version}
               </Text>
               <Text fz={12} c="dimmed">{formatSize(artifact.size_bytes)}</Text>
               <Text fz={12} c="dimmed">Manifest V3</Text>
             </Group>
+            <Text fz={12} c="dimmed" mt={2}>{meta.blurb}</Text>
             <Text fz={12} c="dimmed" mt={2}>
               已实测 {tested.join('、')}
-              {edgeTested ? '' : '。Edge 使用同一个安装包,尚未实机验证'}
+              {edgeTested ? '' : '。Edge 使用同一类安装包,尚未实机验证'}
             </Text>
           </div>
         </Group>
@@ -130,6 +165,44 @@ function ChromiumRelease({
 
       <Text fz={12} c="dimmed" mt={6}>
         {buildLine(builtAt, commit, artifact.min_server_version)}
+      </Text>
+    </div>
+  );
+}
+
+/**
+ * The choice, stated before the buttons. Two download links side by side read as
+ * "get both" unless the page says otherwise, and the second package is not an
+ * add-on to the first — it is the same extension that also owns the new tab.
+ */
+function ChooseOneNote({ both }: { both: boolean }) {
+  return (
+    <Text fz={12} c="dimmed" mb="md" style={{ maxWidth: '64ch' }}>
+      {both
+        ? '两个包是同一份代码的两种打包,按需要装一个即可:装哪个决定新标签页归谁。'
+        : '本实例只提供其中一种打包。'}
+      {both && (
+        <>
+          {' '}两个都装会得到两套配对、两个同步引擎和本地两份相同的书签;
+          从其中一个换成另一个也会因为解压目录不同而改变扩展 ID,需要重新配对。
+        </>
+      )}
+    </Text>
+  );
+}
+
+/**
+ * The one behaviour a person will otherwise read as a broken install: the
+ * browser disables a new-tab-overriding extension on load and on every update,
+ * and it stays off until they turn it back on (start-page doc §0.2).
+ */
+function TakeoverEnableNote() {
+  return (
+    <div style={{ marginTop: 10, paddingLeft: 22 }}>
+      <Text fz={12} c="dimmed" style={{ maxWidth: '64ch' }}>
+        起始页扩展装入后、以及每次更新后,Chrome 与 Edge 都会先把它停用,
+        需要在扩展管理页点「启用」才会接管新标签页;没点的话新标签页保持浏览器原来的样子,
+        这不是安装失败。
       </Text>
     </div>
   );
@@ -173,8 +246,8 @@ function buildLine(builtAt: string, commit: string, minServer: string) {
 }
 
 function NothingStaged() {
-  // A server binary built without the extension package is a real state, not a
-  // rendering bug: doc §5 stages the ZIP into the Go embed at build time, so an
+  // A server binary built without the extension packages is a real state, not a
+  // rendering bug: doc §5 stages the ZIPs into the Go embed at build time, so an
   // image built from a bare `go build` carries nothing to hand out. Saying so is
   // more useful than an empty list.
   return (
@@ -186,8 +259,8 @@ function NothingStaged() {
         </Text>
       </Group>
       <Text fz={12} c="dimmed" mt={6} pl={24}>
-        服务端需要从仓库根执行一次完整的发布构建(`pnpm build`:编译 Web 与扩展、暂存产物、再
-        `go build`),重新部署后即可在此下载。已连接设备的同步不受影响。
+        服务端需要从仓库根执行一次完整的发布构建(`pnpm build`:编译 Web 与两种扩展包、暂存产物、
+        再 `go build`),重新部署后即可在此下载。已连接设备的同步不受影响。
       </Text>
     </div>
   );
@@ -244,11 +317,13 @@ function FirstInstallSteps() {
       <SubHeading>首次安装</SubHeading>
       <Steps
         items={[
-          <>点击上方「下载 ZIP」。</>,
+          <>点击上方要装的那个包的「下载 ZIP」。</>,
           <>
-            解压到一个<strong style={{ fontWeight: 500 }}>以后不再移动的目录</strong>,例如{' '}
-            <Path>%LOCALAPPDATA%/Pontis/Extension</Path> (Windows)或{' '}
-            <Path>~/Applications/Pontis/Extension</Path> (macOS)。
+            解压到一个<strong style={{ fontWeight: 500 }}>以后不再移动的目录</strong>,并且
+            <strong style={{ fontWeight: 500 }}>每个包各用各的目录</strong>,例如{' '}
+            <Path>%LOCALAPPDATA%/Pontis/Extension</Path> 与{' '}
+            <Path>%LOCALAPPDATA%/Pontis/Extension-StartPage</Path> (Windows),
+            macOS 同理放在 <Path>~/Applications/Pontis/</Path> 下。
           </>,
           <>
             地址栏打开 <Path>chrome://extensions</Path>,Edge 为 <Path>edge://extensions</Path>。
@@ -287,7 +362,7 @@ function UpgradeSteps() {
             把当前目录完整复制一份作为备份,<strong style={{ fontWeight: 500 }}>保留旧扩展,不要卸载</strong>。
           </>,
           <>
-            在临时目录解压新包,确认 <Path>manifest.json</Path> 里的版本与本页一致,再替换稳定目录中的文件,
+            在临时目录解压新包,确认 <Path>manifest.json</Path> 里的名称与版本符合预期,再替换稳定目录中的文件,
             不要留下旧版本的 JS 分片。
           </>,
           <>
@@ -334,9 +409,7 @@ function FirefoxRelease({ artifact }: { artifact: DistributionArtifact | null })
               <Text fz={12} c="dimmed" mt={2}>
                 已签名的 XPI,可从 Firefox 的附加组件管理界面「从文件安装」。
               </Text>
-              <Group gap={8} wrap="nowrap" mt={8}>
-                <DigestRow artifact={artifact} />
-              </Group>
+              <DigestRow artifact={artifact} />
             </>
           ) : (
             <Text fz={12} c="dimmed" mt={2} style={{ maxWidth: '64ch' }}>

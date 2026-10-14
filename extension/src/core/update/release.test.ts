@@ -16,8 +16,9 @@ function releaseWith(overrides: Record<string, unknown> = {}): ExtensionReleaseW
     artifacts: [
       {
         platform: 'chromium',
+        variant: 'sync',
         version: '0.2.0',
-        file: '/downloads/extensions/chromium/v0.2.0.zip',
+        file: '/downloads/extensions/chromium/sync/v0.2.0.zip',
         sha256: 'x',
         size_bytes: 291_956,
         manifest_version: 3,
@@ -53,22 +54,34 @@ describe('compareVersions', () => {
 
 describe('offerUpdate', () => {
   it('offers the instance package only when it is actually newer', () => {
-    expect(offerUpdate(releaseWith(), { platform: 'chromium', version: '0.1.0' }))
+    expect(offerUpdate(releaseWith(), { platform: 'chromium', variant: 'sync', version: '0.1.0' }))
       .toEqual({ version: '0.2.0', protocolMismatch: false });
-    expect(offerUpdate(releaseWith(), { platform: 'chromium', version: '0.2.0' })).toBeNull();
-    expect(offerUpdate(releaseWith(), { platform: 'chromium', version: '0.3.0' })).toBeNull();
+    expect(offerUpdate(releaseWith(), { platform: 'chromium', variant: 'sync', version: '0.2.0' })).toBeNull();
+    expect(offerUpdate(releaseWith(), { platform: 'chromium', variant: 'sync', version: '0.3.0' })).toBeNull();
+  });
+
+  it('never sends one package to the other one update', () => {
+    // The two Chromium builds differ by whether they own the new tab. Offering
+    // the takeover package to a standard install would start overriding the tab
+    // on a machine that never asked it to (start-page doc §9.2), and the reverse
+    // would leave a takeover install with no way to update.
+    expect(offerUpdate(releaseWith(), {
+      platform: 'chromium', variant: 'start-page', version: '0.1.0',
+    })).toBeNull();
   });
 
   it('stays silent when this build has no artifact', () => {
     // A Firefox build reading a Chromium-only release list has nothing to take.
-    expect(offerUpdate(releaseWith(), { platform: 'firefox', version: '0.1.0' })).toBeNull();
-    expect(offerUpdate({ ...releaseWith(), artifacts: [] }, { platform: 'chromium', version: '0.1.0' }))
+    expect(offerUpdate(releaseWith(), { platform: 'firefox', variant: 'sync', version: '0.1.0' })).toBeNull();
+    expect(offerUpdate({ ...releaseWith(), artifacts: [] }, { platform: 'chromium', variant: 'sync', version: '0.1.0' }))
       .toBeNull();
   });
 
   it('flags a protocol the two sides do not share', () => {
     const release = releaseWith({ sync_protocol_versions: [2] });
-    const offer = offerUpdate(release, { platform: 'chromium', version: '0.1.0', protocol: 1 });
+    const offer = offerUpdate(release, {
+      platform: 'chromium', variant: 'sync', version: '0.1.0', protocol: 1,
+    });
     expect(offer).toEqual({ version: '0.2.0', protocolMismatch: true });
   });
 });

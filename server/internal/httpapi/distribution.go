@@ -27,6 +27,7 @@ const extensionContentType = "application/zip"
 // here: `file` is the contract, and it is already enough to fetch the bytes.
 type distributionArtifactView struct {
 	Platform             string   `json:"platform"`
+	Variant              string   `json:"variant"`
 	Version              string   `json:"version"`
 	File                 string   `json:"file"`
 	SHA256               string   `json:"sha256"`
@@ -69,6 +70,7 @@ func (s *Server) handleDistributionExtensions(w http.ResponseWriter, r *http.Req
 		}
 		out.Artifacts = append(out.Artifacts, distributionArtifactView{
 			Platform:             a.Platform,
+			Variant:              a.Variant,
 			Version:              a.Version,
 			File:                 a.URL,
 			SHA256:               a.SHA256,

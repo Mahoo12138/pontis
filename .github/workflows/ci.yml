@@ -116,28 +116,41 @@ jobs:
             -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
             -d '{"name":"CI"}' | grep -q '"name":"CI"'
 
-          # 分发（distribution doc §14.1）：这个二进制内嵌的扩展包必须能从这里
-          # 下载，并且下载到的字节与构建时算出的摘要完全一致——"页面显示的
+          # 分发（distribution doc §14.1）：这个二进制内嵌的两个扩展包都必须能从
+          # 这里下载，并且下载到的字节与构建时算出的摘要完全一致——"页面显示的
           # SHA-256"只有在和真实回传字节对得上时才有意义。
           curl -sf http://127.0.0.1:8080/api/v1/distribution/extensions \
             -H "Authorization: Bearer $token" > dist-catalog.json
-          grep -q '"platform":"chromium"' dist-catalog.json
-          url=$(sed -E 's/.*"file":"([^"]+)".*/\1/' dist-catalog.json)
-          want=$(sed -E 's/.*"sha256":"([^"]+)".*/\1/' dist-catalog.json)
+          test "$(jq '.artifacts | length' dist-catalog.json)" = 2 \
+            || { echo "expected two artifacts:"; cat dist-catalog.json; exit 1; }
 
-          # 未登录拿不到包：安装页要登录，直链也要登录，不留一条政策不一致的路。
-          anon=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$url")
-          test "$anon" = 401
+          for variant in sync start-page; do
+            url=$(jq -r ".artifacts[] | select(.variant==\"$variant\") | .file" dist-catalog.json)
+            want=$(jq -r ".artifacts[] | select(.variant==\"$variant\") | .sha256" dist-catalog.json)
+            size=$(jq -r ".artifacts[] | select(.variant==\"$variant\") | .size_bytes" dist-catalog.json)
+            test "$url" != "null" || { echo "catalog has no $variant artifact"; exit 1; }
 
-          curl -sf "http://127.0.0.1:8080$url" \
-            -H "Authorization: Bearer $token" -o extension-package.zip
-          got=$(sha256sum extension-package.zip | cut -d' ' -f1)
-          test "$got" = "$want" || { echo "downloaded $got, manifest promised $want"; exit 1; }
+            # 未登录拿不到包：安装页要登录，直链也要登录，不留一条政策不一致的路。
+            anon=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$url")
+            test "$anon" = 401
 
-          # 顶层就是 manifest.json 的解压包，而不是源码或套了一层的目录。
-          unzip -Z1 extension-package.zip | grep -q '^manifest.json$'
-          test "$(wc -c < extension-package.zip)" = \
-            "$(sed -E 's/.*"size_bytes":([0-9]+).*/\1/' dist-catalog.json)"
+            curl -sf "http://127.0.0.1:8080$url" \
+              -H "Authorization: Bearer $token" -o "pkg-$variant.zip"
+            got=$(sha256sum "pkg-$variant.zip" | cut -d' ' -f1)
+            test "$got" = "$want" || { echo "$variant: downloaded $got, manifest promised $want"; exit 1; }
+            test "$(wc -c < "pkg-$variant.zip")" = "$size"
+
+            # 顶层就是 manifest.json 的解压包，而不是源码或套了一层的目录。
+            unzip -Z1 "pkg-$variant.zip" | grep -q '^manifest.json$'
+          done
+
+          # 两个包得真的是两种东西。装错标签的同步包会静默不接管新标签页，而装错
+          # 标签的接管包会开始占用一个从未要求它占用的标签页。
+          if unzip -p pkg-sync.zip manifest.json | grep -q chrome_url_overrides; then
+            echo "the sync package declares a new-tab override"; exit 1
+          fi
+          unzip -p pkg-start-page.zip manifest.json | grep -q chrome_url_overrides \
+            || { echo "the start-page package has no new-tab override"; exit 1; }
 
   # 阶段 F 的出口要求"双设备 E2E 在 CI 或明确记录的验证流程中通过"。这条
   # 跑的就是那个流程本身:一个真服务端 + 两个真 Chromium Profile。

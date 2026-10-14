@@ -384,11 +384,16 @@ CI（`.github/workflows/ci.yml`）不另立一套命令，跑的就是根命令�
 规范见仓库根的 [扩展分发与 Release 方案 V1](../pontis-extension-distribution-release-v1.md)，
 这里只记落地的形状：
 
-- `scripts/stage-distribution.mjs` 读 `extension/.output/pontis-chromium-<version>.zip`，
-  校验包结构（顶层 `manifest.json`、MV3、权限集合、无 `host_permissions`、无 `key`、
-  条目路径合法、不含私钥类文件），算 SHA-256，然后把 ZIP 与 `manifest.json`
-  一起写进 `server/internal/distribution/artifacts/`。校验不过就中断构建——
-  装错包是用户要拿真书签去换的东西。
+- `scripts/stage-distribution.mjs` 读 WXT 产出的两个 ZIP（`extension/.output/pontis-chromium-<version>.zip`
+  与 `extension/.output-newtab/pontis-chromium-newtab-<version>.zip`），校验包结构（顶层
+  `manifest.json`、MV3、权限集合、无 `host_permissions`、无 `key`、条目路径合法、不含私钥类文件），
+  并断言**只有接管包声明 `chrome_url_overrides.newtab`**——两个包贴错标签分别对应"静默不接管"和
+  "普通升级开始占用新标签页"，都是没人会立刻发现的错。校验通过后算 SHA-256，把两个 ZIP 与
+  `manifest.json` 一起写进 `server/internal/distribution/artifacts/`。任何一项不过即中断构建。
+- 产物按 `platform` + `variant` 两个维度命名：Chromium 下有 `sync` 与 `start-page` 两个变体，
+  下载 URL 为 `/downloads/extensions/<platform>/<variant>/v<version>.zip`。服务端加载清单时会拒绝
+  两个同 `platform`+`variant` 的条目。标准构建连 `start-page.html` 入口都不含（`wxt.config.ts` 的
+  `entrypoints:resolved` 同时摘掉 `newtab` 与 `start-page`），设置页也不出现「起始页」标签。
 - 该目录只提交 `.gitkeep`，ZIP 是构建产物；`go:embed` 需要目录里至少有一个匹配项，
   所以未跑过发布构建的检出会得到「本实例没有内嵌安装包」而不是编译失败。
 - 接口：`GET /api/v1/distribution/extensions` 给清单（服务端自己的

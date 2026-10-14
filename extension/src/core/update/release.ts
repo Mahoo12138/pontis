@@ -22,6 +22,8 @@ export class ReleaseShapeError extends Error {
 /** One downloadable package, as the server's catalog describes it. */
 export interface ReleaseArtifactWire {
   platform: string;
+  /** Which package within a platform: `sync` or `start-page` for Chromium. */
+  variant: string;
   version: string;
   /** The instance-relative download URL. Kept as a string: nothing here fetches it. */
   file: string;
@@ -60,8 +62,10 @@ export function parseExtensionRelease(json: unknown): ExtensionReleaseWire {
       throw new ReleaseShapeError(`release artifact must be an object, got ${JSON.stringify(entry)}`);
     }
     const a = entry as Record<string, unknown>;
-    if (typeof a.platform !== 'string' || typeof a.version !== 'string') {
-      throw new ReleaseShapeError(`release artifact needs a platform and a version, got ${JSON.stringify(entry)}`);
+    if (typeof a.platform !== 'string' || typeof a.variant !== 'string' || typeof a.version !== 'string') {
+      throw new ReleaseShapeError(
+        `release artifact needs a platform, a variant and a version, got ${JSON.stringify(entry)}`,
+      );
     }
     if (!Array.isArray(a.sync_protocol_versions)
       || !a.sync_protocol_versions.every((v) => typeof v === 'number')) {
@@ -71,6 +75,7 @@ export function parseExtensionRelease(json: unknown): ExtensionReleaseWire {
     }
     return {
       platform: a.platform,
+      variant: a.variant,
       version: a.version,
       file: typeof a.file === 'string' ? a.file : '',
       sha256: typeof a.sha256 === 'string' ? a.sha256 : '',
@@ -128,6 +133,20 @@ export function platformForBuild(): string {
   return import.meta.env.BROWSER === 'firefox' ? 'firefox' : 'chromium';
 }
 
+/** Which of the two Chromium packages this copy was built from. The new tab is
+ * chosen at install time and cannot be switched afterwards, so the two builds
+ * differ by one manifest line and a reader cannot tell them apart from the icon
+ * — an update offer has to match the variant too, or a sync install would be
+ * sent to a takeover package, which is the change start-page doc §9.2 refuses.
+ *
+ * The define exists only in a production build; under vitest it is absent, and
+ * the standard package is the honest default. */
+export function variantForBuild(): string {
+  return typeof __PONTIS_NEWTAB_BUILD__ !== 'undefined' && __PONTIS_NEWTAB_BUILD__
+    ? 'start-page'
+    : 'sync';
+}
+
 export interface UpdateOffer {
   version: string;
   /** The offered package speaks no protocol this build does. Upgrading is
@@ -142,9 +161,11 @@ export interface UpdateOffer {
  */
 export function offerUpdate(
   release: ExtensionReleaseWire,
-  own: { platform: string; version: string; protocol?: number },
+  own: { platform: string; variant: string; version: string; protocol?: number },
 ): UpdateOffer | null {
-  const artifact = release.artifacts.find((a) => a.platform === own.platform);
+  const artifact = release.artifacts.find(
+    (a) => a.platform === own.platform && a.variant === own.variant,
+  );
   if (!artifact) return null;
   if (compareVersions(artifact.version, own.version) <= 0) return null;
   return {

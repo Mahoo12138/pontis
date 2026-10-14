@@ -1,7 +1,7 @@
 {
   "artifacts": [
     {
-      "file": "/downloads/extensions/chromium/v0.1.0.zip",
+      "file": "/downloads/extensions/chromium/sync/v0.1.0.zip",
       "manifest_version": 3,
       "min_server_version": "0.1.0",
       "platform": "chromium",
@@ -13,6 +13,7 @@
       "sync_protocol_versions": [
         1
       ],
+      "variant": "sync",
       "version": "0.1.0"
     }
   ],

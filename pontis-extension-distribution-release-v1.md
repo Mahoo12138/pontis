@@ -15,7 +15,7 @@ Pontis 已采用 Go Server、内嵌 React Web UI 和 WXT 浏览器扩展。初�
 
 ### 1.1 V1 必须实现
 
-- Server Release 内包含一个可安装的 Chromium ZIP；若 Firefox 已完成签名，则另外包含 XPI。
+- Server Release 内包含两个可安装的 Chromium ZIP：标准同步扩展与起始页（新标签页接管）扩展；若 Firefox 已完成签名，则另外包含 XPI。
 - Pontis Web 的「设备」页提供扩展下载、安装指南、升级指南、版本与校验信息。
 - 扩展 ZIP 是 WXT 生产构建输出，ZIP 根目录包含 `manifest.json`；不分发源代码目录或整个 Monorepo。
 - 发布流水线生成构建元数据（版本、SHA-256、适用浏览器、协议兼容范围）。
@@ -34,8 +34,8 @@ Pontis 已采用 Go Server、内嵌 React Web UI 和 WXT 浏览器扩展。初�
 
 | 平台 | V1 分发产物 | 用户安装方式 | 更新策略 | 状态 |
 |---|---|---|---|---|
-| Chrome | Chromium MV3 ZIP | 解压至固定目录，开启开发者模式，加载已解压扩展 | 原目录替换文件并重新加载 | 首批支持 |
-| Edge | 同一 Chromium MV3 ZIP | `edge://extensions` 加载已解压扩展 | 同上 | 首装与同步已实测通过；重启待人工确认，暂不盖章 |
+| Chrome | 两个 Chromium MV3 ZIP：`sync`（标准同步）与 `start-page`（接管新标签页） | 解压至固定目录，开启开发者模式，加载已解压扩展 | 原目录替换文件并重新加载 | 首批支持 |
+| Edge | 同一类 ZIP（两个变体共用） | `edge://extensions` 加载已解压扩展 | 同上 | 首装与同步已实测通过；重启待人工确认，暂不盖章 |
 | Firefox Desktop | **Mozilla Unlisted 签名的 XPI** | 网站下载签名 XPI 或「从文件安装」 | 初期手动；后续可设计自托管更新清单 | 完成签名后支持 |
 | Safari | 不提供 | — | — | V1 范围外 |
 
@@ -88,7 +88,8 @@ pontis/
 │           ├── handler.go
 │           └── artifacts/             # CI 生成，不提交原始二进制
 │               ├── manifest.json
-│               ├── pontis-chromium-v0.1.0.zip
+│               ├── pontis-chromium-sync-v0.1.0.zip
+│               ├── pontis-chromium-start-page-v0.1.0.zip
 │               └── pontis-firefox-v0.1.0.xpi
 ├── web/
 │   └── src/
@@ -152,7 +153,8 @@ var artifacts embed.FS
 | 方法 | URL | 用途 |
 |---|---|---|
 | GET | `/api/v1/distribution/extensions` | 当前实例可下载的扩展清单 |
-| GET | `/downloads/extensions/chromium/v0.1.0.zip` | 固定版本的 Chromium ZIP |
+| GET | `/downloads/extensions/chromium/sync/v0.1.0.zip` | 标准同步扩展，固定版本 |
+| GET | `/downloads/extensions/chromium/start-page/v0.1.0.zip` | 起始页（接管新标签页）扩展，固定版本 |
 | GET | `/downloads/extensions/firefox/v0.1.0.xpi` | 已签名 Firefox XPI（存在时） |
 | HEAD | 与下载 URL 相同 | 内容长度、ETag、Content-Type 等 |
 
@@ -180,8 +182,9 @@ V1 默认可以要求登录后访问安装页面及下载接口；若需支持�
   "artifacts": [
     {
       "platform": "chromium",
+      "variant": "sync",
       "version": "0.1.0",
-      "file": "/downloads/extensions/chromium/v0.1.0.zip",
+      "file": "/downloads/extensions/chromium/sync/v0.1.0.zip",
       "sha256": "<actual-sha256>",
       "size_bytes": 0,
       "manifest_version": 3,
@@ -194,6 +197,8 @@ V1 默认可以要求登录后访问安装页面及下载接口；若需支持�
 
 不公开不存在的 Firefox Artifact。`release` 代表当前 Server 的分发批次，`artifacts[].version` 是扩展版本，两者**允许不同**。扩展通过自己的 `manifest.version` 与 Server 分发清单比较，并判断协议版本及功能兼容，不应使用字符串大小比较代替规范版本比较。
 
+`platform` 与 `variant` 一起才说明一个包是什么：Chromium 下有两个变体，`sync` 与 `start-page`。扩展选择自己的更新时必须两者都匹配——只看 `platform` 会把标准安装引导去装接管包，那正是起始页文档 §9.2 拒绝的"普通升级开始占用新标签页"；分发清单里两个相同 `platform`+`variant` 的条目会被服务端在加载时直接拒绝。
+
 当 Server 暂无更高版本的扩展时，它只表示“本实例内嵌包是哪个版本”，不等于浏览器商店或上游 GitHub 一定不存在更新。
 
 ## 8. Pontis Web 的入口与页面
@@ -205,15 +210,22 @@ V1 默认可以要求登录后访问安装页面及下载接口；若需支持�
 ├── 已连接的设备
 ├── 添加设备
 └── 安装 Pontis 浏览器扩展
+    ├── 选择说明：两个包是同一份代码的两种打包，装一个即可
     ├── Chrome / Edge
-    │   ├── 下载 ZIP
-    │   ├── SHA-256 / 版本 / 发布时间
+    │   ├── 标准同步扩展
+    │   │   ├── 下载 ZIP
+    │   │   ├── SHA-256 / 版本 / 发布时间
+    │   │   └── 接管提示：起始页扩展装入或更新后需手动「启用」
+    │   ├── 起始页扩展（接管新标签页）
+    │   │   └── 同上，独立摘要与下载 URL
     │   ├── 首次安装说明
     │   └── 手动升级说明
     └── Firefox（签名产物存在时）
         ├── 下载／安装 XPI
         └── 安装与更新说明
 ```
+
+两个下载入口并排出现会被读成"两个都装"，所以页面在按钮之前先说清取舍，并把双装的代价写出来：两套配对、两个同步引擎、本地两份相同书签，换装另一个包还会因解压目录不同而改变扩展 ID、需要重新配对。
 
 UI 延续 **Cold Rational Workspace**：平面布局、清晰步骤与低干扰状态；不放在「管理 → 系统设置」下，不制造一个需要管理员权限才能获取客户端的入口。
 
@@ -374,13 +386,14 @@ ghcr.io/<owner>/pontis:vX.Y.Z
 
 **是否进入下一阶段的判断：** 先让一位没有开发背景的可信测试用户，在全新 Chrome/Edge Profile 中按 Web 页面指引完成安装、首次同步与一次手动升级；升级前后既有书签与离线修改全部得到保护。达到这一点，Pontis 的 Early Release 分发链才能认为完成。
 
-## 16. 待确认的发布决策
+## 16. 发布决策（V1 已定）
 
-1. 初期只向已有账户开放下载，还是允许登录前下载软件包？建议 **下载页随普通用户设备管理开放**，未登录可保留简短安装指南；静态安装包可按部署需求开放。
-2. Chrome/Edge 是否共用同一个 ZIP？建议首批共用，但通过双方真实安装测试后才能在页面同时标注支持。
-3. Firefox 是否进入首批 Release？建议不阻塞 Chromium 首次发布，签名完成后再纳入。
-4. 是否公开 GitHub Releases 镜像产物？建议可选，但运行中实例应始终提供对应二进制内嵌版本。
-5. 扩展代码与 Server 不同步更新时如何分发？V1 允许重新构建 Server Release；需求增长后再拆分独立 Artifact 通道。
+1. 初期只向已有账户开放下载，还是允许登录前下载软件包？**已定：安装页与下载直链都要求会话**，不留"页面要登录、直链公开"的双政策。未登录引导日后单独设计。
+2. Chrome/Edge 是否共用同一个 ZIP？**已定：共用**，但支持标注以实测为准——Chrome 已盖章，Edge 首装与同步实测通过、重启路径被浏览器拦下，暂未盖章（见 §2）。
+3. Firefox 是否进入首批 Release？**已定：不阻塞**，签名完成后再纳入。
+4. 是否公开 GitHub Releases 镜像产物？**已定：可选**，运行中实例始终提供自身内嵌版本。
+5. 扩展代码与 Server 不同步更新时如何分发？**已定：V1 随 Server Release 重新构建**；扩展更新频率明显高于 Server 时再拆独立 Artifact 通道。
+6. 新标签页接管要不要作为独立产物分发？**已定：要，两个下载选项**（2026-10-14 修订）。接管无法做成扩展内的开关，标准包因此不再包含起始页与新标签页入口，其设置页也不出现「起始页」标签；想要接管新标签页的人显式安装第二个包，代价（双配对、双同步引擎、双副本、换包需重新配对）写在下载页上。此决定取代原先"首批只发同步扩展"的过渡方案。
 
 ## 17. 官方参考资料
 

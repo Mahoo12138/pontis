@@ -35,6 +35,7 @@ import { countScopeBookmarks } from '../../core/browser/scopeCount';
 import {
   offerUpdate,
   platformForBuild,
+  variantForBuild,
   type UpdateOffer,
 } from '../../core/update/release';
 import type { ReconciliationIssueWire } from '../../core/protocol/types';
@@ -66,6 +67,15 @@ import { chromeApi } from '../../runtime/chromeApi';
 // activated by the worker, so ask it for a round instead of waiting on an alarm.
 const runtime = createRuntime(() => wakeWorker(chromeApi()));
 
+/**
+ * Which of the two packages this copy is.
+ *
+ * The start page belongs to the takeover build only: the standard build ships no
+ * start-page entrypoint at all, so offering its settings here would configure a
+ * page that does not exist. The define exists only in a production build.
+ */
+const newtabBuild = typeof __PONTIS_NEWTAB_BUILD__ !== 'undefined' && __PONTIS_NEWTAB_BUILD__;
+
 type Tab = 'account' | 'sync' | 'start-page' | 'log';
 
 /**
@@ -75,7 +85,8 @@ type Tab = 'account' | 'sync' | 'start-page' | 'log';
  */
 function initialTab(): Tab {
   const h = window.location.hash.slice(1);
-  if (h === 'sync' || h === 'log' || h === 'start-page') return h;
+  if (h === 'sync' || h === 'log') return h;
+  if (h === 'start-page' && newtabBuild) return h;
   return 'account';
 }
 
@@ -190,6 +201,7 @@ export function App() {
         const release = await client.deviceExtensions();
         const offer = offerUpdate(release, {
           platform: platformForBuild(),
+          variant: variantForBuild(),
           version: chrome.runtime.getManifest().version,
         });
         if (!cancelled) setUpdate(offer);
@@ -408,7 +420,7 @@ export function App() {
             >
               同步管理
             </Tabs.Tab>
-            <Tabs.Tab value="start-page">起始页</Tabs.Tab>
+            {newtabBuild && <Tabs.Tab value="start-page">起始页</Tabs.Tab>}
             <Tabs.Tab value="log">本地日志</Tabs.Tab>
           </Tabs.List>
 
@@ -773,14 +785,16 @@ export function App() {
             </Box>
           </Tabs.Panel>
 
-          <Tabs.Panel value="start-page">
-            <Section
-              title="起始页来源"
-              hint="起始页是这套书签的快速访问视图，不是另一套收藏：它读取工作台中已有的内容，不创建第二棵树，也不改变同步范围。"
-            >
-              <StartPageSettings onChanged={refresh} />
-            </Section>
-          </Tabs.Panel>
+          {newtabBuild && (
+            <Tabs.Panel value="start-page">
+              <Section
+                title="起始页来源"
+                hint="起始页是这套书签的快速访问视图，不是另一套收藏：它读取工作台中已有的内容，不创建第二棵树，也不改变同步范围。"
+              >
+                <StartPageSettings onChanged={refresh} />
+              </Section>
+            </Tabs.Panel>
+          )}
 
           <Tabs.Panel value="log">
             <Section
