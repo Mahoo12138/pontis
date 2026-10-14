@@ -221,6 +221,7 @@ export default function SpaceExplorerPage() {
         onExport={() => setExportOpen(true)}
         onCheckLinks={() => navigate(`/spaces/${spaceId}/organizer`)}
         onBackups={() => navigate(`/spaces/${spaceId}/backups`)}
+        onAnalytics={() => navigate(`/spaces/${spaceId}/analytics`)}
       />
       {/* The list scrolls on its own: the details panel stays where it is. */}
       <div className={contentRegion} style={{ display: 'flex', overflow: 'hidden' }}>

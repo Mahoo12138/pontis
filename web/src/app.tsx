@@ -8,6 +8,7 @@ import ResetPasswordPage from './routes/reset';
 import SpaceExplorerPage from './routes/space-explorer';
 import SpaceActivityPage from './routes/space-activity';
 import SpaceOrganizerPage from './routes/space-organizer';
+import SpaceAnalyticsPage from './routes/space-analytics';
 import SpaceBackupsPage from './routes/space-backups';
 import SearchPage from './routes/search';
 import TasksPage from './routes/tasks';
@@ -74,6 +75,7 @@ export default function App() {
                   <Route path="/spaces/:spaceId" element={<SpaceExplorerPage />} />
                   <Route path="/spaces/:spaceId/activity" element={<SpaceActivityPage />} />
                   <Route path="/spaces/:spaceId/organizer" element={<SpaceOrganizerPage />} />
+                  <Route path="/spaces/:spaceId/analytics" element={<SpaceAnalyticsPage />} />
                   <Route path="/spaces/:spaceId/backups" element={<SpaceBackupsPage />} />
                   <Route path="/search" element={<SearchPage />} />
                   <Route path="/tasks" element={<TasksPage />} />
