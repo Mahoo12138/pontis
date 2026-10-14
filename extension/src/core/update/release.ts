@@ -126,11 +126,19 @@ function components(version: string): number[] {
     .map((part) => (/^\d+$/.test(part) ? Number(part) : 0));
 }
 
-/** The artifact family this build belongs to. WXT substitutes
- * `import.meta.env.BROWSER` at build time, so a Firefox build asks about the
- * Firefox package and never mistakes the Chromium one for its own. */
+/**
+ * The artifact family this build belongs to.
+ *
+ * Hardcoded, deliberately: V1 distributes Chromium only, and a Firefox package
+ * would have to be an AMO-signed XPI before it could be installed at all
+ * (distribution doc §11). Reading WXT's `import.meta.env.BROWSER` instead looked
+ * forward-compatible but cost something concrete — that type only exists once
+ * `wxt prepare` has generated `.wxt/types`, so `pnpm typecheck` in a fresh
+ * checkout failed on it. When Firefox ships, this is the line to revisit, with a
+ * real target to build for.
+ */
 export function platformForBuild(): string {
-  return import.meta.env.BROWSER === 'firefox' ? 'firefox' : 'chromium';
+  return 'chromium';
 }
 
 /** Which of the two Chromium packages this copy was built from. The new tab is
