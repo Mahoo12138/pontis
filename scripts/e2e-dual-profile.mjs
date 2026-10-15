@@ -559,6 +559,7 @@ async function clickButton(session, label, what) {
 }
 
 async function pickOption(session, field, option, what) {
+  await pressEscape(session);
   await clickAt(session, await session.evaluate(`${HELPERS}return selectRect(${JSON.stringify(field)});`),
     `${what}: select ${field}`);
   const deadline = Date.now() + 15_000;
@@ -570,18 +571,45 @@ async function pickOption(session, field, option, what) {
   throw new Error(`${what}: select ${field} never offered an option matching ${option}`);
 }
 
+/**
+ * Dismiss whatever popup is open before clicking something else.
+ *
+ * Both the space Select and the folder field are toggles: a click while one is
+ * open closes it instead of opening the next thing. A click that lands on a
+ * still-open Select dropdown therefore leaves the folder layer shut, and the
+ * caller then waits 15s for a row that was never rendered — which is exactly how
+ * profile A failed in CI while profile B, a few milliseconds behind, walked
+ * straight through.
+ */
+async function pressEscape(session) {
+  for (const type of ['keyDown', 'keyUp']) {
+    await session.send('Input.dispatchKeyEvent', {
+      type, key: 'Escape', code: 'Escape',
+      windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27,
+    });
+  }
+}
+
 /** Open the folder layer and choose one of its rows. */
 async function pickFolder(session, field, group, title, what) {
-  await clickAt(session, await session.evaluate(`${HELPERS}return selectRect(${JSON.stringify(field)});`),
-    `${what}: folder field ${field}`);
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 45_000;
+  let text = '';
   while (Date.now() < deadline) {
-    const box = await session.evaluate(
-      `${HELPERS}return folderRect(${JSON.stringify(group)}, ${JSON.stringify(title)});`);
-    if (box) return clickAt(session, box, `${what}: folder ${title}`);
-    await new Promise((r) => setTimeout(r, 150));
+    await pressEscape(session);
+    await clickAt(session, await session.evaluate(`${HELPERS}return selectRect(${JSON.stringify(field)});`),
+      `${what}: folder field ${field}`);
+    for (let i = 0; i < 25; i++) {
+      const box = await session.evaluate(
+        `${HELPERS}return folderRect(${JSON.stringify(group)}, ${JSON.stringify(title)});`);
+      if (box) return clickAt(session, box, `${what}: folder ${title}`);
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    // Carry what the screen actually said: "no such row" is worthless without
+    // knowing whether the layer opened at all.
+    text = String(await session.evaluate(`${HELPERS}return bodyText()`).catch(() => 'unreadable'));
   }
-  throw new Error(`${what}: the folder layer never offered a row named ${title}`);
+  throw new Error(`${what}: the folder layer never offered a row named ${title}`
+    + ` (page said: ${text.split('\n').filter(Boolean).slice(0, 12).join(' / ')})`);
 }
 
 async function waitStep(session, expr, want, what, timeoutMs = 90_000, failOn = '') {
