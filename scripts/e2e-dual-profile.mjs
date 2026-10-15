@@ -41,6 +41,20 @@ const CDP_TIMEOUT_MS = 30_000;
 
 let failed = 0;
 const log = (...a) => console.log(...a);
+
+/**
+ * Surface a failure where someone who is not logged in can still read it.
+ *
+ * Workflow logs need a GitHub session; annotations do not. A red run whose
+ * cause is only visible behind a login turns every diagnosis into a round trip
+ * through whoever does have one, so the script says the reason in both places.
+ * `::error::` wants one line, hence the escape.
+ */
+function annotate(message) {
+  const oneLine = String(message).replace(/\r/g, '').replace(/\n/g, '%0A').slice(0, 900);
+  console.log(`::error::${oneLine}`);
+}
+
 function check(ok, label, detail) {
   if (ok) {
     log(`  ok   ${label}`);
@@ -48,6 +62,7 @@ function check(ok, label, detail) {
   }
   failed++;
   log(`  FAIL ${label}${detail ? ` — ${detail}` : ''}`);
+  annotate(`e2e check failed: ${label}${detail ? ` — ${detail}` : ''}`);
   return false;
 }
 // Every process this run started. `die()` exits the process, which skips the
@@ -78,6 +93,7 @@ function shutdownAll() {
 
 const die = (msg) => {
   console.error(`e2e: ${msg}`);
+  annotate(`e2e aborted: ${msg}`);
   shutdownAll();
   process.exit(2);
 };
@@ -999,6 +1015,7 @@ main().catch((err) => {
   // would otherwise leave two real Chromium windows holding 9401/9402 — and the
   // next run would attach to those tabs and fail somewhere far from the cause.
   console.error(`e2e: ${err.stack || err.message}`);
+  annotate(`e2e threw: ${err.message}`);
   shutdownAll();
   process.exit(1);
 });
