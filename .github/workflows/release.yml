@@ -173,8 +173,20 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # ghcr 的命名空间必须小写，而仓库拥有者的登录名不一定。
-      - name: 镜像地址
-        run: echo "IMAGE=ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+      # 预发布不占 :latest：一个 alpha 把 latest 带走，等于让"跟着 latest 升级"的人
+      # 自动跳到测试版；它也不该在 Release 列表里被当成正式版对待。
+      - name: 镜像地址与标签
+        run: |
+          image="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            echo "IMAGE_TAGS=$image:$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+            echo "RELEASE_FLAGS=--prerelease" >> "$GITHUB_ENV"
+            echo "${GITHUB_REF_NAME} 是预发布：只推该版本标签，:latest 不动" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "IMAGE_TAGS=$image:$GITHUB_REF_NAME,$image:latest" >> "$GITHUB_ENV"
+            echo "RELEASE_FLAGS=" >> "$GITHUB_ENV"
+          fi
 
       - name: 推送多架构镜像
         uses: docker/build-push-action@v6
@@ -182,9 +194,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ github.ref_name }}
-            ${{ env.IMAGE }}:latest
+          tags: ${{ env.IMAGE_TAGS }}
           build-args: |
             RELEASE=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
@@ -195,9 +205,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # shellcheck disable=SC2086
           gh release create "${GITHUB_REF_NAME}" \
             --title "Pontis ${GITHUB_REF_NAME}" \
             --notes-file "docs/releases/${GITHUB_REF_NAME}.md" \
+            ${RELEASE_FLAGS} \
             dist/pontis-server-linux-amd64 \
             dist/pontis-server-linux-arm64 \
             dist/pontis-server-darwin-arm64 \

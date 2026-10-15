@@ -42,12 +42,17 @@ if (!tag) {
   process.exit(1);
 }
 
-const match = /^v(\d+\.\d+\.\d+)$/.exec(tag);
+// A prerelease tag (`v0.1.0-alpha.1`) releases the same 0.1.0 tree, so only the
+// base version is compared against the declarations. The suffix cannot live in
+// them anyway: Chrome rejects anything but dotted numbers in manifest.version,
+// which is why "alpha" is a fact about the tag rather than about the code.
+const match = /^v(\d+\.\d+\.\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(tag);
 if (!match) {
-  console.error(`assert-release-version: "${tag}" is not a v<major>.<minor>.<patch> tag`);
+  console.error(`assert-release-version: "${tag}" is not v<major>.<minor>.<patch>[-<prerelease>]`);
   process.exit(1);
 }
 const wanted = match[1];
+const prerelease = match[2] ? ` (prerelease: ${match[2]})` : '';
 
 const problems = [];
 for (const source of sources) {
@@ -68,7 +73,7 @@ if (problems.length > 0) {
   process.exit(1);
 }
 
-console.log(`${tag}: all ${sources.length} version sources agree`);
+console.log(`${tag}: all ${sources.length} version sources agree on ${wanted}${prerelease}`);
 
 function fromGit() {
   try {
