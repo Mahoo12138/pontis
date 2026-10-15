@@ -17,10 +17,6 @@ jobs:
   release:
     name: Build and publish ${{ github.ref_name }}
     runs-on: ubuntu-latest
-    env:
-      # 能交叉编译全靠 SQLite 驱动是纯 Go（库以 WASM 内置）：关掉 CGO，四个平台
-      # 就都只是 GOOS/GOARCH 的差别，不需要为每个目标准备一套 C 工具链。
-      CGO_ENABLED: '0'
     steps:
       - uses: actions/checkout@v4
 
@@ -72,6 +68,11 @@ jobs:
           node scripts/stage-distribution.mjs
 
       - name: 交叉编译服务端二进制
+        env:
+          # 能交叉编译全靠 SQLite 驱动是纯 Go（库以 WASM 内置）：关掉 CGO，四个平台
+          # 就都只是 GOOS/GOARCH 的差别，不需要为每个目标准备一套 C 工具链。
+          # 只在这一步生效——质量门槛那步的 `go test -race` 反过来要求 CGO 打开。
+          CGO_ENABLED: '0'
         run: |
           mkdir -p dist
           for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
