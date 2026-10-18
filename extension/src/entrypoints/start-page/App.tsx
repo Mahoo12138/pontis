@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Box, Button, Group, Loader, Stack, Text, Title, useComputedColorScheme } from '@mantine/core';
 import { chromeApi, type StorageChangeHandler } from '../../runtime/chromeApi';
 import { createRuntime, errText } from '../../ui/runtime';
+import { Emptyish } from '../../ui/Emptyish';
 import {
   REVALIDATE_AFTER_MS,
   loadStartPage,
@@ -381,7 +382,7 @@ function Shell({
  * a dependency to the extension. */
 function FolderGlyph() {
   return (
-    <svg className="pontis-spEntryIcon" viewBox="0 0 24 24" width="20" height="20" aria-hidden focusable="false">
+    <svg className="pontis-spEntryIcon" viewBox="0 0 24 24" aria-hidden focusable="false">
       <path
         d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2c.5 0 .96.25 1.24.66L11 7h8.5A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-11Z"
         fill="none"
@@ -394,7 +395,7 @@ function FolderGlyph() {
 
 function GlobeGlyph() {
   return (
-    <svg className="pontis-spEntryIcon" viewBox="0 0 24 24" width="20" height="20" aria-hidden focusable="false">
+    <svg className="pontis-spEntryIcon" viewBox="0 0 24 24" aria-hidden focusable="false">
       <circle cx="12" cy="12" r="8.25" fill="none" stroke="currentColor" strokeWidth="1.5" />
       <path
         d="M3.75 12h16.5M12 3.75c2.4 2.3 2.4 14.2 0 16.5M12 3.75c-2.4 2.3-2.4 14.2 0 16.5"
@@ -469,29 +470,6 @@ function Entry({
         </span>
       </span>
     </div>
-  );
-}
-
-function Emptyish({
-  icon,
-  title,
-  body,
-  action,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  body: string;
-  action?: React.ReactNode;
-}) {
-  return (
-    <Stack align="center" gap="sm" mt="xl">
-      {icon}
-      <Title order={6}>{title}</Title>
-      <Text size="sm" c="dimmed" ta="center" maw={420}>
-        {body}
-      </Text>
-      {action}
-    </Stack>
   );
 }
 

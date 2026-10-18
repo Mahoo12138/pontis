@@ -406,6 +406,36 @@ html[data-mantine-color-scheme='dark'] .pontis-spHead {
   white-space: nowrap;
 }
 
+/* One measure for the start-page form. The controls here choose between short
+   values (a space, a folder, a density), and a 1000px-wide Select for a six-character
+   label reads as an empty box with text in the corner — docs/23 §表单宽度 caps a
+   form at 400–640px and forbids oversized inputs. */
+.pontis-spForm {
+  max-width: 560px;
+}
+
+/* Feedback belongs to the press, not the release (Designing Fluid Interfaces):
+   a control that only reacts on click feels like it is deciding whether to
+   answer. 100ms out, per docs/23 §33. Scoped to Mantine's own button class so
+   it cannot reach the start page's tiles or any other element. */
+.mantine-Button-root {
+  transition: transform 100ms ease-out, background-color 100ms ease-out, color 100ms ease-out;
+}
+
+.mantine-Button-root:active {
+  transform: scale(0.98);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mantine-Button-root {
+    transition: background-color 100ms ease-out, color 100ms ease-out;
+  }
+
+  .mantine-Button-root:active {
+    transform: none;
+  }
+}
+
 /* The settings page's preview of the chosen background. */
 .pontis-spBgThumb {
   display: block;
@@ -431,10 +461,6 @@ html[data-mantine-color-scheme='dark'] .pontis-spHead {
 /* Every row on this tab is label, hint, control — the order Mantine's own
    fields use — including the two whose control is a slider and so has no
    InputWrapper of its own. */
-.pontis-spField {
-  max-width: 360px;
-}
-
 /* A slider's value belongs in its label, right-aligned on the same baseline:
    the thumb's position is not a readout, and this is where someone decides how
    firm the ground under their bookmarks is. Tabular figures so the number does
@@ -473,6 +499,12 @@ html[data-mantine-color-scheme='dark'] .pontis-spHead {
   flex-direction: column;
   gap: 12px;
   max-width: 346px;
+}
+
+/* The same hanging indent, wide enough for the two tint fields that belong to
+   one decision. They sit side by side, so the narrow column would clip them. */
+.pontis-spNestedWide {
+  max-width: 560px;
 }
 
 .pontis-spBody {

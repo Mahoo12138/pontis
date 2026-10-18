@@ -9,12 +9,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Badge,
   Box,
   Button,
   ColorInput,
-  Divider,
   Group,
   Input,
+  Modal,
   Select,
   Slider,
   Stack,
@@ -22,9 +23,10 @@ import {
   TextInput,
 } from '@mantine/core';
 import { createRuntime, errText } from './runtime';
+import { SectionHeading } from './Section';
 import { chromeApi } from '../runtime/chromeApi';
 import { FolderPickerField } from './FolderPickerField';
-import { buildFolderTree, type FolderTreeNode } from './folderTree';
+import { buildFolderTree, pathTitlesOf, type FolderTreeNode } from './folderTree';
 import { clearStartPage, patchConfig, saveSource } from '../core/start-page/provider';
 import {
   BACKGROUND_ERROR_TEXT,
@@ -61,6 +63,11 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
 
   const [appearance, setAppearance] = useState<StartPageAppearanceRecord>(() => defaultAppearance(''));
   const [titleDraft, setTitleDraft] = useState('');
+  /** The tuning set is opened on demand; see 外观 below. */
+  const [lookOpen, setLookOpen] = useState(false);
+  /** So is the source picker: one card on the page says what is shown, the
+   *  dialog is where the two choices are made. */
+  const [sourceOpen, setSourceOpen] = useState(false);
   const [opacityDraft, setOpacityDraft] = useState(0);
   const [surfaceDraft, setSurfaceDraft] = useState(0);
   const [tintLightDraft, setTintLightDraft] = useState('');
@@ -165,6 +172,7 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
       await saveSource(deps, { spaceId, folderId: picked }, read.value);
       await reload();
       onChanged?.();
+      setSourceOpen(false);
     } catch (err) {
       setError(errText(err));
     } finally {
@@ -305,9 +313,39 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
     if (hex && groundLegibility(hex, scheme, cover) < LEGIBILITY_FLOOR) illegible.push(label);
   }
 
+  /** One line naming what the appearance currently is, so the page can keep the
+   *  tuning out of sight without hiding its result. */
+  const appearanceSummary = [
+    appearance.titleText.trim() ? `标题「${appearance.titleText.trim()}」` : '标题按时间问候',
+    appearance.background ? '已设壁纸' : '无壁纸',
+    appearance.background
+      ? `透 ${Math.round(appearance.backgroundOpacity * 100)}% / 底 ${Math.round(appearance.surfaceOpacity * 100)}%`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  /** Which of the two packages this copy is. The define exists only in a
+   *  production build. */
+  const newtabTakesOver = typeof __PONTIS_NEWTAB_BUILD__ !== 'undefined' && !!__PONTIS_NEWTAB_BUILD__;
+
+  /** What the start page is showing, in words: a space id and a folder id next
+   *  to the names the picker just offered read as a database dump and tell the
+   *  reader nothing about where their bookmarks come from. */
+  const sourceSpace = config ? (synced.find((s) => s.value === config.spaceId)?.label ?? config.spaceId) : '';
+  const sourceFolder =
+    config && config.spaceId === spaceId ? pathTitlesOf(tree, config.folderId)?.join(' / ') ?? '' : '';
+  /** The card says what is shown, and when nothing is, which of the two reasons
+   *  applies — a device with no bound space has nothing to choose yet. */
+  const sourceLine = config
+    ? [sourceSpace, sourceFolder].filter(Boolean).join(' / ')
+    : synced.length === 0
+      ? '这台设备还没有已同步的空间，先在「同步管理」里绑定一个。'
+      : '还没有选择要显示的文件夹。';
+
   if (!paired) {
     return (
-      <Alert color="blue" variant="light" title="还没有配对">
+      <Alert color="accentBlue" variant="light" title="还没有配对">
         起始页显示的是这台设备已同步空间里的书签。请先在「账号管理」完成配对。
       </Alert>
     );
@@ -315,79 +353,139 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
 
   return (
     <Stack gap="md">
-      <Box className="pontis-block">
-        <Group justify="space-between" wrap="nowrap">
-          <Box>
-            <Text fw={600}>当前来源</Text>
-            <Text size="sm" c="dimmed">
-              {config ? `${config.spaceId} / ${config.folderId}` : '还没有选择要显示的文件夹。'}
-            </Text>
-            {config ? (
-              <Text size="xs" c="dimmed" mt={2}>
-                更新于 {new Date(config.updatedAt).toLocaleString('zh-CN')}
+      <Box className="pontis-listBox">
+        <Box className="pontis-block">
+          <Group justify="space-between" wrap="nowrap">
+            <Box>
+              <Text fw={600}>当前来源</Text>
+              <Text size="sm" c="dimmed">
+                {sourceLine}
               </Text>
-            ) : null}
-          </Box>
-          <Button variant="light" component="a" href={chromeApi().runtime.getURL('start-page.html')} target="_blank">
-            预览起始页
-          </Button>
-        </Group>
+              {config ? (
+                <Text size="xs" c="dimmed" mt="xs">
+                  更新于 {new Date(config.updatedAt).toLocaleString('zh-CN')}
+                </Text>
+              ) : null}
+            </Box>
+            <Group gap="xs" wrap="nowrap">
+              {/* Stopping the display lives here, not under the picker: it acts on
+                  the source that is set, which this block describes. Beside
+                  设为来源 it read as the second half of one decision. */}
+              {config ? (
+                <Button size="xs" variant="subtle" color="coolGray" loading={busy === 'release'} onClick={() => void release()}>
+                  停止显示
+                </Button>
+              ) : null}
+              <Button
+                variant={config ? 'default' : 'filled'}
+                onClick={() => {
+                  // Open clean: an error left over from the tree behind is not
+                  // something this dialog did.
+                  setError(null);
+                  setSourceOpen(true);
+                }}
+              >
+                {config ? '更改来源' : '选择来源'}
+              </Button>
+              <Button variant="light" component="a" href={chromeApi().runtime.getURL('start-page.html')} target="_blank">
+                预览起始页
+              </Button>
+            </Group>
+          </Group>
+        </Box>
       </Box>
 
       {error ? (
-        <Alert color="red" variant="light" title="操作未完成">
+        <Alert color="errorRed" variant="light" title="操作未完成">
           {error}
         </Alert>
       ) : null}
 
-      <Divider label="选择来源" labelPosition="left" />
+      {/* The two choices that decide what the page shows, opened from the card
+          that reports the result. Flat on the page they kept a reader who had
+          already chosen sitting in the middle of the same decision again, and
+          pushed everything below it out of sight. */}
+      <Modal opened={sourceOpen} onClose={() => setSourceOpen(false)} title="选择来源" size="lg" radius="lg">
+        <Stack gap="md">
+          {error ? (
+            <Alert color="errorRed" variant="light" title="操作未完成">
+              {error}
+            </Alert>
+          ) : null}
+          <Text size="sm" c="dimmed">
+            起始页显示哪个空间的哪个文件夹。这只是这台浏览器的显示决定，不影响同步。
+          </Text>
+          {synced.length === 0 ? (
+            <Alert color="warningAmber" variant="light" title="这台设备还没有已同步的空间">
+              起始页只显示这台浏览器已经同步的空间里的目录。请先在「同步管理」绑定一个空间并完成初始化。
+            </Alert>
+          ) : (
+            <>
+              <Select
+                label="空间"
+                description="只显示这台设备已建立同步绑定的空间。"
+                data={synced.map((s) => ({ value: s.value, label: s.label }))}
+                value={spaceId}
+                onChange={(v) => setSpaceId(v ?? '')}
+              />
 
-      {synced.length === 0 ? (
-        <Alert color="amber" variant="light" title="这台设备还没有已同步的空间">
-          起始页只显示这台浏览器已经同步的空间里的目录。请先在「同步管理」绑定一个空间并完成初始化。
-        </Alert>
-      ) : (
-        <Stack gap="sm">
-          <Select
-            label="空间"
-            description="只显示这台设备已建立同步绑定的空间。"
-            data={synced.map((s) => ({ value: s.value, label: s.label }))}
-            value={spaceId}
-            onChange={(v) => setSpaceId(v ?? '')}
-          />
-
-          <FolderPickerField
-            tree={tree}
-            value={picked}
-            onChange={setPicked}
-            label="文件夹"
-            description="起始页只显示这个文件夹里的书签，子文件夹算在里面。"
-            loading={loadingTree}
-            revealId={config?.folderId}
-            groupName="start-page-folder"
-          />
-
-          <Group justify="space-between">
-            {config ? (
-              <Button variant="subtle" color="red" size="xs" loading={busy === 'release'} onClick={() => void release()}>
-                解除来源
-              </Button>
-            ) : (
-              <span />
-            )}
-            <Button disabled={!picked} loading={busy === 'save'} onClick={() => void save()}>
-              设为来源
-            </Button>
-          </Group>
+              <FolderPickerField
+                tree={tree}
+                value={picked}
+                onChange={setPicked}
+                label="文件夹"
+                description="起始页只显示这个文件夹里的书签，子文件夹算在里面。"
+                loading={loadingTree}
+                revealId={config?.folderId}
+                groupName="start-page-folder"
+              />
+            </>
+          )}
         </Stack>
-      )}
+        <Group justify="flex-end" mt="md">
+          <Button variant="default" onClick={() => setSourceOpen(false)}>
+            取消
+          </Button>
+          <Button disabled={synced.length === 0 || !picked} loading={busy === 'save'} onClick={() => void save()}>
+            设为来源
+          </Button>
+        </Group>
+      </Modal>
 
-      <Divider label="外观" labelPosition="left" />
+      {/* Nothing below 当前来源 means anything until a source is set, so none of
+          it renders: the page ends at the one action that is still available.
+          The dialogs stay mounted regardless — closed they hold no layout, and
+          the row that opens them is itself conditional. */}
+      {config ? <SectionHeading title="外观" hint="起始页的标题、壁纸和底色。全部只作用于这台浏览器。" /> : null}
 
       {config ? (
+        <Group justify="space-between" wrap="nowrap" className="pontis-spForm">
+          <Stack gap="xs">
+            <Text size="sm">{appearanceSummary}</Text>
+            {illegible.length > 0 ? (
+              <Text size="xs" c="warningAmber">
+                当前底色上次要文字的可读性低于底线，进去调一下。
+              </Text>
+            ) : null}
+          </Stack>
+          <Button variant="default" size="compact-sm" onClick={() => setLookOpen(true)}>
+            自定义外观
+          </Button>
+        </Group>
+      ) : null}
+
+      {/* The tuning set is opened on demand: six controls that are decided once
+          were holding the page at the same weight as the one decision that
+          matters here — which folder to display. */}
+      <Modal
+        opened={lookOpen}
+        onClose={() => setLookOpen(false)}
+        title="自定义外观"
+        size="lg"
+        radius="lg"
+      >
         <Stack gap="md">
           <TextInput
-            className="pontis-spField"
             label="标题"
             maxLength={60}
             placeholder={greetingFor(new Date())}
@@ -432,7 +530,7 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
                   />
                 </Button>
                 {appearance.background ? (
-                  <Button size="xs" variant="subtle" color="gray" onClick={() => void removeBackground()}>
+                  <Button size="xs" variant="subtle" color="coolGray" onClick={() => void removeBackground()}>
                     移除
                   </Button>
                 ) : null}
@@ -440,7 +538,7 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
             </Group>
 
             {appearance.background ? (
-              <Box className="pontis-spNested">
+              <Box className="pontis-spNested pontis-spNestedWide">
                 <SliderField
                   label="背景不透明度"
                   hint="壁纸透出来的量：越低越淡，文字越容易读。"
@@ -459,83 +557,77 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
                   onChange={setSurfaceDraft}
                   onChangeEnd={saveSurface}
                 />
-              </Box>
-            ) : null}
-          </Input.Wrapper>
-
-          {appearance.background ? (
-            <Box>
-              {/* The two colours the picture was read for, side by side because
-                  they are one decision made twice — the same hue at the two ends
-                  of the lightness scale — and a change to one is invisible in
-                  the other. */}
-              <Input.Wrapper
-                label="背景底色"
-                description="从图片的主色调算出，浅深各一档；可直接改，清空回到主题底色，移除图片后一并清除。"
-              >
-                <Group gap="sm" align="flex-end">
-                  <ColorInput
-                    label="浅色配色"
-                    maw={168}
-                    format="hex"
-                    withAsterisk={false}
-                    swatches={GROUND_SWATCHES}
-                    swatchesPerRow={8}
-                    placeholder="主题底色"
-                    value={tintLightDraft}
-                    error={lightInvalid ? '请用 #rrggbb' : undefined}
-                    onChange={setTintLightDraft}
-                    onBlur={() => void saveTints()}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        void saveTints();
-                      }
-                    }}
-                  />
-                  <ColorInput
-                    label="深色配色"
-                    maw={168}
-                    format="hex"
-                    withAsterisk={false}
-                    swatches={GROUND_SWATCHES}
-                    swatchesPerRow={8}
-                    placeholder="主题底色"
-                    value={tintDarkDraft}
-                    error={darkInvalid ? '请用 #rrggbb' : undefined}
-                    onChange={setTintDarkDraft}
-                    onBlur={() => void saveTints()}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        void saveTints();
-                      }
-                    }}
-                  />
-                  <Button size="xs" variant="light" loading={busy === 'tint'} onClick={() => void reextractTints()}>
-                    按图片重新提取
-                  </Button>
-                </Group>
-              </Input.Wrapper>
-              {illegible.length > 0 ? (
-                <Text size="xs" c="red" mt={6}>
+                {/* The two colours the picture was read for, side by side because
+                    they are one decision made twice — the same hue at the two ends
+                    of the lightness scale — and a change to one is invisible in
+                    the other. */}
+                <Input.Wrapper
+                  label="背景底色"
+                  description="从图片的主色调算出，浅深各一档；可直接改，清空回到主题底色，移除图片后一并清除。"
+                >
+                  <Group gap="sm" align="flex-end">
+                    <ColorInput
+                      label="浅色配色"
+                      maw={168}
+                      format="hex"
+                      withAsterisk={false}
+                      swatches={GROUND_SWATCHES}
+                      swatchesPerRow={8}
+                      placeholder="主题底色"
+                      value={tintLightDraft}
+                      error={lightInvalid ? '请用 #rrggbb' : undefined}
+                      onChange={setTintLightDraft}
+                      onBlur={() => void saveTints()}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void saveTints();
+                        }
+                      }}
+                    />
+                    <ColorInput
+                      label="深色配色"
+                      maw={168}
+                      format="hex"
+                      withAsterisk={false}
+                      swatches={GROUND_SWATCHES}
+                      swatchesPerRow={8}
+                      placeholder="主题底色"
+                      value={tintDarkDraft}
+                      error={darkInvalid ? '请用 #rrggbb' : undefined}
+                      onChange={setTintDarkDraft}
+                      onBlur={() => void saveTints()}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void saveTints();
+                        }
+                      }}
+                    />
+                    <Button size="xs" variant="light" loading={busy === 'tint'} onClick={() => void reextractTints()}>
+                      按图片重新提取
+                    </Button>
+                  </Group>
+                </Input.Wrapper>
+                {illegible.length > 0 ? (
+                  <Text size="xs" c="errorRed" mt="sm">
                   在这个底色与底面不透明度下，{illegible.join('、')}上的次要文字会低于 {LEGIBILITY_FLOOR}
                   :1 的可读底线。把底色调回接近白或接近黑，或把底面调浓一些。
                 </Text>
               ) : null}
-            </Box>
-          ) : null}
+              </Box>
+            ) : null}
+          </Input.Wrapper>
         </Stack>
-      ) : (
-        <Text size="sm" c="dimmed">
-          选好来源后这里可以设置标题和背景。
-        </Text>
-      )}
+        <Group justify="flex-end" mt="md">
+          <Button onClick={() => setLookOpen(false)}>完成</Button>
+        </Group>
+      </Modal>
 
-      <Divider label="显示" labelPosition="left" />
+      {config ? <SectionHeading title="显示" hint="点开书签和搜索结果时怎么打开，以及列表的松紧。" /> : null}
 
       {config ? (
-        <Group grow>
+        <Group grow className="pontis-spForm">
           <Select
             label="打开方式"
             description="也用于网页搜索结果。"
@@ -558,17 +650,33 @@ export function StartPageSettings({ onChanged }: { onChanged?: () => void }) {
         </Group>
       ) : null}
 
-      <Divider label="新标签页" labelPosition="left" />
+      <SectionHeading title="新标签页" hint="这个包装版本负不负责接管新标签页。它是安装的事实，不是这里能拨的开关。" />
 
-      {/* Which artifact is installed is not visible from the icon and cannot be
-          changed from inside the extension, so the page says it plainly rather
-          than offering a toggle that would lie (§8.3). It is last because it is
-          a fact about the packaging, not something set here. */}
-      <Text size="sm" c="dimmed">
-        {typeof __PONTIS_NEWTAB_BUILD__ !== 'undefined' && __PONTIS_NEWTAB_BUILD__
-          ? '当前安装的是接管版本：新标签页会显示 Pontis 起始页。要恢复浏览器原来的新标签页，停用或卸载本扩展即可；扩展内没有这个开关。若新标签页仍是浏览器原来的样子，多半是浏览器在装入或更新时把它停用了——到扩展管理页点「启用」即可，每次更新后可能需要再点一次。'
-          : '当前安装的是标准同步版本，不会接管新标签页。想让新标签页显示 Pontis 起始页，请另行安装「Pontis (起始页)」构建；停用本扩展不会影响浏览器原有的新标签页。'}
-      </Text>
+      {/* State first, then what to do about it. The same facts used to arrive as
+          one 130-character paragraph, so the reader had to parse the middle of a
+          sentence to learn which case applied to them. */}
+      {newtabTakesOver ? (
+        <Stack gap="xs" className="pontis-spForm">
+          <Group gap="xs" wrap="nowrap">
+            <Badge color="healthyGreen" variant="light">
+              已接管
+            </Badge>
+            <Text size="sm">新标签页显示 Pontis 起始页 · 停用或卸载本扩展即可换回</Text>
+          </Group>
+          <Text size="xs" c="dimmed">
+            若新标签页仍是原来的样子：多半是浏览器在更新后停用了扩展，到扩展管理页点「启用」。
+          </Text>
+        </Stack>
+      ) : (
+        <Stack gap="xs" className="pontis-spForm">
+          <Group gap="xs" wrap="nowrap">
+            <Badge color="coolGray" variant="light">
+              未接管
+            </Badge>
+            <Text size="sm">新标签页仍是浏览器自己的样子 · 想接管请安装「Pontis (起始页)」构建</Text>
+          </Group>
+        </Stack>
+      )}
     </Stack>
   );
 }
