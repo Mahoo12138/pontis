@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"time"
 
 	"pontis/internal/canonical"
 	"pontis/internal/space"
@@ -72,6 +73,81 @@ func (s *SpaceStore) CountByOwner(ctx context.Context, owner canonical.UserID) (
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sync_spaces WHERE owner_user_id = ?`, string(owner)).Scan(&n)
 	return n, err
+}
+
+// RenameSpace sets the display name. The owner is part of the predicate so a
+// guessed id cannot rename someone else's space.
+func (s *SpaceStore) RenameSpace(
+	ctx context.Context,
+	owner canonical.UserID,
+	id canonical.SpaceID,
+	name string,
+	at time.Time,
+) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE sync_spaces SET name = ?, updated_at = ? WHERE id = ? AND owner_user_id = ?`,
+		name, formatTime(at), string(id), string(owner))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// spaceBlockers count the rows that keep a space from being deleted. Every one
+// of these tables references sync_spaces(id) with no ON DELETE clause, so the
+// database would refuse the delete anyway; counting them first turns that
+// refusal into a reason the client can show.
+var spaceBlockers = []string{
+	`SELECT COUNT(*) FROM nodes WHERE space_id = ?`,
+	`SELECT COUNT(*) FROM device_space_bindings WHERE space_id = ?`,
+	`SELECT COUNT(*) FROM space_backups WHERE space_id = ?`,
+	`SELECT COUNT(*) FROM publications WHERE space_id = ?`,
+	`SELECT COUNT(*) FROM schedules WHERE space_id = ?`,
+}
+
+// DeleteSpace removes an empty space and its root slots, clearing it from the
+// owner's default first. It reports false when the id is not the owner's, and
+// returns ErrSpaceNotEmpty without touching anything when content or a binding
+// still refers to it.
+func (s *SpaceStore) DeleteSpace(ctx context.Context, owner canonical.UserID, id canonical.SpaceID) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	var mine int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sync_spaces WHERE id = ? AND owner_user_id = ?`,
+		string(id), string(owner)).Scan(&mine); err != nil {
+		return false, err
+	}
+	if mine == 0 {
+		return false, nil
+	}
+
+	for _, query := range spaceBlockers {
+		var n int64
+		if err := tx.QueryRowContext(ctx, query, string(id)).Scan(&n); err != nil {
+			return false, err
+		}
+		if n > 0 {
+			return false, space.ErrSpaceNotEmpty
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE users SET default_space_id = NULL WHERE default_space_id = ?`, string(id)); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM root_slots WHERE space_id = ?`, string(id)); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sync_spaces WHERE id = ?`, string(id)); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }
 
 // InstanceID reads the instance identifier seeded by migrations.

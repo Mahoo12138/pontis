@@ -193,6 +193,8 @@ func (s *Server) Router() http.Handler {
 		r.Use(s.requireSession)
 		r.Get("/api/v1/spaces", s.handleListSpaces)
 		r.Post("/api/v1/spaces", s.handleCreateSpace)
+		r.Patch("/api/v1/spaces/{spaceID}", s.handleRenameSpace)
+		r.Delete("/api/v1/spaces/{spaceID}", s.handleDeleteSpace)
 	})
 
 	// Canonical tree access (owner-scoped). The four groups below are the

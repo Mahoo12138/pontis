@@ -41,19 +41,55 @@ func (s *Server) handleCreateSpace(w http.ResponseWriter, r *http.Request) {
 	}
 	sp, err := s.Spaces.Create(r.Context(), canonical.UserID(u.ID), req.Name)
 	if err != nil {
-		switch {
-		case errors.Is(err, space.ErrEmptyName):
-			s.writeError(w, r, http.StatusBadRequest, "INVALID_NAME", "name must not be empty")
-		case errors.Is(err, space.ErrBadName):
-			s.writeError(w, r, http.StatusBadRequest, "INVALID_NAME", "name must be a plain title without path characters")
-		case errors.Is(err, space.ErrTooManySpaces):
-			s.writeError(w, r, http.StatusConflict, "TOO_MANY_SPACES", "space limit reached")
-		default:
-			s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
-		}
+		s.writeSpaceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, fromSpace(sp))
+}
+
+func (s *Server) handleRenameSpace(w http.ResponseWriter, r *http.Request) {
+	u, _ := currentUser(r)
+	var req spaceRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	err := s.Spaces.Rename(r.Context(), canonical.UserID(u.ID), canonical.SpaceID(chi.URLParam(r, "spaceID")), req.Name)
+	if err != nil {
+		s.writeSpaceError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleDeleteSpace(w http.ResponseWriter, r *http.Request) {
+	u, _ := currentUser(r)
+	err := s.Spaces.Delete(r.Context(), canonical.UserID(u.ID), canonical.SpaceID(chi.URLParam(r, "spaceID")))
+	if err != nil {
+		s.writeSpaceError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeSpaceError is the one place the space service's refusals become API
+// codes. Creation, rename and deletion all validate the same name, so the
+// answers they give must not drift apart.
+func (s *Server) writeSpaceError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, space.ErrEmptyName):
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_NAME", "name must not be empty")
+	case errors.Is(err, space.ErrBadName):
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_NAME", "name must be a plain title without path characters")
+	case errors.Is(err, space.ErrTooManySpaces):
+		s.writeError(w, r, http.StatusConflict, "TOO_MANY_SPACES", "space limit reached")
+	case errors.Is(err, space.ErrSpaceNotFound):
+		s.writeError(w, r, http.StatusNotFound, "NOT_FOUND", "no such space")
+	case errors.Is(err, space.ErrSpaceNotEmpty):
+		s.writeError(w, r, http.StatusConflict, "SPACE_NOT_EMPTY",
+			"this space still has bookmarks, backups or devices bound to it")
+	default:
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+	}
 }
 
 type spaceResponse struct {
