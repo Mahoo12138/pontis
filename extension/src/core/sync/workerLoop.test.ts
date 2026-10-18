@@ -47,12 +47,23 @@ const otherBinding = 'binding-2';
 /** Counts rounds and holds the connection open long enough to overlap. */
 class SpyTransport implements SyncTransport {
   calls: { bindingId: string; ops: number; applied: number }[] = [];
+  private waiters: (() => void)[] = [];
   constructor(private inner: FakeServerTransport, private delayMs = 0) {}
 
   async sync(bindingId: string, req: SyncRequestWire): Promise<SyncResponseWire> {
     this.calls.push({ bindingId, ops: req.operations.length, applied: req.applied_revision });
+    this.waiters.splice(0).forEach((wake) => wake());
     if (this.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.delayMs));
     return this.inner.sync(bindingId, req);
+  }
+
+  /**
+   * Resolves once `n` requests have actually started. A test that needs a round
+   * to be mid-flight waits on this rather than on a guessed sleep, which is the
+   * difference between a check and a race.
+   */
+  async until(n: number): Promise<void> {
+    while (this.calls.length < n) await new Promise<void>((resolve) => this.waiters.push(resolve));
   }
 }
 
@@ -178,15 +189,61 @@ describe('one round per binding across triggers', () => {
 
     // alarm + manual + wake landing on the same instant, as after a browser
     // restart with the user already clicking.
-    await Promise.all([slowLoop.runSync('alarm'), slowLoop.runSync('manual'), slowLoop.runSync('wake')]);
+    await Promise.all([
+      slowLoop.runSync('alarm'),
+      slowLoop.runSync('manual', { rerunOnJoin: true }),
+      slowLoop.runSync('wake'),
+    ]);
     transport = slow;
 
-    expect(slow.calls).toHaveLength(1);
+    // The invariant is that the intent is carried once, not that only one
+    // request ever leaves: the click joined the running pass and was owed a
+    // second sweep, which finds nothing left to send.
+    expect(slow.calls.reduce((ops, call) => ops + call.ops, 0)).toBe(1);
     expect(slow.calls[0]?.ops).toBe(1);
-    transport = slow;
-    // The others did not quietly do nothing: they said why.
-    expect(await messages('coordinator')).toContain('另一轮正在处理该绑定，本轮跳过');
+    // They joined the running pass instead of losing a lock race, so nothing
+    // is left to explain away.
+    expect(await messages('coordinator')).not.toContain('另一轮正在处理该绑定，本轮跳过');
+  });
+
+  it('does not report a skipped round when a wake lands with the alarm', async () => {
+    await seedBinding();
+    await seedQueuedOp('op-9', 'Home');
+
+    // MV3 kills the worker between alarms, so every alarm restarts it: the
+    // module body runs the wake pass while the alarm event is delivered to the
+    // listener. These two are not an unlucky collision, they always land
+    // together — which read as a skipped round every five minutes, forever.
+    await Promise.all([loop.runSync('wake'), loop.runSync('alarm')]);
+
+    expect(await messages('coordinator')).not.toContain('另一轮正在处理该绑定，本轮跳过');
+    expect(transport.calls).toHaveLength(1);
+  });
+
+  it('serves a trigger that lands while a pass is already running', async () => {
+    await seedBinding();
+    await seedQueuedOp('op-1', 'First');
+
+    const slow = new SpyTransport(server, 40);
+    const slowCoordinator = new SyncCoordinator(db, new RemoteChangeApplier(db, adapter), slow);
+    const slowLoop = new WorkerLoop({
+      db, adapter, coordinator: slowCoordinator, reconciler, resync, verifier,
     });
+
+    const first = slowLoop.runSync('alarm');
+    // Let the running pass get far enough that it has already read the inbox.
+    await slow.until(1);
+    expect(slow.calls).toHaveLength(1);
+
+    await seedQueuedOp('op-2', 'Second');
+    await Promise.all([first, slowLoop.runSync('manual', { rerunOnJoin: true })]);
+    transport = slow;
+
+    // Joining must not strand the newer work until the next alarm: it earns one
+    // more sweep.
+    expect(slow.calls).toHaveLength(2);
+    expect(server.journal).toHaveLength(2);
+  });
 });
 
 describe('what each trigger is allowed to touch', () => {
@@ -389,6 +446,6 @@ describe('event capture feeding the loop', () => {
     await new Promise((resolve) => setTimeout(resolve, 60));
 
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith('debounce');
+    expect(run).toHaveBeenCalledWith('debounce', { rerunOnJoin: true });
   });
 });

@@ -61,7 +61,10 @@ export default defineBackground(() => {
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (isMessage(msg, 'pontis/manual-sync')) {
-      void loop.runSync('manual').then(
+      // A click means the person just changed something and wants it out, so a
+      // pass already running owes this one a second sweep. The alarm and the
+      // wake do not: they ask for the same catch-up scan.
+      void loop.runSync('manual', { rerunOnJoin: true }).then(
         () => sendResponse({ ok: true }),
         (err) => sendResponse({ ok: false, error: String(err) }),
       );
