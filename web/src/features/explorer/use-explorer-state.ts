@@ -1,15 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { flattenVisible } from './tree';
 import type { ExplorerFilter, ExplorerRow, TreeIndex } from './tree';
+import { keepThroughPress, pressSelection, pruneSelection, rangeTo, shouldRecordPress } from './selection';
+import type { PressModifiers } from './selection';
 import { openUrlSafely } from '../../lib/safe-url';
 
-/** The modifier state a press carries; pointer and mouse events both do. */
-export interface PressModifiers {
-  shiftKey: boolean;
-  metaKey: boolean;
-  ctrlKey: boolean;
-}
+export type { PressModifiers } from './selection';
 
 /**
  * Finder/IDE-style list state: focus cursor, multi-selection with an
@@ -39,16 +36,32 @@ export function useExplorerState(index: TreeIndex, filter: ExplorerFilter) {
   );
   const rowIds = useMemo(() => rows.map((r) => r.node.id), [rows]);
 
-  // Drop stale ids when the row set changes (filter switch, deletes).
+  // Selection is not scoped to what is currently on screen. Collapsing a folder
+  // or switching the 文件夹/书签 filter must not quietly drop the nested rows a
+  // person had already picked — that is what made "select a folder and the
+  // bookmarks beside it, delete together" impossible, because assembling the
+  // batch required walking through a row set that kept discarding the part of
+  // it you had not left expanded. Only ids that no longer exist leave here.
+  useEffect(() => {
+    setSelected((prev) => pruneSelection(prev, (id) => index.byId.has(id)));
+  }, [index]);
+
+  // The keyboard cursor and the shift-range anchor *are* positions in the
+  // visible list, so those follow the rows.
   useEffect(() => {
     const visible = new Set(rowIds);
-    setSelected((prev) => {
-      const next = new Set([...prev].filter((id) => visible.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
     if (focusId && !visible.has(focusId)) setFocusId(null);
     if (anchorId && !visible.has(anchorId)) setAnchorId(null);
   }, [rowIds, focusId, anchorId]);
+
+  /**
+   * A plain press replaces the selection, and drilling into a folder always
+   * begins with one (double-click fires a press first). Keep what it replaced
+   * so the double-click can put it back.
+   */
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const replacedByPress = useRef<Set<string> | null>(null);
 
   const toggleExpand = useCallback((id: string) => {
     setExpanded((prev) => {
@@ -77,37 +90,31 @@ export function useExplorerState(index: TreeIndex, filter: ExplorerFilter) {
     });
   }, []);
 
-  const selectRange = useCallback(
-    (fromId: string, toId: string) => {
-      const from = rowIds.indexOf(fromId);
-      const to = rowIds.indexOf(toId);
-      if (from === -1 || to === -1) return new Set([toId]);
-      const [lo, hi] = from < to ? [from, to] : [to, from];
-      return new Set(rowIds.slice(lo, hi + 1));
-    },
-    [rowIds],
-  );
+  const selectRange = useCallback((fromId: string, toId: string) => rangeTo(rowIds, fromId, toId), [rowIds]);
 
   const press = useCallback(
     (e: PressModifiers, id: string) => {
+      const out = pressSelection(selectedRef.current, id, e, anchorId, rowIds);
+      if (shouldRecordPress(selectedRef.current, id)) replacedByPress.current = out.replaced;
       setFocusId(id);
-      if (e.shiftKey && anchorId) {
-        setSelected(selectRange(anchorId, id));
-      } else if (e.metaKey || e.ctrlKey) {
-        setSelected((prev) => {
-          const next = new Set(prev);
-          if (next.has(id)) next.delete(id);
-          else next.add(id);
-          return next;
-        });
-        setAnchorId(id);
-      } else {
-        setSelected(new Set([id]));
-        setAnchorId(id);
-      }
+      setSelected(out.selected);
+      setAnchorId(out.anchorId);
     },
-    [anchorId, selectRange],
+    [anchorId, rowIds],
   );
+
+  /**
+   * Undo the selection a plain press replaced, when `id` was part of it. Called
+   * from the double-click that drills into a folder: reaching a nested row
+   * should not cost the batch that was already picked.
+   */
+  const keepSelectionThrough = useCallback((id: string) => {
+    const replaced = replacedByPress.current;
+    replacedByPress.current = null;
+    if (!replaced) return;
+    const restored = keepThroughPress(replaced, id);
+    if (restored) setSelected(restored);
+  }, []);
 
   /**
    * Rubber-band result: the swept rows become the whole selection.
@@ -240,6 +247,7 @@ export function useExplorerState(index: TreeIndex, filter: ExplorerFilter) {
     expand,
     focusRow,
     press,
+    keepSelectionThrough,
     selectRows,
     handleKeyDown,
     clearSelection,

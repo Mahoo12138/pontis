@@ -14,6 +14,7 @@ import TransferModal from '../components/explorer/TransferModal';
 import ImportModal from '../components/transfer/ImportModal';
 import ExportModal from '../components/transfer/ExportModal';
 import Inspector from '../components/inspector/Inspector';
+import { deleteTargets } from '../features/explorer/selection';
 import ErrorState from '../components/common/ErrorState';
 import {
   CREATE_NODE_EVENT,
@@ -153,7 +154,11 @@ export default function SpaceExplorerPage() {
   }, [selectedIds, index]);
 
   const handleDeleteConfirm = () => {
-    crud.remove.mutate(deleteIds, {
+    // `deleteIds` is what will disappear (a folder carries its subtree); the
+    // request sends only the roots of that set, because the server deletes a
+    // folder's children with it and a second call for an already-gone child
+    // fails and aborts the rest of the batch.
+    crud.remove.mutate(deleteTargets(new Set(selectedIds), (id) => index.parentOf.get(id)?.id ?? null), {
       onSuccess: () => {
         setDeleteOpen(false);
         state.clearSelection();

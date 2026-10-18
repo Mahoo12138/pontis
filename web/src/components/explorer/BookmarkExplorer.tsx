@@ -59,7 +59,7 @@ export default function BookmarkExplorer({
   onContextMenu,
   onOpenDetails,
 }: BookmarkExplorerProps) {
-  const { rows, expanded, selected, focusId, toggleExpand, press, selectRows, handleKeyDown, clearSelection } = state;
+  const { rows, expanded, selected, focusId, toggleExpand, press, keepSelectionThrough, selectRows, handleKeyDown, clearSelection } = state;
 
   // Keep the keyboard cursor visible.
   const containerRef = useRef<HTMLDivElement>(null);
@@ -262,8 +262,13 @@ export default function BookmarkExplorer({
             ].join(' ')}
             style={{ paddingLeft: 16 + depth * INDENT_PX }}
             onDoubleClick={() => {
-              if (node.type === 'folder') toggleExpand(node.id);
-              else if (!isRenaming) onOpenDetails(node);
+              if (node.type === 'folder') {
+                // The press that precedes this gesture already collapsed the
+                // selection down to this row; undo it so that drilling into a
+                // folder keeps the batch that was being assembled.
+                keepSelectionThrough(node.id);
+                toggleExpand(node.id);
+              } else if (!isRenaming) onOpenDetails(node);
             }}
             onContextMenu={(e) => {
               e.preventDefault();
