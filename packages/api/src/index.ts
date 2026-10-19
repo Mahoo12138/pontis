@@ -48,6 +48,7 @@ export type {
   PublicationDetail,
   PublicationListResponse,
   PublishRequest,
+  UpdatePublicationRequest,
   ApplyPublicationRequest,
   ApplyPublicationResponse,
   ImportFormat,

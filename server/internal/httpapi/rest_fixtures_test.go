@@ -392,6 +392,10 @@ func restResetToken(t *testing.T, link map[string]any) string {
 var (
 	uuidPattern      = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 	timestampPattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?`)
+	// Published node ids are keyed per publication, so a fresh instance derives
+	// a different digest for the same node on every run. What the client
+	// contract needs is "an opaque id", not this particular digest.
+	publicationNodePat = regexp.MustCompile(`pn-[0-9a-f]{24}`)
 	// A backup filename carries its creation time as `20060102-150405`, which
 	// is not the RFC 3339 shape above and would otherwise make the fixture
 	// depend on the wall clock.
@@ -462,6 +466,14 @@ func normalizeString(s string, seen map[string]string) string {
 		return id
 	})
 	s = timestampPattern.ReplaceAllString(s, fixedTimestamp)
+	s = publicationNodePat.ReplaceAllStringFunc(s, func(match string) string {
+		if id, ok := seen[match]; ok {
+			return id
+		}
+		id := "pn-id-" + strconv.Itoa(len(seen)+1)
+		seen[match] = id
+		return id
+	})
 	s = compactTimePat.ReplaceAllString(s, "20260101-000000")
 	s = resetTokenPat.ReplaceAllString(s, "token=prs_the-reset-token")
 	return loopbackPort.ReplaceAllString(s, "127.0.0.1:8080")

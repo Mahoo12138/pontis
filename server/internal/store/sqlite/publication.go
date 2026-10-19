@@ -20,7 +20,7 @@ func NewPublicationStore(db *sql.DB) *PublicationStore { return &PublicationStor
 const publicationColumns = `
 	p.id, p.owner_user_id, COALESCE(u.display_name, u.username), p.space_id, p.root_node_id,
 	p.title, p.description, p.tags, p.version, p.visibility,
-	p.bookmark_count, p.folder_count, p.created_at, p.updated_at, p.tree`
+	p.bookmark_count, p.folder_count, p.created_at, p.updated_at, p.tree, COALESCE(p.node_key, '')`
 
 func scanPublication(row interface{ Scan(dest ...any) error }) (plaza.Publication, error) {
 	var p plaza.Publication
@@ -29,7 +29,7 @@ func scanPublication(row interface{ Scan(dest ...any) error }) (plaza.Publicatio
 	var treeJSON string
 	if err := row.Scan(&p.ID, &p.OwnerUserID, &p.PublisherName, &p.SpaceID, &rootNode,
 		&p.Title, &p.Description, &tagsJSON, &p.Version, &visibility,
-		&p.BookmarkCount, &p.FolderCount, &createdAt, &updatedAt, &treeJSON); err != nil {
+		&p.BookmarkCount, &p.FolderCount, &createdAt, &updatedAt, &treeJSON, &p.NodeKey); err != nil {
 		return p, err
 	}
 	if rootNode != nil {
@@ -60,12 +60,12 @@ func (s *PublicationStore) Insert(ctx context.Context, p plaza.Publication) erro
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO publications (id, slug, owner_user_id, space_id, root_node_id,
 			title, description, tags, version, visibility, tree, bookmark_count, folder_count,
-			created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			created_at, updated_at, node_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.Slug, p.OwnerUserID, p.SpaceID, rootNode,
 		p.Title, p.Description, string(tags), p.Version, string(p.Visibility), string(tree),
 		p.BookmarkCount, p.FolderCount,
-		formatTime(p.CreatedAt), formatTime(p.UpdatedAt))
+		formatTime(p.CreatedAt), formatTime(p.UpdatedAt), p.NodeKey)
 	return err
 }
 

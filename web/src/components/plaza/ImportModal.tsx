@@ -54,7 +54,6 @@ export default function ImportModal({
     for (const slot of rootSlots?.root_slots ?? []) {
       opts.push({ value: `root:${slot.key}`, label: `根目录 / ${slot.display_name}` });
     }
-    if (opts.length === 0) opts.push({ value: 'root:', label: '空间根目录' });
     for (const node of nodesData?.nodes ?? []) {
       if (node.type === 'folder') {
         opts.push({ value: `node:${node.id}`, label: node.title });
@@ -62,6 +61,16 @@ export default function ImportModal({
     }
     return opts;
   }, [rootSlots, nodesData]);
+
+  // Switching space resets the location to a placeholder that is not one of
+  // these options, and sending it asks the server for a root slot that does
+  // not exist. Keep the selection pointing at a location the space has.
+  useEffect(() => {
+    const first = locationOptions[0];
+    if (first && !locationOptions.some((o) => o.value === location)) {
+      setLocation(first.value);
+    }
+  }, [locationOptions, location]);
 
   if (!publication) return null;
 
@@ -84,7 +93,7 @@ export default function ImportModal({
         onSuccess: (res) => {
           notifications.show({
             title: `已导入「${publication.title}」`,
-            message: `新建 ${res.created} 项 · 更新 ${res.updated} 项 · 保留 ${res.kept} 项`,
+            message: `新建 ${res.created} 项 · 保留 ${res.kept} 项`,
             color: 'coolGray',
           });
           onClose();
@@ -111,10 +120,7 @@ export default function ImportModal({
           label="目标空间"
           data={spaces.map((s) => ({ value: s.id, label: s.name }))}
           value={spaceId}
-          onChange={(e) => {
-            setSpaceId(e.currentTarget.value);
-            setLocation('root:');
-          }}
+          onChange={(e) => setSpaceId(e.currentTarget.value)}
         />
         <NativeSelect
           label="目标位置"
@@ -146,7 +152,7 @@ export default function ImportModal({
           >
             <IconAlertTriangle size={15} stroke={1.5} style={{ color: tokens.syncRecovery, flexShrink: 0, marginTop: 1 }} />
             <Text fz={12}>
-              「{targetLabel}」中现有的内容将被替换为该发布的内容。服务器会先自动创建安全备份。
+              「{targetLabel}」中现有的内容将被替换为该发布的内容。这一步作为一个整体记入活动,可在最近活动中撤销。
             </Text>
           </Group>
         )}
@@ -154,7 +160,7 @@ export default function ImportModal({
           <Button variant="subtle" color="coolGray" onClick={onClose}>
             取消
           </Button>
-          <Button onClick={handleApply} loading={apply.isPending}>
+          <Button onClick={handleApply} loading={apply.isPending} disabled={locationOptions.length === 0}>
             {strategy === 'merge' ? '合并导入' : '替换导入'}
           </Button>
         </Group>

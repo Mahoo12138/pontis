@@ -71,7 +71,7 @@ func (s *Server) handleListPlaza(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}
-	mine, err := s.Plaza.ListMine(r.Context(), canonical.UserID(u.ID))
+	mine, err := s.Plaza.ListMine(r.Context(), canonical.UserID(u.ID), q)
 	if err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
@@ -226,10 +226,14 @@ func (s *Server) writePlazaError(w http.ResponseWriter, r *http.Request, err err
 		s.writeError(w, r, http.StatusForbidden, "NOT_SPACE_OWNER", "space belongs to another user")
 	case errors.Is(err, plaza.ErrInvalidApply):
 		s.writeError(w, r, http.StatusBadRequest, "INVALID_APPLY", "strategy must be merge or replace")
+	case errors.Is(err, plaza.ErrInvalidVisibility):
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_VISIBILITY", "visibility must be private or plaza")
 	case errors.Is(err, canonical.ErrSpaceNotFound):
 		s.writeError(w, r, http.StatusNotFound, "SPACE_NOT_FOUND", "unknown space")
 	case errors.Is(err, canonical.ErrParentNotFolder), errors.Is(err, canonical.ErrNodeIsBookmark):
 		s.writeError(w, r, http.StatusConflict, "PARENT_NOT_FOLDER", "target parent must be a folder")
+	case errors.Is(err, canonical.ErrRootSlotNotFound):
+		s.writeError(w, r, http.StatusBadRequest, "TARGET_NOT_FOUND", "target root slot does not exist")
 	default:
 		s.Logger.Error("plaza internal error", "err", err)
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")

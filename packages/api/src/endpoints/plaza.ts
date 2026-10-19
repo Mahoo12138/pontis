@@ -10,6 +10,7 @@ import type {
   PublicationDetail,
   PublicationListResponse,
   PublishRequest,
+  UpdatePublicationRequest,
 } from '../types';
 
 export function listPlazaPublications(q?: string) {
@@ -25,6 +26,12 @@ export function getPublication(id: string) {
 // GET /publications/{id} returns.
 export function publish(params: PublishRequest) {
   return client.post<PublicationDetail>('/publications', params, checkPublicationDetail);
+}
+
+// A snapshot re-capture and a metadata patch share this endpoint; the server
+// tells them apart by the `snapshot` flag and answers with the new detail.
+export function updatePublication(id: string, params: UpdatePublicationRequest) {
+  return client.patch<PublicationDetail>(`/publications/${id}`, params, checkPublicationDetail);
 }
 
 export function applyPublication(id: string, params: ApplyPublicationRequest) {

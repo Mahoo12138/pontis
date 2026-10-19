@@ -7,13 +7,9 @@
     {
       "source_node_id": "id-3",
       "target_node_id": "id-4"
-    },
-    {
-      "source_node_id": "id-5",
-      "target_node_id": "id-6"
     }
   ],
-  "source_revision": 4,
-  "target_revision": 5,
+  "source_revision": 3,
+  "target_revision": 4,
   "transfer_id": "fixture-transfer-1"
 }

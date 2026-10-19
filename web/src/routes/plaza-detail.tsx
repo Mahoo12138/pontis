@@ -26,7 +26,7 @@ import ImportModal from '../components/plaza/ImportModal';
 import { contentRegion } from '../styles/app-shell.css';
 import { pagePad } from '../styles/management.css';
 import { tokens } from '../styles/semantic-tokens.css';
-import { usePublication, useUnpublish } from '../hooks/use-plaza';
+import { usePublication, useUnpublish, useUpdatePublication } from '../hooks/use-plaza';
 import { formatRelativeTime } from '../lib/format';
 
 export default function PlazaDetailPage() {
@@ -34,6 +34,7 @@ export default function PlazaDetailPage() {
   const navigate = useNavigate();
   const { data: pub, isLoading, isError, error, refetch } = usePublication(publicationId);
   const unpublish = useUnpublish();
+  const update = useUpdatePublication();
   const [importOpen, setImportOpen] = useState(false);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
 
@@ -60,6 +61,41 @@ export default function PlazaDetailPage() {
       </>
     );
   }
+
+  const reportError = (e: unknown, fallback: string) =>
+    notifications.show({
+      message: e instanceof Error ? e.message : fallback,
+      color: 'errorRed',
+    });
+
+  const handleSnapshotUpdate = () => {
+    update.mutate(
+      { id: pub.id, params: { snapshot: true } },
+      {
+        onSuccess: (next) =>
+          notifications.show({
+            message: `已更新快照到 v${next.version}`,
+            color: 'coolGray',
+          }),
+        onError: (e) => reportError(e, '更新快照失败'),
+      },
+    );
+  };
+
+  const handleToggleVisibility = () => {
+    const next = pub.visibility === 'plaza' ? 'private' : 'plaza';
+    update.mutate(
+      { id: pub.id, params: { visibility: next } },
+      {
+        onSuccess: () =>
+          notifications.show({
+            message: next === 'plaza' ? `已公开「${pub.title}」到广场` : `「${pub.title}」已转为私有`,
+            color: 'coolGray',
+          }),
+        onError: (e) => reportError(e, '操作失败'),
+      },
+    );
+  };
 
   const handleUnpublish = () => {
     unpublish.mutate(pub.id, {
@@ -110,12 +146,18 @@ export default function PlazaDetailPage() {
                   </Button>
                 </Menu.Target>
                 <Menu.Dropdown>
-                  <Menu.Item leftSection={<IconRefresh size={14} stroke={1.5} />}>
+                  <Menu.Item
+                    leftSection={<IconRefresh size={14} stroke={1.5} />}
+                    disabled={update.isPending}
+                    onClick={handleSnapshotUpdate}
+                  >
                     从空间更新快照
                   </Menu.Item>
                   <Menu.Item
                     leftSection={<IconGlobe size={14} stroke={1.5} />}
                     rightSection={pub.visibility === 'plaza' ? undefined : <IconLock size={12} />}
+                    disabled={update.isPending}
+                    onClick={handleToggleVisibility}
                   >
                     {pub.visibility === 'plaza' ? '设为私有' : '公开到广场'}
                   </Menu.Item>

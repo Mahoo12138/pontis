@@ -384,6 +384,19 @@ export interface PublishRequest {
   title: string;
   description?: string;
   tags?: string[];
+  /** Omitted = plaza. Private publications stay out of the plaza index. */
+  visibility?: PublicationVisibility;
+}
+
+/**
+ * Metadata patch, or a snapshot re-capture when `snapshot` is set. A snapshot
+ * update fails with SOURCE_NOT_FOUND once the published node no longer exists.
+ */
+export interface UpdatePublicationRequest {
+  title?: string;
+  description?: string;
+  visibility?: PublicationVisibility;
+  snapshot?: boolean;
 }
 
 export interface ApplyPublicationRequest {

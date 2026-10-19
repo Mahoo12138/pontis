@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Group, Modal, NativeSelect, Stack, Switch, Text, TextInput } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import type { Space } from '@pontis/api';
+import type { PublicationVisibility, Space } from '@pontis/api';
 import { usePublish } from '../../hooks/use-plaza';
 import { useNodes } from '../../hooks/use-nodes';
 
@@ -27,6 +27,7 @@ export default function PublishModal({
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [tags, setTags] = useState('');
+  const [visibility, setVisibility] = useState<PublicationVisibility>('plaza');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -37,6 +38,7 @@ export default function PublishModal({
       setTitle('');
       setDescription('');
       setTags('');
+      setVisibility('plaza');
       setError(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -65,6 +67,7 @@ export default function PublishModal({
         root_node_id: wholeSpace ? undefined : source,
         title: trimmed,
         description: description.trim() || undefined,
+        visibility,
         tags: tags
           .split(/[,，]/)
           .map((t) => t.trim())
@@ -73,7 +76,10 @@ export default function PublishModal({
       {
         onSuccess: () => {
           notifications.show({
-            message: `已发布「${trimmed}」。后续对空间的修改不会自动进入发布。`,
+            message:
+              visibility === 'plaza'
+                ? `已发布「${trimmed}」到广场。后续对空间的修改不会自动进入发布。`
+                : `已创建私有发布「${trimmed}」，只有你能在「我的发布」看到它。`,
             color: 'coolGray',
           });
           onPublished();
@@ -142,6 +148,15 @@ export default function PublishModal({
           placeholder="用逗号分隔,例如:Go, 后端"
           value={tags}
           onChange={(e) => setTags(e.currentTarget.value)}
+        />
+        <NativeSelect
+          label="可见性"
+          data={[
+            { value: 'plaza', label: '公开到广场' },
+            { value: 'private', label: '私有（仅自己在「我的发布」可见）' },
+          ]}
+          value={visibility}
+          onChange={(e) => setVisibility(e.currentTarget.value as PublicationVisibility)}
         />
         <Text fz={12} c="dimmed">
           发布会创建一个独立的版本化快照,不包含私有 UUID、修订号或设备信息。

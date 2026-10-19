@@ -6,6 +6,10 @@ package plaza
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,14 +32,23 @@ const (
 	VisibilityPlaza   Visibility = "plaza"
 )
 
+// Published node ids are opaque to consumers: a short prefix plus a keyed
+// digest, never a canonical UUID.
+const (
+	nodeIDPrefix  = "pn-"
+	nodeIDHexLen  = 24
+	syntheticRoot = "root"
+)
+
 // Errors.
 var (
-	ErrNotFound       = errors.New("plaza: publication not found")
-	ErrNotOwner       = errors.New("plaza: not the publication owner")
-	ErrTitleRequired  = errors.New("plaza: title must not be empty")
-	ErrSourceNotFound = errors.New("plaza: source node not found")
-	ErrSpaceForbidden = errors.New("plaza: target space is not yours")
-	ErrInvalidApply   = errors.New("plaza: invalid apply request")
+	ErrNotFound          = errors.New("plaza: publication not found")
+	ErrNotOwner          = errors.New("plaza: not the publication owner")
+	ErrTitleRequired     = errors.New("plaza: title must not be empty")
+	ErrSourceNotFound    = errors.New("plaza: source node not found")
+	ErrSpaceForbidden    = errors.New("plaza: target space is not yours")
+	ErrInvalidApply      = errors.New("plaza: invalid apply request")
+	ErrInvalidVisibility = errors.New("plaza: visibility must be private or plaza")
 )
 
 // Node is one node of the published tree.
@@ -55,6 +68,7 @@ type Publication struct {
 	PublisherName string
 	SpaceID       string
 	RootNodeID    string `json:"-"`
+	NodeKey       string `json:"-"`
 	Title         string
 	Description   string
 	Tags          []string
@@ -65,6 +79,38 @@ type Publication struct {
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 	Tree          Node
+}
+
+// normalizeNodeIDs rewrites legacy snapshot ids. Before per-publication keys
+// existed, published node ids were the canonical UUID with a prefix, which
+// leaked private identity (doc 10 §5); stored trees may still carry them.
+func (p *Publication) normalizeNodeIDs() {
+	if p.NodeKey == "" {
+		return
+	}
+	p.Tree = mapNodeIDs(p.Tree, func(id string) string {
+		raw := strings.TrimPrefix(id, nodeIDPrefix)
+		if canonicalID, ok := parseCanonicalID(raw); ok {
+			return opaqueNodeID(p.NodeKey, canonicalID)
+		}
+		return id
+	})
+}
+
+func mapNodeIDs(n Node, mapID func(string) string) Node {
+	out := Node{
+		ID:    mapID(n.ID),
+		Type:  n.Type,
+		Title: n.Title,
+		URL:   n.URL,
+	}
+	if n.Children != nil {
+		out.Children = make([]Node, 0, len(n.Children))
+		for _, c := range n.Children {
+			out.Children = append(out.Children, mapNodeIDs(c, mapID))
+		}
+	}
+	return out
 }
 
 // Store is the persistence contract.
@@ -110,6 +156,9 @@ func (s *Service) Publish(ctx context.Context, user canonical.UserID, p PublishP
 	if p.Title == "" {
 		return Publication{}, ErrTitleRequired
 	}
+	if err := validateVisibility(p.Visibility); err != nil {
+		return Publication{}, err
+	}
 	sp, err := s.library.Space(ctx, p.SpaceID)
 	if err != nil {
 		return Publication{}, err
@@ -121,12 +170,12 @@ func (s *Service) Publish(ctx context.Context, user canonical.UserID, p PublishP
 	if err != nil {
 		return Publication{}, err
 	}
-	slots, err := s.library.RootSlots(ctx, p.SpaceID)
+
+	key, err := newNodeKey()
 	if err != nil {
 		return Publication{}, err
 	}
-
-	tree, bookmarks, folders := buildTree(nodes, p.RootNodeID, titleMap(nodes), keyMap(slots))
+	tree, bookmarks, folders := buildTree(nodes, p.RootNodeID, key)
 	if p.RootNodeID != "" && bookmarks < 0 {
 		return Publication{}, ErrSourceNotFound
 	}
@@ -147,6 +196,7 @@ func (s *Service) Publish(ctx context.Context, user canonical.UserID, p PublishP
 		OwnerUserID:   string(user),
 		SpaceID:       string(p.SpaceID),
 		RootNodeID:    p.RootNodeID,
+		NodeKey:       key,
 		Title:         p.Title,
 		Description:   p.Desc,
 		Tags:          p.Tags,
@@ -164,7 +214,43 @@ func (s *Service) Publish(ctx context.Context, user canonical.UserID, p PublishP
 	return pub, nil
 }
 
-// UpdateSnapshot re-captures the source tree, bumping the version.
+func validateVisibility(v Visibility) error {
+	switch v {
+	case "", VisibilityPrivate, VisibilityPlaza:
+		return nil
+	}
+	return ErrInvalidVisibility
+}
+
+// newNodeKey returns the per-publication secret used to derive published node
+// ids. Keeping it per publication means two publishers never share an id space.
+func newNodeKey() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// opaqueNodeID is stable for one canonical node within one publication, so
+// snapshot updates keep identity without publishing the canonical UUID.
+func opaqueNodeID(key, canonicalID string) string {
+	mac := hmac.New(sha256.New, []byte(key))
+	mac.Write([]byte(canonicalID))
+	return nodeIDPrefix + hex.EncodeToString(mac.Sum(nil))[:nodeIDHexLen]
+}
+
+func parseCanonicalID(s string) (string, bool) {
+	u, err := uuid.Parse(s)
+	if err != nil || u.String() != strings.ToLower(s) {
+		return "", false
+	}
+	return u.String(), true
+}
+
+// UpdateSnapshot re-captures the source tree, bumping the version. A source
+// that no longer exists is refused: writing an empty tree would silently
+// destroy a published collection.
 func (s *Service) UpdateSnapshot(ctx context.Context, user canonical.UserID, id string) (Publication, error) {
 	pub, err := s.owned(ctx, user, id)
 	if err != nil {
@@ -174,16 +260,15 @@ func (s *Service) UpdateSnapshot(ctx context.Context, user canonical.UserID, id 
 	if err != nil {
 		return Publication{}, err
 	}
-	slots, err := s.library.RootSlots(ctx, canonical.SpaceID(pub.SpaceID))
-	if err != nil {
-		return Publication{}, err
+	tree, bookmarks, folders := buildTree(nodes, pub.RootNodeID, pub.NodeKey)
+	if bookmarks < 0 {
+		return Publication{}, ErrSourceNotFound
 	}
-	tree, bookmarks, folders := buildTree(nodes, pub.rootNodeID(), titleMap(nodes), keyMap(slots))
 	tree = renameRoot(tree, pub.Title)
 	if err := s.store.UpdateSnapshot(ctx, id, tree, bookmarks, folders, pub.Version+1, time.Now().UTC()); err != nil {
 		return Publication{}, err
 	}
-	return s.store.Get(ctx, id)
+	return s.load(ctx, id)
 }
 
 // UpdateMeta changes title/description/visibility.
@@ -194,10 +279,15 @@ func (s *Service) UpdateMeta(ctx context.Context, user canonical.UserID, id stri
 	if title != nil && *title == "" {
 		return Publication{}, ErrTitleRequired
 	}
+	if vis != nil {
+		if err := validateVisibility(*vis); err != nil {
+			return Publication{}, err
+		}
+	}
 	if err := s.store.UpdateMeta(ctx, id, title, desc, vis, time.Now().UTC()); err != nil {
 		return Publication{}, err
 	}
-	return s.store.Get(ctx, id)
+	return s.load(ctx, id)
 }
 
 // Unpublish removes the publication; imported copies in other spaces are
@@ -216,26 +306,46 @@ func (s *Service) ListPlaza(ctx context.Context, q string) ([]Publication, error
 	if err != nil {
 		return nil, err
 	}
-	q = strings.ToLower(strings.TrimSpace(q))
-	var out []Publication
-	for _, p := range list {
-		if q != "" && !matchesQuery(p, q) {
-			continue
-		}
-		out = append(out, p)
-	}
+	out := filterQuery(list, q)
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out, nil
 }
 
-// ListMine returns the user's publications regardless of visibility.
-func (s *Service) ListMine(ctx context.Context, user canonical.UserID) ([]Publication, error) {
-	return s.store.ListByOwner(ctx, string(user))
+// ListMine returns the user's publications regardless of visibility. The same
+// query applies: a private publication is not a hit for an unrelated term.
+func (s *Service) ListMine(ctx context.Context, user canonical.UserID, q string) ([]Publication, error) {
+	list, err := s.store.ListByOwner(ctx, string(user))
+	if err != nil {
+		return nil, err
+	}
+	return filterQuery(list, q), nil
+}
+
+func filterQuery(list []Publication, q string) []Publication {
+	needle := strings.ToLower(strings.TrimSpace(q))
+	out := make([]Publication, 0, len(list))
+	for _, p := range list {
+		if needle != "" && !matchesQuery(p, needle) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// load reads one publication and rewrites any legacy published node id.
+func (s *Service) load(ctx context.Context, id string) (Publication, error) {
+	pub, err := s.store.Get(ctx, id)
+	if err != nil {
+		return Publication{}, err
+	}
+	pub.normalizeNodeIDs()
+	return pub, nil
 }
 
 // Get returns one publication; plaza visibility or ownership required.
 func (s *Service) Get(ctx context.Context, user canonical.UserID, id string) (Publication, error) {
-	pub, err := s.store.Get(ctx, id)
+	pub, err := s.load(ctx, id)
 	if err != nil {
 		return Publication{}, err
 	}
@@ -260,9 +370,9 @@ type ApplyResult struct {
 }
 
 // Apply copies the published tree into the consumer's space through the
-// executor. Merge reuses same-title folders and same-raw-URL bookmarks at
-// the mapped location (conservative ExactTreeMatcher); replace clears the
-// target's children first. Both run as one atomic domain transaction.
+// executor. Merge reuses equivalent nodes at the matching location; replace
+// clears the target's children first. Both run as one atomic domain
+// transaction and one undoable ChangeSet.
 func (s *Service) Apply(ctx context.Context, user canonical.UserID, id string, p ApplyParams) (ApplyResult, error) {
 	pub, err := s.Get(ctx, user, id)
 	if err != nil {
@@ -310,87 +420,28 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, id string, p
 	}
 
 	// Existing children index for merge matching.
-	children, err := tx.Children(ctx, p.SpaceID, p.Parent)
-	if err != nil {
+	m := &merger{
+		ctx:     ctx,
+		tx:      tx,
+		space:   p.SpaceID,
+		rec:     rec,
+		replace: p.Strategy == "replace",
+		indexes: map[string]*childIndex{},
+	}
+
+	// A whole-space publication stores a synthetic container as its root, so
+	// its children land directly at the target. A subtree publication has the
+	// source folder (or bookmark) as its root, and that node is copied too.
+	if pub.RootNodeID == "" {
+		if err := m.placeChildren(pub.Tree, p.Parent); err != nil {
+			return ApplyResult{}, err
+		}
+	} else if err := m.place(pub.Tree, p.Parent); err != nil {
 		return ApplyResult{}, err
 	}
-	var res ApplyResult
-	byTitle := map[string]canonical.NodeID{}
-	byURL := map[string]canonical.NodeID{}
-	for _, c := range children {
-		if c.Type == canonical.NodeTypeFolder {
-			byTitle[c.Title] = c.ID
-		} else {
-			byURL[c.URL] = c.ID
-		}
-	}
+	res := ApplyResult{Created: m.created, Kept: m.kept}
 
-	newID := func() (canonical.NodeID, error) {
-		id, err := uuid.NewV7()
-		if err != nil {
-			return "", err
-		}
-		return canonical.NodeID(id.String()), nil
-	}
-
-	var walk func(pubNode Node, parent canonical.ParentRef) error
-	walk = func(pubNode Node, parent canonical.ParentRef) error {
-		for _, child := range pubNode.Children {
-			if child.Type == "folder" {
-				if existing, ok := byTitle[child.Title]; ok && p.Strategy == "merge" {
-					res.Kept++
-					if err := walk(child, canonical.NewNodeParent(existing)); err != nil {
-						return err
-					}
-					continue
-				}
-				id, err := newID()
-				if err != nil {
-					return err
-				}
-				if err := rec.Apply(ctx, tx, canonical.CreateNode{
-					SpaceID: p.SpaceID, NodeID: id, Type: canonical.NodeTypeFolder,
-					Title: child.Title, Parent: parent,
-				}); err != nil {
-					return err
-				}
-				byTitle[child.Title] = id
-				res.Created++
-				if err := walk(child, canonical.NewNodeParent(id)); err != nil {
-					return err
-				}
-				continue
-			}
-			// Bookmark.
-			childURL := ""
-			if child.URL != nil {
-				childURL = *child.URL
-			}
-			if _, ok := byURL[childURL]; ok && p.Strategy == "merge" {
-				res.Kept++
-				continue
-			}
-			id, err := newID()
-			if err != nil {
-				return err
-			}
-			if err := rec.Apply(ctx, tx, canonical.CreateNode{
-				SpaceID: p.SpaceID, NodeID: id, Type: canonical.NodeTypeBookmark,
-				Title: child.Title, URL: childURL, Parent: parent,
-			}); err != nil {
-				return err
-			}
-			byURL[childURL] = id
-			res.Created++
-		}
-		return nil
-	}
-
-	if err := walk(pub.Tree, p.Parent); err != nil {
-		return ApplyResult{}, err
-	}
-
-	summary := fmt.Sprintf("应用订阅「%s」：新增 %d 项", pub.Title, res.Created)
+	summary := fmt.Sprintf("应用发布「%s」：新增 %d 项", pub.Title, res.Created)
 	if _, err := rec.Finish(ctx, tx, summary); err != nil {
 		return ApplyResult{}, err
 	}
@@ -399,6 +450,124 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, id string, p
 	}
 	committed = true
 	return res, nil
+}
+
+// merger copies published nodes into the consumer's tree. Matching is
+// location-aware: every target parent is indexed once when the walk reaches
+// it, so re-applying a publication converges instead of duplicating nested
+// content, and two same-named folders inside one publication stay two folders.
+type merger struct {
+	ctx     context.Context
+	tx      canonical.Tx
+	space   canonical.SpaceID
+	rec     *changeset.Batch
+	replace bool
+	indexes map[string]*childIndex
+	created int64
+	kept    int64
+}
+
+type childIndex struct {
+	byTitle map[string]canonical.NodeID
+	byURL   map[string]canonical.NodeID
+}
+
+func parentKey(parent canonical.ParentRef) string {
+	if parent.Type == canonical.ParentTypeNode {
+		return "node:" + string(parent.NodeID)
+	}
+	return "root:" + parent.RootKey
+}
+
+func (m *merger) index(parent canonical.ParentRef) (*childIndex, error) {
+	key := parentKey(parent)
+	if ix, ok := m.indexes[key]; ok {
+		return ix, nil
+	}
+	children, err := m.tx.Children(m.ctx, m.space, parent)
+	if err != nil {
+		return nil, err
+	}
+	ix := &childIndex{byTitle: map[string]canonical.NodeID{}, byURL: map[string]canonical.NodeID{}}
+	for _, c := range children {
+		if c.Type == canonical.NodeTypeFolder {
+			ix.byTitle[c.Title] = c.ID
+		} else {
+			ix.byURL[c.URL] = c.ID
+		}
+	}
+	m.indexes[key] = ix
+	return ix, nil
+}
+
+// placeChildren copies the contents of a published container under parent.
+func (m *merger) placeChildren(container Node, parent canonical.ParentRef) error {
+	for _, child := range container.Children {
+		if err := m.place(child, parent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// place copies one published node under parent, reusing an equivalent node
+// that already lives at that location when merging.
+func (m *merger) place(node Node, parent canonical.ParentRef) error {
+	isFolder := node.Type == string(canonical.NodeTypeFolder)
+	url := ""
+	if node.URL != nil {
+		url = *node.URL
+	}
+
+	if !m.replace {
+		ix, err := m.index(parent)
+		if err != nil {
+			return err
+		}
+		var existing canonical.NodeID
+		var found bool
+		if isFolder {
+			existing, found = ix.byTitle[node.Title]
+		} else {
+			existing, found = ix.byURL[url]
+		}
+		if found {
+			m.kept++
+			if isFolder {
+				return m.placeChildren(node, canonical.NewNodeParent(existing))
+			}
+			return nil
+		}
+	}
+
+	id, err := newCanonicalID()
+	if err != nil {
+		return err
+	}
+	cmd := canonical.CreateNode{
+		SpaceID: m.space, NodeID: id, Parent: parent, Title: node.Title,
+		Type: canonical.NodeTypeFolder,
+	}
+	if !isFolder {
+		cmd.Type = canonical.NodeTypeBookmark
+		cmd.URL = url
+	}
+	if err := m.rec.Apply(m.ctx, m.tx, cmd); err != nil {
+		return err
+	}
+	m.created++
+	if isFolder {
+		return m.placeChildren(node, canonical.NewNodeParent(id))
+	}
+	return nil
+}
+
+func newCanonicalID() (canonical.NodeID, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return "", err
+	}
+	return canonical.NodeID(id.String()), nil
 }
 
 func (s *Service) owned(ctx context.Context, user canonical.UserID, id string) (Publication, error) {
@@ -439,34 +608,13 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-func (p Publication) rootNodeID() string {
-	// The stored root_node_id is not carried on the aggregate; the snapshot
-	// update re-reads it from the store row via the store's snapshot
-	// columns. Simplified: whole-space publications re-capture the space.
-	return p.RootNodeID
-}
-
 // --- snapshot builders ---
 
-func titleMap(nodes []canonical.Node) map[canonical.NodeID]string {
-	m := make(map[canonical.NodeID]string, len(nodes))
-	for _, n := range nodes {
-		m[n.ID] = n.Title
-	}
-	return m
-}
-
-func keyMap(slots []canonical.RootSlot) map[string]canonical.RootSlot {
-	m := make(map[string]canonical.RootSlot, len(slots))
-	for _, s := range slots {
-		m[s.Key] = s
-	}
-	return m
-}
-
 // buildTree assembles the publication tree of the whole space or of one
-// subtree; returns nil tree when the source node does not exist.
-func buildTree(nodes []canonical.Node, rootNodeID string, titles map[canonical.NodeID]string, slots map[string]canonical.RootSlot) (Node, int64, int64) {
+// subtree; returns a negative bookmark count when the source node does not
+// exist. Published ids are derived from the publication key, never from the
+// canonical UUID.
+func buildTree(nodes []canonical.Node, rootNodeID, key string) (Node, int64, int64) {
 	childrenOf := map[string][]canonical.Node{}
 	var rootOfSpace []canonical.Node
 	var source *canonical.Node
@@ -491,7 +639,7 @@ func buildTree(nodes []canonical.Node, rootNodeID string, titles map[canonical.N
 	var bookmarks, folders int64
 	var build func(n canonical.Node) Node
 	build = func(n canonical.Node) Node {
-		out := Node{ID: "pn-" + string(n.ID), Type: string(n.Type), Title: n.Title}
+		out := Node{ID: opaqueNodeID(key, string(n.ID)), Type: string(n.Type), Title: n.Title}
 		if n.Type == canonical.NodeTypeBookmark {
 			u := n.URL
 			out.URL = &u
@@ -512,7 +660,7 @@ func buildTree(nodes []canonical.Node, rootNodeID string, titles map[canonical.N
 		return build(*source), bookmarks, folders
 	}
 
-	root := Node{ID: "pn-root", Type: "folder"}
+	root := Node{ID: nodeIDPrefix + syntheticRoot, Type: "folder"}
 	for _, n := range rootOfSpace {
 		root.Children = append(root.Children, build(n))
 	}
@@ -526,8 +674,7 @@ func renameRoot(tree Node, title string) Node {
 	return tree
 }
 
-// RootNodeID recomputes the stored root node id column; the store persists
-// it on insert and uses it on snapshot updates.
+// MarshalTree serializes the snapshot for storage.
 func (p Publication) MarshalTree() (string, error) {
 	b, err := json.Marshal(p.Tree)
 	return string(b), err

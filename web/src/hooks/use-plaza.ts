@@ -3,12 +3,14 @@ import {
   listPlazaPublications,
   getPublication,
   publish,
+  updatePublication,
   applyPublication,
   unpublish,
 } from '@pontis/api/endpoints/plaza';
 import type {
   ApplyPublicationRequest,
   PublishRequest,
+  UpdatePublicationRequest,
 } from '@pontis/api';
 
 export function usePlazaPublications(q: string) {
@@ -39,13 +41,29 @@ export function usePublish() {
   });
 }
 
+export function useUpdatePublication() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, params }: { id: string; params: UpdatePublicationRequest }) =>
+      updatePublication(id, params),
+    onSuccess: (detail) => {
+      qc.setQueryData(['publications', detail.id], detail);
+      qc.invalidateQueries({ queryKey: ['plaza'] });
+      qc.invalidateQueries({ queryKey: ['publications'] });
+    },
+  });
+}
+
 export function useApplyPublication() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, params }: { id: string; params: ApplyPublicationRequest }) =>
       applyPublication(id, params),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['spaces', undefined, 'nodes'] });
+    onSuccess: (_res, { params }) => {
+      // The explorer caches nodes per space id, so the invalidation has to
+      // name that space: a placeholder key matches nothing and the imported
+      // nodes stay invisible until the cache goes stale.
+      qc.invalidateQueries({ queryKey: ['spaces', params.space_id, 'nodes'] });
     },
   });
 }
