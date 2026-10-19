@@ -59,11 +59,14 @@ export function useApplyPublication() {
   return useMutation({
     mutationFn: ({ id, params }: { id: string; params: ApplyPublicationRequest }) =>
       applyPublication(id, params),
-    onSuccess: (_res, { params }) => {
+    onSuccess: (_res, { id, params }) => {
       // The explorer caches nodes per space id, so the invalidation has to
       // name that space: a placeholder key matches nothing and the imported
       // nodes stay invisible until the cache goes stale.
       qc.invalidateQueries({ queryKey: ['spaces', params.space_id, 'nodes'] });
+      // The detail page also carries the viewer's own import state; without
+      // this it keeps offering "update to vN" after the update succeeded.
+      qc.invalidateQueries({ queryKey: ['publications', id] });
     },
   });
 }

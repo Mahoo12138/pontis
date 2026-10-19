@@ -113,6 +113,20 @@ func mapNodeIDs(n Node, mapID func(string) string) Node {
 	return out
 }
 
+// Import is one consumer's record of applying a publication: where it went,
+// which version is in place, and which canonical node each published node
+// became (doc 10 §9).
+type Import struct {
+	ID            string
+	UserID        string
+	PublicationID string
+	LastVersion   int
+	SpaceID       canonical.SpaceID
+	Parent        canonical.ParentRef
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
 // Store is the persistence contract.
 type Store interface {
 	Insert(ctx context.Context, p Publication) error
@@ -122,6 +136,12 @@ type Store interface {
 	UpdateSnapshot(ctx context.Context, id string, tree Node, bookmarks, folders int64, version int, at time.Time) error
 	UpdateMeta(ctx context.Context, id string, title, description *string, visibility *Visibility, at time.Time) error
 	Delete(ctx context.Context, id string) error
+
+	// LatestImport returns the consumer's most recent apply of a publication
+	// with its node mapping, or ErrNotFound when they never applied it.
+	LatestImport(ctx context.Context, userID, publicationID string) (Import, map[string]canonical.NodeID, error)
+	// SaveImport upserts one apply record and its node mapping wholesale.
+	SaveImport(ctx context.Context, imp Import, mappings map[string]canonical.NodeID) error
 }
 
 // Service implements publishing and applying.
@@ -362,6 +382,13 @@ type ApplyParams struct {
 	Strategy string // merge | replace
 }
 
+// LatestImport reports where a consumer last applied this publication and what
+// version is in place. ErrNotFound means they never applied it.
+func (s *Service) LatestImport(ctx context.Context, user canonical.UserID, id string) (Import, error) {
+	imp, _, err := s.store.LatestImport(ctx, string(user), id)
+	return imp, err
+}
+
 // ApplyResult reports what the copy did.
 type ApplyResult struct {
 	Created int64 `json:"created"`
@@ -387,6 +414,20 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, id string, p
 	}
 	if p.Strategy != "merge" && p.Strategy != "replace" {
 		return ApplyResult{}, ErrInvalidApply
+	}
+
+	// A previous apply of this publication into this exact place carries the
+	// node identity mapping; applying it again updates those nodes instead of
+	// matching by title and URL a second time (doc 10 §8-9). This read happens
+	// before the transaction opens: the instance runs on one SQLite
+	// connection, so a second statement inside the write transaction waits
+	// for the connection the transaction is holding.
+	imported, mappings, err := s.store.LatestImport(ctx, string(user), id)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return ApplyResult{}, err
+	}
+	if imported.SpaceID != p.SpaceID || ParentKey(imported.Parent) != ParentKey(p.Parent) {
+		imported, mappings = Import{}, nil
 	}
 
 	origin := canonical.Origin{Type: canonical.OriginUser, UserID: user}
@@ -419,14 +460,15 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, id string, p
 		}
 	}
 
-	// Existing children index for merge matching.
 	m := &merger{
-		ctx:     ctx,
-		tx:      tx,
-		space:   p.SpaceID,
-		rec:     rec,
-		replace: p.Strategy == "replace",
-		indexes: map[string]*childIndex{},
+		ctx:      ctx,
+		tx:       tx,
+		space:    p.SpaceID,
+		rec:      rec,
+		replace:  p.Strategy == "replace",
+		indexes:  map[string]*childIndex{},
+		mappings: mappings,
+		placed:   map[string]canonical.NodeID{},
 	}
 
 	// A whole-space publication stores a synthetic container as its root, so
@@ -439,9 +481,19 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, id string, p
 	} else if err := m.place(pub.Tree, p.Parent); err != nil {
 		return ApplyResult{}, err
 	}
-	res := ApplyResult{Created: m.created, Kept: m.kept}
+	res := ApplyResult{Created: m.created, Updated: m.updated, Kept: m.kept}
 
-	summary := fmt.Sprintf("应用发布「%s」：新增 %d 项", pub.Title, res.Created)
+	imported.PublicationID = id
+	imported.UserID = string(user)
+	imported.SpaceID = p.SpaceID
+	imported.Parent = p.Parent
+	imported.LastVersion = pub.Version
+	imported.UpdatedAt = time.Now().UTC()
+	if imported.CreatedAt.IsZero() {
+		imported.CreatedAt = imported.UpdatedAt
+	}
+
+	summary := fmt.Sprintf("应用发布「%s」：新增 %d 项，更新 %d 项", pub.Title, res.Created, res.Updated)
 	if _, err := rec.Finish(ctx, tx, summary); err != nil {
 		return ApplyResult{}, err
 	}
@@ -449,22 +501,33 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, id string, p
 		return ApplyResult{}, err
 	}
 	committed = true
+
+	// The apply record is written after the tree committed, for the same
+	// single-connection reason. A failure here reports an apply that did
+	// happen; re-applying converges by location and records the mapping again.
+	if err := s.store.SaveImport(ctx, imported, m.placed); err != nil {
+		return ApplyResult{}, err
+	}
 	return res, nil
 }
 
-// merger copies published nodes into the consumer's tree. Matching is
-// location-aware: every target parent is indexed once when the walk reaches
-// it, so re-applying a publication converges instead of duplicating nested
-// content, and two same-named folders inside one publication stay two folders.
+// merger copies published nodes into the consumer's tree. Identity comes from
+// the import mapping when one exists; otherwise matching is location-aware and
+// every target parent is indexed once when the walk reaches it, so re-applying
+// a publication converges instead of duplicating nested content, and two
+// same-named folders inside one publication stay two folders.
 type merger struct {
-	ctx     context.Context
-	tx      canonical.Tx
-	space   canonical.SpaceID
-	rec     *changeset.Batch
-	replace bool
-	indexes map[string]*childIndex
-	created int64
-	kept    int64
+	ctx      context.Context
+	tx       canonical.Tx
+	space    canonical.SpaceID
+	rec      *changeset.Batch
+	replace  bool
+	indexes  map[string]*childIndex
+	mappings map[string]canonical.NodeID
+	placed   map[string]canonical.NodeID
+	created  int64
+	updated  int64
+	kept     int64
 }
 
 type childIndex struct {
@@ -472,15 +535,24 @@ type childIndex struct {
 	byURL   map[string]canonical.NodeID
 }
 
-func parentKey(parent canonical.ParentRef) string {
+func ParentKey(parent canonical.ParentRef) string {
 	if parent.Type == canonical.ParentTypeNode {
 		return "node:" + string(parent.NodeID)
 	}
 	return "root:" + parent.RootKey
 }
 
+// ParentRefFromKey is the inverse of ParentKey for the shapes the store keeps.
+func ParentRefFromKey(s string) canonical.ParentRef {
+	kind, rest, _ := strings.Cut(s, ":")
+	if kind == "node" {
+		return canonical.NewNodeParent(canonical.NodeID(rest))
+	}
+	return canonical.NewRootParent(rest)
+}
+
 func (m *merger) index(parent canonical.ParentRef) (*childIndex, error) {
-	key := parentKey(parent)
+	key := ParentKey(parent)
 	if ix, ok := m.indexes[key]; ok {
 		return ix, nil
 	}
@@ -510,8 +582,9 @@ func (m *merger) placeChildren(container Node, parent canonical.ParentRef) error
 	return nil
 }
 
-// place copies one published node under parent, reusing an equivalent node
-// that already lives at that location when merging.
+// place copies one published node under parent. A node this import created
+// before is updated in place; failing that, an equivalent node already living
+// at that location is reused; failing that, a new node is created.
 func (m *merger) place(node Node, parent canonical.ParentRef) error {
 	isFolder := node.Type == string(canonical.NodeTypeFolder)
 	url := ""
@@ -520,6 +593,20 @@ func (m *merger) place(node Node, parent canonical.ParentRef) error {
 	}
 
 	if !m.replace {
+		if mapped, ok := m.mappings[node.ID]; ok {
+			used, err := m.refresh(mapped, node.Title, url, isFolder)
+			if err != nil {
+				return err
+			}
+			if used {
+				m.placed[node.ID] = mapped
+				if isFolder {
+					return m.placeChildren(node, canonical.NewNodeParent(mapped))
+				}
+				return nil
+			}
+		}
+
 		ix, err := m.index(parent)
 		if err != nil {
 			return err
@@ -533,6 +620,7 @@ func (m *merger) place(node Node, parent canonical.ParentRef) error {
 		}
 		if found {
 			m.kept++
+			m.placed[node.ID] = existing
 			if isFolder {
 				return m.placeChildren(node, canonical.NewNodeParent(existing))
 			}
@@ -556,10 +644,51 @@ func (m *merger) place(node Node, parent canonical.ParentRef) error {
 		return err
 	}
 	m.created++
+	m.placed[node.ID] = id
 	if isFolder {
 		return m.placeChildren(node, canonical.NewNodeParent(id))
 	}
 	return nil
+}
+
+// refresh applies the published title and URL to a node the consumer already
+// has. Source wins for matched content (doc 10 §9). A node that no longer
+// exists, or is no longer the kind of node the publication describes, is not
+// ours to update and the caller falls back to matching by location.
+func (m *merger) refresh(id canonical.NodeID, title, url string, isFolder bool) (bool, error) {
+	existing, err := m.tx.LoadNode(m.ctx, m.space, id)
+	if errors.Is(err, canonical.ErrNodeNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if (existing.Type == canonical.NodeTypeFolder) != isFolder {
+		return false, nil
+	}
+	changed := false
+	if existing.Title != title {
+		if err := m.rec.Apply(m.ctx, m.tx, canonical.UpdateNodeTitle{
+			SpaceID: m.space, NodeID: id, Title: title,
+		}); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+	if !isFolder && existing.URL != url {
+		if err := m.rec.Apply(m.ctx, m.tx, canonical.UpdateNodeURL{
+			SpaceID: m.space, NodeID: id, URL: url,
+		}); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+	if changed {
+		m.updated++
+	} else {
+		m.kept++
+	}
+	return true, nil
 }
 
 func newCanonicalID() (canonical.NodeID, error) {

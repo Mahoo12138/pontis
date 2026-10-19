@@ -26,8 +26,17 @@ import ImportModal from '../components/plaza/ImportModal';
 import { contentRegion } from '../styles/app-shell.css';
 import { pagePad } from '../styles/management.css';
 import { tokens } from '../styles/semantic-tokens.css';
-import { usePublication, useUnpublish, useUpdatePublication } from '../hooks/use-plaza';
+import { usePublication, useUnpublish, useUpdatePublication, useApplyPublication } from '../hooks/use-plaza';
+import { useSpaces } from '../hooks/use-spaces';
 import { formatRelativeTime } from '../lib/format';
+
+/** The server names an apply target as one string: `root:<key>` or `node:<id>`. */
+function parseTargetParent(key: string) {
+  const sep = key.indexOf(':');
+  const kind = sep < 0 ? key : key.slice(0, sep);
+  const rest = sep < 0 ? '' : key.slice(sep + 1);
+  return kind === 'node' ? { type: 'node' as const, id: rest } : { type: 'root' as const, key: rest };
+}
 
 export default function PlazaDetailPage() {
   const { publicationId } = useParams();
@@ -35,6 +44,8 @@ export default function PlazaDetailPage() {
   const { data: pub, isLoading, isError, error, refetch } = usePublication(publicationId);
   const unpublish = useUnpublish();
   const update = useUpdatePublication();
+  const apply = useApplyPublication();
+  const { data: spacesData } = useSpaces();
   const [importOpen, setImportOpen] = useState(false);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
 
@@ -97,6 +108,32 @@ export default function PlazaDetailPage() {
     );
   };
 
+  const imported = pub.import;
+  const importedSpaceName = (spacesData?.spaces ?? []).find((s) => s.id === imported?.space_id)?.name;
+
+  const handleUpdateImport = () => {
+    if (!imported) return;
+    apply.mutate(
+      {
+        id: pub.id,
+        params: {
+          space_id: imported.space_id,
+          parent: parseTargetParent(imported.target_parent),
+          strategy: 'merge',
+        },
+      },
+      {
+        onSuccess: (res) =>
+          notifications.show({
+            title: `已更新到 v${pub.version}`,
+            message: `新建 ${res.created} 项 · 更新 ${res.updated} 项 · 保留 ${res.kept} 项`,
+            color: 'coolGray',
+          }),
+        onError: (e) => reportError(e, '更新导入失败'),
+      },
+    );
+  };
+
   const handleUnpublish = () => {
     unpublish.mutate(pub.id, {
       onSuccess: () => {
@@ -135,7 +172,22 @@ export default function PlazaDetailPage() {
             </Text>
           </div>
           <Group gap={8} style={{ flexShrink: 0 }}>
-            <Button size="xs" onClick={() => setImportOpen(true)} leftSection={<IconDownload size={14} stroke={1.5} />}>
+            {imported?.has_update && (
+              <Button
+                size="xs"
+                onClick={handleUpdateImport}
+                loading={apply.isPending}
+                leftSection={<IconRefresh size={14} stroke={1.5} />}
+              >
+                更新到 v{pub.version}
+              </Button>
+            )}
+            <Button
+              size="xs"
+              variant={imported?.has_update ? 'default' : 'filled'}
+              onClick={() => setImportOpen(true)}
+              leftSection={<IconDownload size={14} stroke={1.5} />}
+            >
               导入到空间
             </Button>
             {pub.is_mine && (
@@ -187,6 +239,14 @@ export default function PlazaDetailPage() {
             </Badge>
           ))}
         </Group>
+
+        {imported && (
+          <Text fz={12} mt="sm" style={{ color: imported.has_update ? tokens.syncRecovery : tokens.textSecondary }}>
+            {imported.has_update
+              ? `你已导入到「${importedSpaceName ?? '未知空间'}」的 v${imported.last_version}，此发布已更新到 v${pub.version}。`
+              : `你已导入到「${importedSpaceName ?? '未知空间'}」，与当前版本一致。`}
+          </Text>
+        )}
 
         <Text fz={12} c="dimmed" mt="md">
           {pub.bookmark_count} 个书签 · {pub.folder_count} 个文件夹

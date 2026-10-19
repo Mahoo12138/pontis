@@ -194,6 +194,103 @@ func TestPlazaSingleBookmarkPublication(t *testing.T) {
 	}
 }
 
+// A consumer who applied a publication updates the same nodes when the
+// publisher releases a new version — not a second copy beside them.
+func TestPlazaReApplyUpdatesMappedNodes(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	bob := plazaAuth(f.bobToken)
+	alice := plazaAuth(f.sessionToken)
+	bobSpace := plazaCreateSpace(t, f, f.bobToken, "Bob evolving")
+
+	folder := plazaCreateNode(t, f, f.bobToken, bobSpace, map[string]any{
+		"type": "folder", "title": "合集", "parent": plazaMain,
+	})
+	source := plazaCreateNode(t, f, f.bobToken, bobSpace, map[string]any{
+		"type": "bookmark", "title": "旧标题", "url": "https://old.example",
+		"parent": plazaNodeParent(folder),
+	})
+
+	code, pub := doJSON(t, "POST", f.ts.URL+"/api/v1/publications", bob,
+		map[string]any{"space_id": bobSpace, "root_node_id": folder, "title": "合集"})
+	if code != http.StatusCreated {
+		t.Fatalf("publish = %d %v", code, pub)
+	}
+	pubID := pub["id"].(string)
+	applyURL := f.ts.URL + "/api/v1/publications/" + pubID + "/apply"
+	applyBody := map[string]any{"space_id": f.spaceID, "parent": plazaMain, "strategy": "merge"}
+
+	if c, res := doJSON(t, "POST", applyURL, alice, applyBody); c != http.StatusOK ||
+		res["created"].(float64) != 2 {
+		t.Fatalf("first apply = %d %v", c, res)
+	}
+
+	importedID := ""
+	for _, n := range plazaNodes(t, f, f.sessionToken, f.spaceID) {
+		if n["title"] == "旧标题" {
+			importedID = n["id"].(string)
+		}
+	}
+	if importedID == "" {
+		t.Fatal("first apply did not copy the bookmark")
+	}
+
+	// The publisher renames the source and re-captures.
+	if c, _ := doJSON(t, "PATCH", f.ts.URL+"/api/v1/spaces/"+bobSpace+"/nodes/"+source, bob,
+		map[string]any{"title": "新标题"}); c != http.StatusOK {
+		t.Fatalf("rename source = %d", c)
+	}
+	if c, body := doJSON(t, "PATCH", f.ts.URL+"/api/v1/publications/"+pubID, bob,
+		map[string]any{"snapshot": true}); c != http.StatusOK || body["version"].(float64) != 2 {
+		t.Fatalf("snapshot update = %d %v", c, body)
+	}
+
+	// The consumer is told there is something to update.
+	code, detail := doJSON(t, "GET", f.ts.URL+"/api/v1/publications/"+pubID, alice, nil)
+	if code != http.StatusOK {
+		t.Fatalf("detail = %d %v", code, detail)
+	}
+	imp, _ := detail["import"].(map[string]any)
+	if imp == nil || imp["has_update"] != true || imp["last_version"].(float64) != 1 {
+		t.Fatalf("detail import state = %v, want has_update with last_version 1", detail["import"])
+	}
+
+	code, res := doJSON(t, "POST", applyURL, alice, applyBody)
+	if code != http.StatusOK {
+		t.Fatalf("second apply = %d %v", code, res)
+	}
+	if res["created"].(float64) != 0 || res["updated"].(float64) != 1 {
+		t.Fatalf("update apply = %v, want created=0 updated=1", res)
+	}
+
+	// Identity survived: the same node carries the new title, and no second
+	// copy appeared beside it.
+	var renamed map[string]any
+	count := 0
+	for _, n := range plazaNodes(t, f, f.sessionToken, f.spaceID) {
+		if n["id"] == importedID {
+			renamed = n
+		}
+		if n["title"] == "新标题" {
+			count++
+		}
+	}
+	if renamed == nil || renamed["title"] != "新标题" {
+		t.Fatalf("mapped node %s was not updated in place: %v", importedID, renamed)
+	}
+	if count != 1 {
+		t.Fatalf("updated node appears %d times, want 1", count)
+	}
+
+	code, detail = doJSON(t, "GET", f.ts.URL+"/api/v1/publications/"+pubID, alice, nil)
+	if code != http.StatusOK {
+		t.Fatalf("detail after update = %d %v", code, detail)
+	}
+	imp, _ = detail["import"].(map[string]any)
+	if imp == nil || imp["has_update"] != false || imp["last_version"].(float64) != 2 {
+		t.Fatalf("detail import state = %v, want version 2 with no update pending", detail["import"])
+	}
+}
+
 // Re-capturing a publication whose source is gone has to fail loudly rather
 // than store an empty tree.
 func TestPlazaSnapshotUpdateRefusesDeletedSource(t *testing.T) {

@@ -46,6 +46,7 @@ export type {
   PublicationNodeDTO,
   PublicationSummary,
   PublicationDetail,
+  PublicationImportState,
   PublicationListResponse,
   PublishRequest,
   UpdatePublicationRequest,

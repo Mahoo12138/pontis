@@ -28,9 +28,20 @@ type publicationSummaryDTO struct {
 	IsMine        bool     `json:"is_mine"`
 }
 
+// publicationImportDTO is what the viewer's own apply of this publication
+// looks like: which version is in place, where, and whether the publisher has
+// moved on since.
+type publicationImportDTO struct {
+	LastVersion  int    `json:"last_version"`
+	SpaceID      string `json:"space_id"`
+	TargetParent string `json:"target_parent"`
+	HasUpdate    bool   `json:"has_update"`
+}
+
 type publicationDetailDTO struct {
 	publicationSummaryDTO
-	Tree plaza.Node `json:"tree"`
+	Tree   plaza.Node            `json:"tree"`
+	Import *publicationImportDTO `json:"import,omitempty"`
 }
 
 func summaryDTO(p plaza.Publication, viewer canonical.UserID) publicationSummaryDTO {
@@ -103,12 +114,27 @@ func filterPrivate(mine []plaza.Publication, plazaIDs map[string]bool) []plaza.P
 
 func (s *Server) handleGetPublication(w http.ResponseWriter, r *http.Request) {
 	u, _ := currentUser(r)
-	pub, err := s.Plaza.Get(r.Context(), canonical.UserID(u.ID), chi.URLParam(r, "publicationID"))
+	viewer := canonical.UserID(u.ID)
+	pub, err := s.Plaza.Get(r.Context(), viewer, chi.URLParam(r, "publicationID"))
 	if err != nil {
 		s.writePlazaError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detailDTO(pub, canonical.UserID(u.ID)))
+	dto := detailDTO(pub, viewer)
+	imp, err := s.Plaza.LatestImport(r.Context(), viewer, pub.ID)
+	switch {
+	case err == nil:
+		dto.Import = &publicationImportDTO{
+			LastVersion:  imp.LastVersion,
+			SpaceID:      string(imp.SpaceID),
+			TargetParent: plaza.ParentKey(imp.Parent),
+			HasUpdate:    imp.LastVersion < pub.Version,
+		}
+	case !errors.Is(err, plaza.ErrNotFound):
+		s.writePlazaError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dto)
 }
 
 type publishRequest struct {

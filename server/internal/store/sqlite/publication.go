@@ -4,8 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
+	"github.com/google/uuid"
+
+	"pontis/internal/canonical"
 	"pontis/internal/plaza"
 )
 
@@ -159,8 +163,100 @@ func (s *PublicationStore) UpdateMeta(ctx context.Context, id string, title, des
 	return nil
 }
 
-// Delete removes the publication.
+// Delete removes the publication. Imported copies in other spaces are
+// independent canonical nodes; only the apply records hang off this row, and
+// the schema cascades those away.
 func (s *PublicationStore) Delete(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM publications WHERE id = ?`, id)
 	return err
+}
+
+// LatestImport returns the consumer's most recent apply of a publication with
+// its published-node-to-canonical-node mapping.
+func (s *PublicationStore) LatestImport(ctx context.Context, userID, publicationID string) (plaza.Import, map[string]canonical.NodeID, error) {
+	var imp plaza.Import
+	var parentKey, createdAt, updatedAt string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, user_id, publication_id, last_version, target_space_id, target_parent, created_at, updated_at
+		FROM publication_imports WHERE user_id = ? AND publication_id = ?
+		ORDER BY updated_at DESC, created_at DESC LIMIT 1`, userID, publicationID).
+		Scan(&imp.ID, &imp.UserID, &imp.PublicationID, &imp.LastVersion, &imp.SpaceID,
+			&parentKey, &createdAt, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return plaza.Import{}, nil, plaza.ErrNotFound
+	}
+	if err != nil {
+		return plaza.Import{}, nil, err
+	}
+	imp.Parent = plaza.ParentRefFromKey(parentKey)
+	imp.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	imp.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+
+	mappings := map[string]canonical.NodeID{}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT publication_node_id, canonical_node_id FROM publication_import_mappings WHERE import_id = ?`, imp.ID)
+	if err != nil {
+		return plaza.Import{}, nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pubNode, canon string
+		if err := rows.Scan(&pubNode, &canon); err != nil {
+			return plaza.Import{}, nil, err
+		}
+		mappings[pubNode] = canonical.NodeID(canon)
+	}
+	if err := rows.Err(); err != nil {
+		return plaza.Import{}, nil, err
+	}
+	return imp, mappings, nil
+}
+
+// SaveImport records one apply and replaces its node mapping wholesale. The
+// mapping is rewritten rather than merged: a published node the snapshot no
+// longer contains must not keep pointing at a node nobody asked to update.
+func (s *PublicationStore) SaveImport(ctx context.Context, imp plaza.Import, mappings map[string]canonical.NodeID) error {
+	if imp.ID == "" {
+		id, err := uuid.NewV7()
+		if err != nil {
+			return err
+		}
+		imp.ID = id.String()
+	}
+	parentKey := plaza.ParentKey(imp.Parent)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO publication_imports (id, user_id, publication_id, last_version,
+			target_space_id, target_parent, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, publication_id, target_space_id, target_parent) DO UPDATE SET
+			last_version = excluded.last_version,
+			updated_at = excluded.updated_at`,
+		imp.ID, imp.UserID, imp.PublicationID, imp.LastVersion, string(imp.SpaceID),
+		parentKey, formatTime(imp.CreatedAt), formatTime(imp.UpdatedAt))
+	if err != nil {
+		return err
+	}
+
+	// The conflict path keeps the row that was already there, so read the id
+	// back instead of assuming the one this call generated.
+	storedID := imp.ID
+	err = s.db.QueryRowContext(ctx, `
+		SELECT id FROM publication_imports
+		WHERE user_id = ? AND publication_id = ? AND target_space_id = ? AND target_parent = ?`,
+		imp.UserID, imp.PublicationID, string(imp.SpaceID), parentKey).Scan(&storedID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM publication_import_mappings WHERE import_id = ?`, storedID); err != nil {
+		return err
+	}
+	for pubNode, canon := range mappings {
+		if _, err := s.db.ExecContext(ctx, `
+			INSERT INTO publication_import_mappings (import_id, publication_node_id, canonical_node_id)
+			VALUES (?, ?, ?)`, storedID, pubNode, string(canon)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

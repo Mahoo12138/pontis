@@ -52,6 +52,7 @@ import type {
   NodeListResponse,
   NodeType,
   PublicationDetail,
+  PublicationImportState,
   PublicationListResponse,
   PublicationNodeDTO,
   PublicationSummary,
@@ -500,9 +501,18 @@ const publicationSummaryShape = {
 export const checkPublicationSummary: Checker<PublicationSummary> =
   record(publicationSummaryShape);
 
+const publicationImportState: Checker<PublicationImportState> =
+  record<PublicationImportState>({
+    last_version: num,
+    space_id: str,
+    target_parent: str,
+    has_update: bool,
+  });
+
 export const checkPublicationDetail: Checker<PublicationDetail> = record<PublicationDetail>({
   ...publicationSummaryShape,
   tree: checkPublicationNode,
+  import: opt(publicationImportState),
 });
 
 export const checkPublicationList: Checker<PublicationListResponse> =

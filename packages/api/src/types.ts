@@ -369,8 +369,22 @@ export interface PublicationSummary {
   is_mine: boolean;
 }
 
+/**
+ * The viewer's own apply of this publication. Absent until they import it;
+ * `has_update` says the publisher released a newer version than the one in
+ * place, which is what the detail page offers to update to.
+ */
+export interface PublicationImportState {
+  last_version: number;
+  space_id: string;
+  /** Where it landed: `root:<key>` or `node:<id>`. */
+  target_parent: string;
+  has_update: boolean;
+}
+
 export interface PublicationDetail extends PublicationSummary {
   tree: PublicationNodeDTO;
+  import?: PublicationImportState;
 }
 
 export interface PublicationListResponse {
