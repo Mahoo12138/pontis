@@ -13,8 +13,8 @@
 //   asserts the server and BOTH browsers hold the same tree.
 //
 // It drives Chrome over the DevTools protocol with Node's global fetch/WebSocket
-// and adds no dependency. It needs a display, so CI does not run it — see the
-// README's known limits. It uses the E2E extension build (extension/wxt.config.ts
+// and adds no dependency. It needs a display; Linux CI provides one with Xvfb.
+// It uses the E2E extension build (extension/wxt.config.ts
 // puts the server origin in host_permissions) because the permission bubble that
 // pairing triggers is browser UI no automation can click.
 //
@@ -842,10 +842,46 @@ async function main() {
       }
     };
 
-    // One real click on 立即同步 per profile. That is the only place this control
-    // is exercised, and it is what a person uses.
+    // Observe the real transport before clicking. Merely clicking and later
+    // asking the worker directly let a broken button pass: background sync or
+    // syncBoth() could produce the same final tree without the button working.
     for (const [name, ref] of [['A', a], ['B', b]]) {
-      await withPopup(name, ref, (popup) => clickButton(popup, '立即同步', name));
+      await withPopup(name, ref, async (popup) => {
+        await waitStep(popup, "buttonReady('立即同步')", 'true', `${name}: manual sync ready`, 20_000);
+        await popup.evaluate(`
+          const original = chrome.runtime.sendMessage;
+          globalThis.__pontisManualProbe = { calls: 0, settled: false, ok: false };
+          globalThis.__pontisRestoreTransport = () => { chrome.runtime.sendMessage = original; };
+          chrome.runtime.sendMessage = function (...args) {
+            const result = original.apply(this, args);
+            if (args[0]?.type === 'pontis/manual-sync') {
+              const probe = globalThis.__pontisManualProbe;
+              probe.calls++;
+              Promise.resolve(result).then(
+                (response) => { probe.ok = response?.ok === true; probe.settled = true; },
+                () => { probe.settled = true; },
+              );
+            }
+            return result;
+          };
+        `);
+        try {
+          await clickButton(popup, '立即同步', name);
+          await waitStep(popup, 'globalThis.__pontisManualProbe.calls > 0', 'true',
+            `${name}: popup click sent manual sync`, 5_000);
+          await waitStep(popup, 'globalThis.__pontisManualProbe.settled', 'true',
+            `${name}: worker answered the popup`, 30_000);
+          const probe = await popup.evaluate('return globalThis.__pontisManualProbe;');
+          check(probe.calls === 1 && probe.ok,
+            `${name}: popup click reached the real worker exactly once and succeeded`, JSON.stringify(probe));
+        } finally {
+          await popup.evaluate(`
+            globalThis.__pontisRestoreTransport();
+            delete globalThis.__pontisRestoreTransport;
+            delete globalThis.__pontisManualProbe;
+          `);
+        }
+      });
     }
 
     // Every round after that is asked for over the same message the button
