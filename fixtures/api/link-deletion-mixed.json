@@ -1,0 +1,24 @@
+{
+  "deleted": [
+    "id-1"
+  ],
+  "skipped": [
+    {
+      "node_id": "id-2",
+      "reason": "not_in_run"
+    },
+    {
+      "detail": "https://repair.example/fixed",
+      "node_id": "id-3",
+      "reason": "url_changed"
+    },
+    {
+      "node_id": "id-4",
+      "reason": "node_gone"
+    },
+    {
+      "node_id": "id-5",
+      "reason": "node_changed"
+    }
+  ]
+}

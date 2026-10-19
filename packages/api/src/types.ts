@@ -501,7 +501,7 @@ export interface LinkCheckResultsResponse {
  * Why the delete re-check refused one finding. A stored scan is a snapshot, so
  * the node the page points at may no longer be the node that was checked.
  */
-export type LinkDeletionReason = 'not_in_run' | 'node_gone' | 'url_changed' | 'delete_failed';
+export type LinkDeletionReason = 'not_in_run' | 'node_gone' | 'node_changed' | 'url_changed' | 'delete_failed';
 
 export interface LinkDeletionSkip {
   node_id: string;

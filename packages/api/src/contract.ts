@@ -441,7 +441,7 @@ export const checkLinkCheckResults: Checker<LinkCheckResultsResponse> =
 
 export const checkLinkDeletionSkip: Checker<LinkDeletionSkip> = record<LinkDeletionSkip>({
   node_id: str,
-  reason: oneOf('not_in_run', 'node_gone', 'url_changed', 'delete_failed'),
+  reason: oneOf('not_in_run', 'node_gone', 'node_changed', 'url_changed', 'delete_failed'),
   detail: opt(str),
 });
 

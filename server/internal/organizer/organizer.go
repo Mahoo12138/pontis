@@ -309,9 +309,10 @@ func (s *Service) LinkResults(ctx context.Context, space canonical.SpaceID) (Lin
 // Reasons a deletion re-check refuses a node (doc 12 §2: a classification is
 // not a deletion, and the delete must be aimed at the thing that was scanned).
 const (
-	SkipNotInRun   = "not_in_run"
-	SkipNodeGone   = "node_gone"
-	SkipURLChanged = "url_changed"
+	SkipNotInRun    = "not_in_run"
+	SkipNodeGone    = "node_gone"
+	SkipURLChanged  = "url_changed"
+	SkipNodeChanged = "node_changed"
 	// SkipDeleteFailed is the catch-all for a delete the tree refused after the
 	// re-check passed; it is reported, never folded into "deleted".
 	SkipDeleteFailed = "delete_failed"
@@ -332,18 +333,27 @@ var (
 	ErrStaleRun = errors.New("organizer: these findings come from a run that is no longer the latest")
 )
 
+// DeletionCandidate carries the exact node version verified for a cleanup.
+// The node domain checks these conditions again inside its delete transaction.
+type DeletionCandidate struct {
+	NodeID          string
+	Epoch           int64
+	CreatedRevision int64
+	URLRevision     int64
+	CheckedURL      string
+}
+
 // VerifyDeletion re-reads the tree and returns the requested nodes that are
 // still safe to delete for being what this run flagged: still present, still
 // holding the URL that was checked. Everything else comes back as a refusal
-// rather than being quietly dropped — a bookmark the user edited since the scan
-// is a different bookmark as far as this decision goes. (A node's type cannot
-// change, so an id recorded as a bookmark is still one if it exists at all.)
+// rather than being quietly dropped — a bookmark whose URL changed since the
+// scan no longer has the evidence this decision was based on.
 //
-// The window between this answer and the caller's delete is not closed here:
-// the organizer does not mutate the tree (doc 12 §1), so the delete goes
-// through the ordinary node path, which fails if the node vanished in between.
+// The organizer does not mutate the tree (doc 12 §1). Its caller must pass each
+// candidate's conditions to the node domain, which checks them atomically with
+// deletion rather than trusting this earlier read.
 func (s *Service) VerifyDeletion(ctx context.Context, space canonical.SpaceID,
-	jobID string, nodeIDs []string) ([]string, []DeletionSkip, error) {
+	jobID string, nodeIDs []string) ([]DeletionCandidate, []DeletionSkip, error) {
 	run, ok, err := s.runs.LatestRun(ctx, space)
 	if err != nil {
 		return nil, nil, err
@@ -360,6 +370,12 @@ func (s *Service) VerifyDeletion(ctx context.Context, space canonical.SpaceID,
 	if err != nil {
 		return nil, nil, err
 	}
+	// Read the epoch before the nodes: a restore during or after the node read
+	// must make the later transaction refuse these candidates.
+	sp, err := s.trees.Space(ctx, space)
+	if err != nil {
+		return nil, nil, err
+	}
 	nodes, err := s.trees.ListNodes(ctx, space)
 	if err != nil {
 		return nil, nil, err
@@ -369,7 +385,7 @@ func (s *Service) VerifyDeletion(ctx context.Context, space canonical.SpaceID,
 		current[n.ID] = n
 	}
 
-	var verified []string
+	var verified []DeletionCandidate
 	var skipped []DeletionSkip
 	seen := map[string]bool{}
 	for _, id := range nodeIDs {
@@ -391,7 +407,10 @@ func (s *Service) VerifyDeletion(ctx context.Context, space canonical.SpaceID,
 			skipped = append(skipped, DeletionSkip{NodeID: id, Reason: SkipURLChanged, Detail: n.URL})
 			continue
 		}
-		verified = append(verified, id)
+		verified = append(verified, DeletionCandidate{
+			NodeID: id, Epoch: sp.Epoch, CreatedRevision: n.CreatedRevision,
+			URLRevision: n.URLRevision, CheckedURL: want,
+		})
 	}
 	return verified, skipped, nil
 }

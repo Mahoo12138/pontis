@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"pontis/internal/canonical"
+	"pontis/internal/library"
 	"pontis/internal/organizer"
 )
 
@@ -111,8 +112,13 @@ func (s *Server) handleDeleteBrokenLinks(w http.ResponseWriter, r *http.Request)
 		skipped = []organizer.DeletionSkip{}
 	}
 	deleted := make([]string, 0, len(verified))
-	for _, id := range verified {
-		err := s.Library.DeleteNode(r.Context(), spaceID, canonical.UserID(u.ID), canonical.NodeID(id))
+	for _, candidate := range verified {
+		id := candidate.NodeID
+		err := s.Library.DeleteBookmarkIfUnchanged(r.Context(), spaceID, canonical.UserID(u.ID), canonical.NodeID(id),
+			library.BookmarkDeleteCondition{
+				Epoch: candidate.Epoch, CreatedRevision: candidate.CreatedRevision,
+				URLRevision: candidate.URLRevision, URL: candidate.CheckedURL,
+			})
 		if err == nil {
 			deleted = append(deleted, id)
 			continue
@@ -120,11 +126,18 @@ func (s *Server) handleDeleteBrokenLinks(w http.ResponseWriter, r *http.Request)
 		// The tree had the last word. Say so instead of counting it as deleted:
 		// the page must not report a bookmark it can still see as gone.
 		reason := organizer.SkipDeleteFailed
+		detail := ""
+		var changed *library.DeleteConditionError
 		if errors.Is(err, canonical.ErrNodeNotFound) {
 			reason = organizer.SkipNodeGone
+		} else if errors.As(err, &changed) {
+			reason = organizer.SkipNodeChanged
+			if changed.URLChanged {
+				reason, detail = organizer.SkipURLChanged, changed.CurrentURL
+			}
 		}
 		s.Logger.Warn("link deletion refused by the tree", "err", err, "node", id)
-		skipped = append(skipped, organizer.DeletionSkip{NodeID: id, Reason: reason})
+		skipped = append(skipped, organizer.DeletionSkip{NodeID: id, Reason: reason, Detail: detail})
 	}
 	writeJSON(w, http.StatusOK, deleteBrokenLinksResponse{Deleted: deleted, Skipped: skipped})
 }

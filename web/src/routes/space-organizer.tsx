@@ -56,6 +56,7 @@ const STATUS_META: Record<LinkStatusClass, { label: string; color: string }> = {
 const SKIP_REASON: Record<LinkDeletionReason, string> = {
   not_in_run: '不在这次扫描结果里',
   node_gone: '已经被删除',
+  node_changed: '书签或空间已发生变化，请重新检查',
   url_changed: '链接已被修改',
   delete_failed: '树拒绝了删除',
 };

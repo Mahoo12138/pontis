@@ -172,7 +172,7 @@ export function App() {
         <Button
           loading={syncing}
           disabled={allOff}
-          onClick={() => void manualSync}
+          onClick={() => void manualSync()}
           style={{ flexGrow: 1 }}
         >
           立即同步

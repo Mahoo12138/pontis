@@ -230,6 +230,43 @@ func (s *Service) MoveNode(ctx context.Context, space canonical.SpaceID, user ca
 
 // DeleteNode removes a node and its subtree.
 func (s *Service) DeleteNode(ctx context.Context, space canonical.SpaceID, user canonical.UserID, node canonical.NodeID) error {
+	return s.deleteNode(ctx, space, user, node, nil)
+}
+
+// BookmarkDeleteCondition identifies the bookmark a derived finding was
+// verified against. Epoch and creation revision protect against restoring or
+// recreating the same UUID; URLRevision also catches a URL edited and then
+// changed back. A title edit or move does not change link-health evidence.
+type BookmarkDeleteCondition struct {
+	Epoch           int64
+	CreatedRevision int64
+	URLRevision     int64
+	URL             string
+}
+
+// DeleteConditionError means no deletion was performed because its evidence
+// changed. CurrentURL is meaningful only when URLChanged is true.
+type DeleteConditionError struct {
+	URLChanged bool
+	CurrentURL string
+}
+
+func (e *DeleteConditionError) Error() string {
+	if e.URLChanged {
+		return "library: bookmark URL changed before deletion"
+	}
+	return "library: bookmark identity or space epoch changed before deletion"
+}
+
+// DeleteBookmarkIfUnchanged checks the finding's preconditions inside the same
+// canonical write transaction that records the deletion and its undo history.
+func (s *Service) DeleteBookmarkIfUnchanged(ctx context.Context, space canonical.SpaceID, user canonical.UserID,
+	node canonical.NodeID, expected BookmarkDeleteCondition) error {
+	return s.deleteNode(ctx, space, user, node, &expected)
+}
+
+func (s *Service) deleteNode(ctx context.Context, space canonical.SpaceID, user canonical.UserID,
+	node canonical.NodeID, expected *BookmarkDeleteCondition) error {
 	origin := canonical.Origin{Type: canonical.OriginUser, UserID: user}
 	tx, err := s.writer.BeginTx(ctx)
 	if err != nil {
@@ -241,6 +278,25 @@ func (s *Service) DeleteNode(ctx context.Context, space canonical.SpaceID, user 
 			_ = tx.Rollback(ctx)
 		}
 	}()
+	if expected != nil {
+		sp, err := tx.LoadSpace(ctx, space)
+		if err != nil {
+			return err
+		}
+		if sp.Epoch != expected.Epoch {
+			return &DeleteConditionError{}
+		}
+		current, err := tx.LoadNode(ctx, space, node)
+		if err != nil {
+			return err
+		}
+		if current.Type != canonical.NodeTypeBookmark || current.CreatedRevision != expected.CreatedRevision {
+			return &DeleteConditionError{}
+		}
+		if current.URL != expected.URL || current.URLRevision != expected.URLRevision {
+			return &DeleteConditionError{URLChanged: true, CurrentURL: current.URL}
+		}
+	}
 	if _, err := s.changesets.RecordNodeOp(ctx, tx, space, origin, canonical.DeleteNode{SpaceID: space, NodeID: node}); err != nil {
 		return err
 	}

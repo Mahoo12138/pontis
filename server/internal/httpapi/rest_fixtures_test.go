@@ -78,7 +78,6 @@ func TestGoldenRESTFixtures(t *testing.T) {
 	initializeBinding(t, ts, map[string]string{"Authorization": "Bearer " + deviceToken},
 		created["id"].(string), emptyBrowserSnapshot())
 
-
 	// space_scope is either "all" or a JSON array of ids, so a single-space
 	// token carries an encoded string, not a nested array. The second token
 	// carries an expiry so the fixture shows both shapes of expires_at.
@@ -282,31 +281,34 @@ func TestGoldenRESTFixtures(t *testing.T) {
 
 	for _, f := range fixtures {
 		t.Run(f.name, func(t *testing.T) {
-			b, err := json.MarshalIndent(normalizeValue(f.value, map[string]string{}), "", "  ")
-			if err != nil {
-				t.Fatal(err)
-			}
-			b = append(b, '\n')
-
-			path := filepath.Join(restFixtureDir, f.name+".json")
-			if *updateRESTFixtures {
-				if err := os.MkdirAll(restFixtureDir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, b, 0o644); err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-
-			want, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("read fixture (run go test -run TestGoldenRESTFixtures -update-rest-fixtures): %v", err)
-			}
-			if string(want) != string(b) {
-				t.Fatalf("the REST body drifted from the golden fixture:\n got %s\nwant %s", b, want)
-			}
+			assertRESTFixture(t, f.name, f.value)
 		})
+	}
+}
+
+func assertRESTFixture(t *testing.T, name string, value any) {
+	t.Helper()
+	b, err := json.MarshalIndent(normalizeValue(value, map[string]string{}), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = append(b, '\n')
+	path := filepath.Join(restFixtureDir, name+".json")
+	if *updateRESTFixtures {
+		if err := os.MkdirAll(restFixtureDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read fixture (run go test -run TestGolden -update-rest-fixtures): %v", err)
+	}
+	if string(want) != string(b) {
+		t.Fatalf("the REST body drifted from the golden fixture:\n got %s\nwant %s", b, want)
 	}
 }
 
