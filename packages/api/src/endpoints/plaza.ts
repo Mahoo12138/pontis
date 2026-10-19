@@ -1,6 +1,7 @@
 import { client } from '../client';
 import {
   checkApplyPublication,
+  checkPlazaFacets,
   checkPublicationDetail,
   checkPublicationList,
   checkPublicationVersions,
@@ -8,6 +9,8 @@ import {
 import type {
   ApplyPublicationRequest,
   ApplyPublicationResponse,
+  PlazaFacetsResponse,
+  PlazaSearchParams,
   PublicationDetail,
   PublicationListResponse,
   PublicationVersionListResponse,
@@ -15,9 +18,28 @@ import type {
   UpdatePublicationRequest,
 } from '../types';
 
-export function listPlazaPublications(q?: string) {
-  const path = q ? `/plaza/publications?q=${encodeURIComponent(q)}` : '/plaza/publications';
-  return client.get<PublicationListResponse>(path, checkPublicationList);
+/**
+ * The plaza index. Every filter is a query parameter so a searched list is a
+ * link the user can share or come back to.
+ */
+export function listPlazaPublications(params: PlazaSearchParams = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === 'boolean') {
+      if (value) query.set(key, '1');
+      continue;
+    }
+    if (value !== undefined && value !== '') query.set(key, String(value));
+  }
+  const qs = query.toString();
+  return client.get<PublicationListResponse>(
+    `/plaza/publications${qs ? `?${qs}` : ''}`,
+    checkPublicationList,
+  );
+}
+
+export function getPlazaFacets() {
+  return client.get<PlazaFacetsResponse>('/plaza/facets', checkPlazaFacets);
 }
 
 export function getPublication(id: string) {

@@ -367,6 +367,11 @@ export interface PublicationSummary {
   created_at: string;
   updated_at: string;
   is_mine: boolean;
+  /**
+   * Up to three paths inside the published tree that matched the search term.
+   * Absent when nothing was searched, or when only the metadata matched.
+   */
+  matches?: string[];
 }
 
 /**
@@ -389,6 +394,27 @@ export interface PublicationDetail extends PublicationSummary {
 
 export interface PublicationListResponse {
   publications: PublicationSummary[];
+  /** Matches before paging, so the UI can tell "that is all" from "load more". */
+  total: number;
+}
+
+export type PlazaSort = 'updated' | 'published' | 'title';
+
+export interface PlazaSearchParams {
+  q?: string;
+  tag?: string;
+  publisher?: string;
+  sort?: PlazaSort;
+  limit?: number;
+  offset?: number;
+  /** Only the caller's own publications, whatever their visibility. */
+  mine?: boolean;
+}
+
+/** Filter values that actually have publications behind them. */
+export interface PlazaFacetsResponse {
+  tags: string[];
+  publishers: string[];
 }
 
 export interface PublishRequest {

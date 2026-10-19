@@ -399,38 +399,196 @@ func (s *Service) Unpublish(ctx context.Context, user canonical.UserID, id strin
 	return s.store.Delete(ctx, id)
 }
 
-// ListPlaza returns plaza-visible publications with search across title,
-// description, publisher name and tags.
-func (s *Service) ListPlaza(ctx context.Context, q string) ([]Publication, error) {
+// Sort orders available on the plaza index.
+const (
+	SortUpdated   = "updated"
+	SortPublished = "published"
+	SortTitle     = "title"
+)
+
+// maxMatches caps the hit paths reported for one publication.
+const maxMatches = 3
+
+// SearchParams narrows the plaza index. Q matches metadata and the titles and
+// URLs inside a published tree; Tag and Publisher are facet filters; Sort
+// orders the result; Limit and Offset page it.
+type SearchParams struct {
+	Q         string
+	Tag       string
+	Publisher string
+	Sort      string
+	Limit     int
+	Offset    int
+	// OnlyMine keeps the caller's own publications, whatever their visibility,
+	// and drops everybody else's. It filters here rather than in the interface
+	// so paging and the total still describe what is actually listed.
+	OnlyMine bool
+}
+
+// SearchResult is one publication the caller may see, with the paths inside it
+// that matched.
+type SearchResult struct {
+	Publication
+	Matches []string
+}
+
+// Search answers the plaza index for one caller: everything visible in the
+// plaza, plus that caller's own private publications. The union lives here on
+// purpose — filtering the private half somewhere else is exactly how an
+// unrelated search term starts matching them.
+func (s *Service) Search(ctx context.Context, user canonical.UserID, p SearchParams) ([]SearchResult, int, error) {
 	list, err := s.store.ListPlaza(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	out := filterQuery(list, q)
-	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
-	return out, nil
-}
-
-// ListMine returns the user's publications regardless of visibility. The same
-// query applies: a private publication is not a hit for an unrelated term.
-func (s *Service) ListMine(ctx context.Context, user canonical.UserID, q string) ([]Publication, error) {
-	list, err := s.store.ListByOwner(ctx, string(user))
+	mine, err := s.store.ListByOwner(ctx, string(user))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return filterQuery(list, q), nil
-}
+	seen := make(map[string]bool, len(list))
+	for _, pub := range list {
+		seen[pub.ID] = true
+	}
+	for _, pub := range mine {
+		if pub.Visibility == VisibilityPrivate && !seen[pub.ID] {
+			list = append(list, pub)
+			seen[pub.ID] = true
+		}
+	}
 
-func filterQuery(list []Publication, q string) []Publication {
-	needle := strings.ToLower(strings.TrimSpace(q))
-	out := make([]Publication, 0, len(list))
-	for _, p := range list {
-		if needle != "" && !matchesQuery(p, needle) {
+	needle := strings.ToLower(strings.TrimSpace(p.Q))
+	tag := strings.TrimSpace(p.Tag)
+	publisher := strings.ToLower(strings.TrimSpace(p.Publisher))
+	out := make([]SearchResult, 0, len(list))
+	for _, pub := range list {
+		if p.OnlyMine && pub.OwnerUserID != string(user) {
 			continue
 		}
-		out = append(out, p)
+		if tag != "" && !hasTag(pub.Tags, tag) {
+			continue
+		}
+		if publisher != "" && !strings.Contains(strings.ToLower(pub.PublisherName), publisher) {
+			continue
+		}
+		var matches []string
+		if needle != "" {
+			matches = matchPaths(pub, needle)
+			if len(matches) == 0 && !matchesMeta(pub, needle) {
+				continue
+			}
+		}
+		out = append(out, SearchResult{Publication: pub, Matches: matches})
 	}
+
+	sortResults(out, p.Sort)
+	total := len(out)
+	if p.Offset > 0 {
+		if p.Offset >= total {
+			return []SearchResult{}, total, nil
+		}
+		out = out[p.Offset:]
+	}
+	if p.Limit > 0 && len(out) > p.Limit {
+		out = out[:p.Limit]
+	}
+	return out, total, nil
+}
+
+// Facets lists the tags and publishers present in the plaza index, so the
+// interface can offer filters that actually have something behind them. The
+// caller's private publications are deliberately not included: they would
+// announce their existence to nobody in particular.
+func (s *Service) Facets(ctx context.Context) (tags, publishers []string, err error) {
+	list, err := s.store.ListPlaza(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	tagSet, publisherSet := map[string]bool{}, map[string]bool{}
+	for _, pub := range list {
+		for _, t := range pub.Tags {
+			if t != "" {
+				tagSet[t] = true
+			}
+		}
+		if pub.PublisherName != "" {
+			publisherSet[pub.PublisherName] = true
+		}
+	}
+	return sortedKeys(tagSet), sortedKeys(publisherSet), nil
+}
+
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
+}
+
+func hasTag(tags []string, want string) bool {
+	for _, t := range tags {
+		if strings.EqualFold(t, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesMeta(p Publication, needle string) bool {
+	if strings.Contains(strings.ToLower(p.Title), needle) ||
+		strings.Contains(strings.ToLower(p.Description), needle) ||
+		strings.Contains(strings.ToLower(p.PublisherName), needle) {
+		return true
+	}
+	for _, t := range p.Tags {
+		if strings.Contains(strings.ToLower(t), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchPaths returns up to maxMatches paths inside the published tree whose
+// title, or whose bookmark URL, contains the needle. Paths are written from
+// inside the published root, which is the collection itself.
+func matchPaths(p Publication, needle string) []string {
+	var out []string
+	var walk func(n Node, prefix []string)
+	walk = func(n Node, prefix []string) {
+		for _, child := range n.Children {
+			if len(out) >= maxMatches {
+				return
+			}
+			path := append(append([]string{}, prefix...), child.Title)
+			hay := strings.ToLower(child.Title)
+			if child.URL != nil {
+				hay += " " + strings.ToLower(*child.URL)
+			}
+			if strings.Contains(hay, needle) {
+				out = append(out, strings.Join(path, " / "))
+			}
+			walk(child, path)
+			if len(out) >= maxMatches {
+				return
+			}
+		}
+	}
+	walk(p.Tree, nil)
+	return out
+}
+
+func sortResults(list []SearchResult, by string) {
+	switch by {
+	case SortPublished:
+		sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt.After(list[j].CreatedAt) })
+	case SortTitle:
+		sort.Slice(list, func(i, j int) bool {
+			return strings.ToLower(list[i].Title) < strings.ToLower(list[j].Title)
+		})
+	default:
+		sort.Slice(list, func(i, j int) bool { return list[i].UpdatedAt.After(list[j].UpdatedAt) })
+	}
 }
 
 // load reads one publication and rewrites any legacy published node id.
@@ -805,20 +963,6 @@ func (s *Service) owned(ctx context.Context, user canonical.UserID, id string) (
 		return Publication{}, ErrNotOwner
 	}
 	return pub, nil
-}
-
-func matchesQuery(p Publication, q string) bool {
-	if strings.Contains(strings.ToLower(p.Title), q) ||
-		strings.Contains(strings.ToLower(p.Description), q) ||
-		strings.Contains(strings.ToLower(p.PublisherName), q) {
-		return true
-	}
-	for _, t := range p.Tags {
-		if strings.Contains(strings.ToLower(t), q) {
-			return true
-		}
-	}
-	return false
 }
 
 func slugify(s string) string {

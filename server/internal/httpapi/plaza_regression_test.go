@@ -452,6 +452,130 @@ func TestPlazaApplyRejectsUnknownTargetRoot(t *testing.T) {
 	}
 }
 
+// The plaza query searches inside published trees, filters by facet, pages,
+// and keeps the caller's own private publications on the same rules.
+func TestPlazaSearchFacetsPagingAndMine(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	bob := plazaAuth(f.bobToken)
+	alice := plazaAuth(f.sessionToken)
+	bobSpace := plazaCreateSpace(t, f, f.bobToken, "Bob search")
+
+	front := plazaCreateNode(t, f, f.bobToken, bobSpace, map[string]any{
+		"type": "folder", "title": "前端", "parent": plazaMain,
+	})
+	plazaCreateNode(t, f, f.bobToken, bobSpace, map[string]any{
+		"type": "bookmark", "title": "Svelte 教程", "url": "https://svelte.dev",
+		"parent": plazaNodeParent(front),
+	})
+	back := plazaCreateNode(t, f, f.bobToken, bobSpace, map[string]any{
+		"type": "folder", "title": "后端", "parent": plazaMain,
+	})
+	plazaCreateNode(t, f, f.bobToken, bobSpace, map[string]any{
+		"type": "bookmark", "title": "Postgres", "url": "https://www.postgresql.org",
+		"parent": plazaNodeParent(back),
+	})
+
+	code, pubA := doJSON(t, "POST", f.ts.URL+"/api/v1/publications", bob,
+		map[string]any{"space_id": bobSpace, "root_node_id": front, "title": "前端收藏", "tags": []string{"前端"}})
+	if code != http.StatusCreated {
+		t.Fatalf("publish A = %d %v", code, pubA)
+	}
+	code, pubB := doJSON(t, "POST", f.ts.URL+"/api/v1/publications", bob,
+		map[string]any{"space_id": bobSpace, "root_node_id": back, "title": "后端收藏", "tags": []string{"后端"}})
+	if code != http.StatusCreated {
+		t.Fatalf("publish B = %d %v", code, pubB)
+	}
+	code, pubC := doJSON(t, "POST", f.ts.URL+"/api/v1/publications", alice,
+		map[string]any{"space_id": f.spaceID, "title": "Alice 的合集", "tags": []string{"前端"}})
+	if code != http.StatusCreated {
+		t.Fatalf("publish C = %d %v", code, pubC)
+	}
+	// Bob's private one must obey the same filters as everything else.
+	code, pubD := doJSON(t, "POST", f.ts.URL+"/api/v1/publications", bob,
+		map[string]any{"space_id": bobSpace, "title": "后端草稿", "visibility": "private"})
+	if code != http.StatusCreated {
+		t.Fatalf("publish D = %d %v", code, pubD)
+	}
+
+	list := func(query string, h map[string]string) ([]map[string]any, float64) {
+		t.Helper()
+		code, body := doJSON(t, "GET", f.ts.URL+"/api/v1/plaza/publications"+query, h, nil)
+		if code != http.StatusOK {
+			t.Fatalf("list %s = %d %v", query, code, body)
+		}
+		raw, err := json.Marshal(body["publications"])
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var rows []map[string]any
+		if err := json.Unmarshal(raw, &rows); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		total, _ := body["total"].(float64)
+		return rows, total
+	}
+	titles := func(rows []map[string]any) []string {
+		out := make([]string, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, r["title"].(string))
+		}
+		return out
+	}
+
+	// A term that appears nowhere in the metadata, only as a bookmark inside a
+	// published tree, still finds the publication — and says where it hit.
+	rows, _ := list("?q=postgresql", alice)
+	if len(rows) != 1 || rows[0]["title"] != "后端收藏" {
+		t.Fatalf("content search = %v, want 后端收藏", titles(rows))
+	}
+	matches, _ := json.Marshal(rows[0]["matches"])
+	if !strings.Contains(string(matches), "Postgres") {
+		t.Fatalf("content search did not report the hit path: %v", rows[0]["matches"])
+	}
+
+	rows, _ = list("?tag=%E5%89%8D%E7%AB%AF", alice)
+	if len(rows) != 2 {
+		t.Fatalf("tag filter = %v, want the two 前端 collections", titles(rows))
+	}
+	for _, r := range rows {
+		if !containsString(r["tags"], "前端") {
+			t.Fatalf("tag filter returned a publication without it: %v", r["tags"])
+		}
+	}
+
+	rows, _ = list("?publisher=bob&q=%E6%94%B6%E8%97%8F", alice)
+	if len(rows) != 2 {
+		t.Fatalf("publisher filter = %v, want bob's two collections", titles(rows))
+	}
+
+	rows, total := list("?q=%E6%94%B6%E8%97%8F&limit=1", alice)
+	if len(rows) != 1 {
+		t.Fatalf("paged result = %v, want one row", titles(rows))
+	}
+	if total != 2 {
+		t.Fatalf("total = %v, want the unpaged count of 2", total)
+	}
+
+	rows, _ = list("?mine=1", alice)
+	for _, r := range rows {
+		if r["is_mine"] != true {
+			t.Fatalf("mine filter returned someone else's publication: %v", r["title"])
+		}
+	}
+	if len(rows) != 1 || rows[0]["title"] != "Alice 的合集" {
+		t.Fatalf("mine filter = %v, want only Alice 的合集", titles(rows))
+	}
+
+	// Bob sees his own private publication through the same query path, and
+	// only when the term actually matches it.
+	if _, total = list("?q=%E8%8D%89%E7%A8%BF", bob); total != 1 {
+		t.Fatalf("owner search for their private publication = %v, want 1", total)
+	}
+	if _, total = list("?q=%E8%8D%89%E7%A8%BF", alice); total != 0 {
+		t.Fatalf("a private publication reached another user: %v", total)
+	}
+}
+
 // Private publications are reachable only by their owner, and the plaza search
 // query filters them like any other row.
 func TestPlazaPrivatePublicationHonoursSearch(t *testing.T) {
@@ -516,4 +640,14 @@ func TestPlazaPrivatePublicationHonoursSearch(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("invalid visibility = %d %v, want 400", code, body)
 	}
+}
+
+func containsString(raw any, want string) bool {
+	list, _ := raw.([]any)
+	for _, item := range list {
+		if s, _ := item.(string); s == want {
+			return true
+		}
+	}
+	return false
 }

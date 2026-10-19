@@ -59,6 +59,7 @@ import type {
   PublicationVersion,
   PublicationVersionListResponse,
   PublicationVisibility,
+  PlazaFacetsResponse,
   RegisterDeviceResponse,
   RestoreBackupResponse,
   RootSlot,
@@ -498,6 +499,7 @@ const publicationSummaryShape = {
   created_at: str,
   updated_at: str,
   is_mine: bool,
+  matches: opt(arr(str)),
 } satisfies { [K in keyof PublicationSummary]-?: Checker<PublicationSummary[K]> };
 
 export const checkPublicationSummary: Checker<PublicationSummary> =
@@ -518,7 +520,12 @@ export const checkPublicationDetail: Checker<PublicationDetail> = record<Publica
 });
 
 export const checkPublicationList: Checker<PublicationListResponse> =
-  record<PublicationListResponse>({ publications: arr(checkPublicationSummary) });
+  record<PublicationListResponse>({ publications: arr(checkPublicationSummary), total: num });
+
+export const checkPlazaFacets: Checker<PlazaFacetsResponse> = record<PlazaFacetsResponse>({
+  tags: arr(str),
+  publishers: arr(str),
+});
 
 export const checkApplyPublication: Checker<ApplyPublicationResponse> =
   record<ApplyPublicationResponse>({ created: num, updated: num, kept: num });

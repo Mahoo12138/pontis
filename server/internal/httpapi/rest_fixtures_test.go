@@ -216,6 +216,9 @@ func TestGoldenRESTFixtures(t *testing.T) {
 		// Search that matches only the owner's private publication: the plaza
 		// index excludes it while 我的发布 still answers with it.
 		restFixture{"plaza-search-private", restGET(t, ts, token, "/api/v1/plaza/publications?q=Drafts")},
+		// A term that matches a bookmark *inside* a published tree: the answer
+		// is the publication, with the path that hit.
+		restFixture{"plaza-search-content", restGET(t, ts, token, "/api/v1/plaza/publications?q=example")},
 		// Applied into the space it came from: the merge path answers with the
 		// counts the UI reports after a plaza import.
 		restFixture{"publication-apply", restPOST(t, ts, token,

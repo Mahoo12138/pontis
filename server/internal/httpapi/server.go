@@ -250,6 +250,7 @@ func (s *Server) Router() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireSession)
 		r.Get("/api/v1/plaza/publications", s.handleListPlaza)
+		r.Get("/api/v1/plaza/facets", s.handlePlazaFacets)
 		r.Post("/api/v1/publications", s.handlePublish)
 		r.Get("/api/v1/publications/{publicationID}", s.handleGetPublication)
 		r.Get("/api/v1/publications/{publicationID}/versions", s.handleListPublicationVersions)

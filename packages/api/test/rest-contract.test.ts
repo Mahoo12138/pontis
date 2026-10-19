@@ -133,6 +133,7 @@ const contract = {
   'reset-link': (v: unknown): { reset_link: string } => checkResetLink(v, 'body'),
   'plaza-publications': (v: unknown): PublicationListResponse => checkPublicationList(v, 'body'),
   'plaza-search-private': (v: unknown): PublicationListResponse => checkPublicationList(v, 'body'),
+  'plaza-search-content': (v: unknown): PublicationListResponse => checkPublicationList(v, 'body'),
   'publication-detail': (v: unknown): PublicationDetail => checkPublicationDetail(v, 'body'),
   'publication-detail-folder': (v: unknown): PublicationDetail => checkPublicationDetail(v, 'body'),
   'publication-private': (v: unknown): PublicationDetail => checkPublicationDetail(v, 'body'),

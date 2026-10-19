@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -26,6 +27,9 @@ type publicationSummaryDTO struct {
 	CreatedAt     string   `json:"created_at"`
 	UpdatedAt     string   `json:"updated_at"`
 	IsMine        bool     `json:"is_mine"`
+	// Matches carries up to three paths inside the published tree that hit the
+	// search term. Absent when nothing was searched or only metadata matched.
+	Matches []string `json:"matches,omitempty"`
 }
 
 // publicationImportDTO is what the viewer's own apply of this publication
@@ -76,40 +80,44 @@ func detailDTO(p plaza.Publication, viewer canonical.UserID) publicationDetailDT
 
 func (s *Server) handleListPlaza(w http.ResponseWriter, r *http.Request) {
 	u, _ := currentUser(r)
-	q := r.URL.Query().Get("q")
-	all, err := s.Plaza.ListPlaza(r.Context(), q)
+	viewer := canonical.UserID(u.ID)
+	query := r.URL.Query()
+	limit, _ := strconv.Atoi(query.Get("limit"))
+	offset, _ := strconv.Atoi(query.Get("offset"))
+
+	results, total, err := s.Plaza.Search(r.Context(), viewer, plaza.SearchParams{
+		Q:         query.Get("q"),
+		Tag:       query.Get("tag"),
+		Publisher: query.Get("publisher"),
+		Sort:      query.Get("sort"),
+		Limit:     limit,
+		Offset:    offset,
+		OnlyMine:  query.Get("mine") == "1",
+	})
 	if err != nil {
+		s.Logger.Error("plaza search failed", "err", err)
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}
-	mine, err := s.Plaza.ListMine(r.Context(), canonical.UserID(u.ID), q)
-	if err != nil {
-		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
-		return
+	out := make([]publicationSummaryDTO, 0, len(results))
+	for _, res := range results {
+		dto := summaryDTO(res.Publication, viewer)
+		dto.Matches = res.Matches
+		out = append(out, dto)
 	}
-	// The plaza index carries only plaza-visible publications; private
-	// ones reach their owner through the same endpoint flagged is_mine so
-	// the 我的发布 tab works without a second round trip.
-	byID := map[string]bool{}
-	for _, p := range all {
-		byID[p.ID] = true
-	}
-	all = append(all, filterPrivate(mine, byID)...)
-	out := make([]publicationSummaryDTO, 0, len(all))
-	for _, p := range all {
-		out = append(out, summaryDTO(p, canonical.UserID(u.ID)))
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"publications": out})
+	// total counts every match before paging, so the interface can tell "this
+	// is the whole answer" from "there is more to load".
+	writeJSON(w, http.StatusOK, map[string]any{"publications": out, "total": total})
 }
 
-func filterPrivate(mine []plaza.Publication, plazaIDs map[string]bool) []plaza.Publication {
-	var out []plaza.Publication
-	for _, p := range mine {
-		if !plazaIDs[p.ID] {
-			out = append(out, p)
-		}
+func (s *Server) handlePlazaFacets(w http.ResponseWriter, r *http.Request) {
+	tags, publishers, err := s.Plaza.Facets(r.Context())
+	if err != nil {
+		s.Logger.Error("plaza facets failed", "err", err)
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
 	}
-	return out
+	writeJSON(w, http.StatusOK, map[string]any{"tags": tags, "publishers": publishers})
 }
 
 func (s *Server) handleGetPublication(w http.ResponseWriter, r *http.Request) {
