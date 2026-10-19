@@ -10,7 +10,7 @@ import { Anchor, Badge, Box, Button, Group, Stack, Text } from '@mantine/core';
 import { Section } from './Section';
 import { PairingForm, type PairingParams } from './PairingForm';
 import { chromeApi } from '../runtime/chromeApi';
-import type { UpdateOffer } from '../core/update/release';
+import { metadataForBuild, type UpdateOffer } from '../core/update/release';
 
 export function AccountTab({
   paired,
@@ -38,6 +38,9 @@ export function AccountTab({
   onPair: (params: PairingParams) => void;
   onUnpair: () => void;
 }) {
+  const build = metadataForBuild();
+  const installedVersion = chromeApi().runtime.getManifest().version;
+  const offeredVersion = update?.release || update?.version;
   return (
     <Section
       title="这台浏览器"
@@ -77,23 +80,27 @@ export function AccountTab({
                 to the install page, where the upgrade is a person's own
                 action (doc §10.3). */}
             <MetaRow label="版本">
-              <Group gap="xs" wrap="nowrap">
+              <Stack gap="xs">
                 <Text size="sm" className="pontis-mono">
-                  {chromeApi().runtime.getManifest().version}
+                  {build.release || installedVersion}
+                </Text>
+                <Text size="xs" c="dimmed" className="pontis-mono">
+                  {build.release ? `包版本 ${installedVersion}` : `开发构建${build.dirty ? ' · 有本地修改' : ''}`}
+                  {build.commit ? ` · ${build.commit.slice(0, 12)}` : ' · 构建标识未知'}
                 </Text>
                 {update && installUrl && (
-                  <>
+                  <Group gap="xs">
                     <Text size="xs" c="dimmed">
                       {update.protocolMismatch
-                        ? `本实例提供 ${update.version}，但其同步协议与本版本不匹配`
-                        : `本实例提供 ${update.version}`}
+                        ? `本实例提供 ${offeredVersion}，但其同步协议与本版本不匹配`
+                        : `本实例提供 ${offeredVersion}`}
                     </Text>
                     <Anchor size="xs" href={installUrl} target="_blank" rel="noreferrer">
                       升级说明
                     </Anchor>
-                  </>
+                  </Group>
                 )}
-              </Group>
+              </Stack>
             </MetaRow>
             <Group gap="xs" mt="xs">
               <Button size="xs" variant="subtle" color="errorRed" onClick={onUnpair}>

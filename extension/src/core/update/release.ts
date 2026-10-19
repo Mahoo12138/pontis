@@ -155,29 +155,78 @@ export function variantForBuild(): string {
     : 'sync';
 }
 
+export function metadataForBuild(): { release: string; commit: string; dirty: boolean } {
+  return typeof __PONTIS_BUILD_METADATA__ !== 'undefined'
+    ? __PONTIS_BUILD_METADATA__
+    : { release: '', commit: '', dirty: false };
+}
+
+interface ReleaseVersion { version: string; prerelease: string[] }
+
+/** Release tags use SemVer precedence; the numeric browser manifest remains
+ * unchanged. Build timestamps, commits and archive hashes cannot establish an
+ * ordering. Reject unknown syntax instead of guessing an update direction. */
+function parseReleaseTag(tag: string | undefined): ReleaseVersion | null {
+  const match = /^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(tag ?? '');
+  if (!match) return null;
+  const prerelease = match[2]?.split('.') ?? [];
+  if (prerelease.some((part) => /^\d+$/.test(part) && /^0\d/.test(part))) return null;
+  return { version: match[1]!, prerelease };
+}
+
+function comparePrereleases(left: string[], right: string[]): number {
+  if (left.length === 0 || right.length === 0) {
+    return left.length === right.length ? 0 : left.length === 0 ? 1 : -1;
+  }
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const l = left[index];
+    const r = right[index];
+    if (l === r) continue;
+    if (l === undefined || r === undefined) return l === undefined ? -1 : 1;
+    const ln = /^\d+$/.test(l);
+    const rn = /^\d+$/.test(r);
+    if (ln && rn) return BigInt(l) < BigInt(r) ? -1 : 1;
+    if (ln !== rn) return ln ? -1 : 1;
+    return l < r ? -1 : 1;
+  }
+  return 0;
+}
+
 export interface UpdateOffer {
   version: string;
+  release?: string;
   /** The offered package speaks no protocol this build does. Upgrading is
    * probably the fix, but it is not a quiet one, so the notice says so. */
   protocolMismatch: boolean;
 }
 
 /**
- * Decide whether to tell anyone anything. Equal or older versions are silence:
- * an instance rebuilt without bumping the extension version is the common case,
- * and a standing "update available" that never resolves is worse than none.
+ * A greater numeric version retains the legacy behavior. Equal numeric versions
+ * require known release identities on both sides; a dev/legacy installation has
+ * insufficient evidence to order releases. Identical releases rebuilt with new
+ * ZIP timestamps remain silent.
  */
 export function offerUpdate(
   release: ExtensionReleaseWire,
-  own: { platform: string; variant: string; version: string; protocol?: number },
+  own: { platform: string; variant: string; version: string; release?: string; protocol?: number },
 ): UpdateOffer | null {
   const artifact = release.artifacts.find(
     (a) => a.platform === own.platform && a.variant === own.variant,
   );
   if (!artifact) return null;
-  if (compareVersions(artifact.version, own.version) <= 0) return null;
+  const validNumeric = (version: string) => /^(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){1,3}$/.test(version)
+    && version.split('.').every((part) => Number.isSafeInteger(Number(part)));
+  if (!validNumeric(artifact.version) || !validNumeric(own.version)) return null;
+  const numericOrder = compareVersions(artifact.version, own.version);
+  if (numericOrder < 0) return null;
+  const nextTag = parseReleaseTag(release.release);
+  const ownTag = parseReleaseTag(own.release);
+  const nextRelease = nextTag?.version === artifact.version ? release.release : undefined;
+  if (numericOrder === 0 && (!nextRelease || !ownTag || ownTag.version !== own.version
+    || comparePrereleases(nextTag!.prerelease, ownTag.prerelease) <= 0)) return null;
   return {
     version: artifact.version,
+    ...(nextRelease ? { release: nextRelease } : {}),
     protocolMismatch: !artifact.sync_protocol_versions.includes(own.protocol ?? SYNC_PROTOCOL_VERSION),
   };
 }

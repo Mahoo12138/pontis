@@ -1,4 +1,14 @@
 import { defineConfig } from 'wxt';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { resolveBuildMetadata } from '../scripts/build-metadata.mjs';
+
+const extensionRoot = dirname(fileURLToPath(import.meta.url));
+const buildMetadata = resolveBuildMetadata({
+  root: dirname(extensionRoot),
+  version: JSON.parse(readFileSync(join(extensionRoot, 'package.json'), 'utf8')).version,
+});
 
 // E2E-only build switch (scripts/e2e-dual-profile.mjs sets these).
 //
@@ -60,7 +70,15 @@ export default defineConfig({
     // The settings page says which of the two this build is. A reader cannot
     // tell from the icon, and §8.3 refuses a label that guesses.
     'vite:build:extendConfig'(_entrypoints, config) {
-      config.define = { ...config.define, __PONTIS_NEWTAB_BUILD__: JSON.stringify(newtabBuild) };
+      config.define = {
+        ...config.define,
+        __PONTIS_NEWTAB_BUILD__: JSON.stringify(newtabBuild),
+        __PONTIS_BUILD_METADATA__: JSON.stringify(buildMetadata),
+      };
+    },
+    'build:done'(wxt) {
+      // Included in the ZIP and compared by staging with the catalog identity.
+      writeFileSync(join(wxt.config.outDir, 'pontis-build.json'), `${JSON.stringify(buildMetadata, null, 2)}\n`);
     },
   },
   manifest: {

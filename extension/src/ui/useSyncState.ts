@@ -15,6 +15,7 @@ import { mountFolderTree } from './mountFolders';
 import { errText } from './runtime';
 import type { FolderTreeNode } from './folderTree';
 import type { SpaceOption } from './BindForm';
+import { metadataForBuild, offerUpdate, platformForBuild, variantForBuild, type UpdateOffer } from '../core/update/release';
 
 /** Which actions spin their own control; the key is the control's identity. */
 export type RunAction = (key: string, fn: () => Promise<void>, then?: () => void) => Promise<void>;
@@ -28,7 +29,7 @@ function hostOf(serverUrl: string): string {
 }
 
 export function useSyncState() {
-  const { chrome, db, bootstrap, adapter, pairing } = runtime;
+  const { chrome, db, bootstrap, adapter, pairing, client } = runtime;
 
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +53,9 @@ export function useSyncState() {
   const [paired, setPaired] = useState(false);
   const [serverHost, setServerHost] = useState('');
   const [deviceLabel, setDeviceLabel] = useState('');
+  const [updateSource, setUpdateSource] = useState<{ serverUrl: string; deviceToken: string } | null>(null);
+  const [update, setUpdate] = useState<UpdateOffer | null>(null);
+  const [installUrl, setInstallUrl] = useState('');
 
   const refresh = useCallback(async () => {
     // Identity is read first, on purpose. It is the cheapest and most certain
@@ -61,7 +65,15 @@ export function useSyncState() {
     const b = await bootstrap.get();
     setPaired(Boolean(b.serverUrl && b.deviceToken));
     setDeviceLabel(b.deviceName ?? '');
-    if (b.serverUrl) setServerHost(hostOf(b.serverUrl));
+    setServerHost(b.serverUrl ? hostOf(b.serverUrl) : '');
+    // Stable while polling, but changes when the user pairs, switches servers,
+    // replaces credentials or unpairs. A request for the previous identity must
+    // never leave its update/install link on the new account.
+    setUpdateSource((previous) => {
+      if (!b.serverUrl || !b.deviceToken) return null;
+      return previous?.serverUrl === b.serverUrl && previous.deviceToken === b.deviceToken
+        ? previous : { serverUrl: b.serverUrl, deviceToken: b.deviceToken };
+    });
     setBindings(await db.bindings.toArray());
     setSessions(await db.reconSessions.toArray());
     setIntents((await db.pendingOps.filter((o) => isUnsettledOp(o)).toArray()));
@@ -76,6 +88,29 @@ export function useSyncState() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setUpdate(null);
+    setInstallUrl(updateSource ? `${updateSource.serverUrl.replace(/\/+$/, '')}/devices#install-extension` : '');
+    if (updateSource) {
+      void (async () => {
+        try {
+          const release = await client.deviceExtensions();
+          const offer = offerUpdate(release, {
+            platform: platformForBuild(), variant: variantForBuild(),
+            version: chrome.runtime.getManifest().version,
+            release: metadataForBuild().release,
+          });
+          if (!cancelled) setUpdate(offer);
+        } catch {
+          // Offline/legacy instances simply have no update information.
+          if (!cancelled) setUpdate(null);
+        }
+      })();
+    }
+    return () => { cancelled = true; };
+  }, [updateSource]);
 
   const refreshCounts = useCallback(async () => {
     const rows = await db.bindings.toArray();
@@ -212,6 +247,8 @@ export function useSyncState() {
     paired,
     serverHost,
     deviceLabel,
+    update,
+    installUrl,
     spaces,
     folders,
     addBinding,

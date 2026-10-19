@@ -53,9 +53,53 @@ describe('compareVersions', () => {
 });
 
 describe('offerUpdate', () => {
+  const ownAlpha = { platform: 'chromium', variant: 'sync', version: '0.1.0', release: 'v0.1.0-alpha.2' };
+  const alphaRelease = (tag: string, overrides: Record<string, unknown> = {}) => ({
+    ...releaseWith({ version: '0.1.0', ...overrides }), release: tag,
+  });
+
+  it('offers alpha.10 after alpha.2 even though the manifest version is unchanged', () => {
+    expect(offerUpdate(alphaRelease('v0.1.0-alpha.10'), ownAlpha))
+      .toEqual({ version: '0.1.0', release: 'v0.1.0-alpha.10', protocolMismatch: false });
+  });
+
+  it.each(['v0.1.0-alpha.1', 'v0.1.0-alpha.2'])(
+    'never offers an older or identical release (%s), regardless of build hash', (tag) => {
+      expect(offerUpdate({ ...alphaRelease(tag), commit: 'different', generated_at: '2099-01-01' }, ownAlpha))
+        .toBeNull();
+    },
+  );
+
+  it('orders prereleases and stable releases without offering a downgrade', () => {
+    expect(offerUpdate(alphaRelease('v0.1.0'), ownAlpha)?.release).toBe('v0.1.0');
+    expect(offerUpdate(alphaRelease('v0.1.0-rc.1'), { ...ownAlpha, release: 'v0.1.0-beta.10' })?.release)
+      .toBe('v0.1.0-rc.1');
+    expect(offerUpdate(alphaRelease('v0.1.0-rc.99'), { ...ownAlpha, release: 'v0.1.0' })).toBeNull();
+    expect(offerUpdate(alphaRelease('v0.1.0-alpha.2'), { ...ownAlpha, release: 'v0.1.0-alpha.10' })).toBeNull();
+  });
+
+  it.each(['', 'dev', 'v0.1.0-alpha.02', 'v0.1.0-', 'v0.1.0+local', 'v1.0.0-alpha.3'])(
+    'does not guess release ordering for missing, malformed or mismatched metadata (%s)', (tag) => {
+      expect(offerUpdate(alphaRelease(tag), ownAlpha)).toBeNull();
+      expect(offerUpdate(alphaRelease('v0.1.0-alpha.3'), { ...ownAlpha, release: tag })).toBeNull();
+    },
+  );
+
+  it('keeps numeric-version fallback for legacy installations and refuses malformed numbers', () => {
+    expect(offerUpdate(alphaRelease('v0.1.0-alpha.3'), { ...ownAlpha, release: undefined })).toBeNull();
+    expect(offerUpdate(releaseWith(), { ...ownAlpha, release: undefined })).toMatchObject({ version: '0.2.0' });
+    expect(offerUpdate(releaseWith({ version: '0.2.bad' }), ownAlpha)).toBeNull();
+  });
+
+  it('never crosses variants and flags incompatible protocols for same-version releases', () => {
+    expect(offerUpdate(alphaRelease('v0.1.0-alpha.3'), { ...ownAlpha, variant: 'start-page' })).toBeNull();
+    expect(offerUpdate(alphaRelease('v0.1.0-alpha.3', { sync_protocol_versions: [2] }), ownAlpha))
+      .toEqual({ version: '0.1.0', release: 'v0.1.0-alpha.3', protocolMismatch: true });
+  });
+
   it('offers the instance package only when it is actually newer', () => {
     expect(offerUpdate(releaseWith(), { platform: 'chromium', variant: 'sync', version: '0.1.0' }))
-      .toEqual({ version: '0.2.0', protocolMismatch: false });
+      .toEqual({ version: '0.2.0', release: 'v0.2.0', protocolMismatch: false });
     expect(offerUpdate(releaseWith(), { platform: 'chromium', variant: 'sync', version: '0.2.0' })).toBeNull();
     expect(offerUpdate(releaseWith(), { platform: 'chromium', variant: 'sync', version: '0.3.0' })).toBeNull();
   });
@@ -82,7 +126,7 @@ describe('offerUpdate', () => {
     const offer = offerUpdate(release, {
       platform: 'chromium', variant: 'sync', version: '0.1.0', protocol: 1,
     });
-    expect(offer).toEqual({ version: '0.2.0', protocolMismatch: true });
+    expect(offer).toEqual({ version: '0.2.0', release: 'v0.2.0', protocolMismatch: true });
   });
 });
 

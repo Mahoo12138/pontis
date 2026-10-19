@@ -12,7 +12,7 @@
 // here instead of becoming a release. Every check below is one of the ways
 // that happens quietly.
 import { createHash } from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { resolveBuildMetadata, verifyPackageMetadata } from './build-metadata.mjs';
 import {
   copyFileSync,
   existsSync,
@@ -76,12 +76,13 @@ const artifactsDir = join(root, 'server', 'internal', 'distribution', 'artifacts
 
 function main() {
   const expected = extensionVersion();
+  const metadata = resolveBuildMetadata({ root, version: expected });
   resetArtifactsDir();
-  const artifacts = PACKAGES.map((pkg) => stagePackage(pkg, expected));
+  const artifacts = PACKAGES.map((pkg) => stagePackage(pkg, expected, metadata));
 
   const release = {
-    release: releaseTag(),
-    commit: commitSha(),
+    release: metadata.release,
+    commit: metadata.commit,
     generated_at: new Date().toISOString(),
     artifacts,
   };
@@ -92,23 +93,28 @@ function main() {
   console.log(`-> ${artifactsDir}`);
 }
 
-function stagePackage(pkg, expectedVersion) {
+function stagePackage(pkg, expectedVersion, metadata) {
   const source = join(root, 'extension', pkg.outDir, `${pkg.zipBase}-${expectedVersion}.zip`);
   const zip = readArchive(source, pkg);
   const manifest = readEntryManifest(zip);
   verify(zip, manifest, pkg, expectedVersion);
+  const rawMetadata = readEntry(zip, 'pontis-build.json');
+  try {
+    verifyPackageMetadata(rawMetadata ? JSON.parse(rawMetadata.toString('utf8')) : null, metadata);
+  } catch (error) {
+    fail(`${zip.path}: ${error.message}`);
+  }
 
   const version = String(manifest.version);
-  const fileName = `pontis-${PLATFORM}-${pkg.variant}-v${version}.zip`;
-  // The variant sits inside the URL. Two packages that differ only by what they
-  // take over must never share an address, and each address stays immutable for
-  // its version (doc §6).
-  const url = `/downloads/extensions/${PLATFORM}/${pkg.variant}/v${version}.zip`;
-
   // The copy is what the binary carries; hashing the bytes before the copy and
   // again after is the only way the download API can mean anything when it
   // reports a digest.
   const bytes = readFileSync(source);
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  // Different alpha releases (and rebuilds) may have the same numeric manifest
+  // version. The digest identifies bytes in the URL; it never orders updates.
+  const fileName = `pontis-${PLATFORM}-${pkg.variant}-v${version}-${sha256}.zip`;
+  const url = `/downloads/extensions/${PLATFORM}/${pkg.variant}/v${version}-${sha256}.zip`;
   copyFileSync(source, join(artifactsDir, fileName));
 
   return {
@@ -117,7 +123,7 @@ function stagePackage(pkg, expectedVersion) {
     version,
     file: url,
     name: fileName,
-    sha256: createHash('sha256').update(bytes).digest('hex'),
+    sha256,
     size_bytes: bytes.length,
     manifest_version: manifest.manifest_version,
     min_server_version: MIN_SERVER_VERSION,
@@ -133,32 +139,6 @@ function extensionVersion() {
     fail('extension/package.json carries no version');
   }
   return pkg.version;
-}
-
-function releaseTag() {
-  // CI checks out a tag and knows it; locally a working tree usually does not,
-  // and an empty value is honest about that. The Go server fills the field it
-  // owns (its own product version) at request time, so nothing here has to
-  // guess the server release.
-  if (process.env.PONTIS_RELEASE) return process.env.PONTIS_RELEASE;
-  try {
-    return execSync('git describe --tags --abbrev=0', { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] })
-      .toString()
-      .trim();
-  } catch {
-    return '';
-  }
-}
-
-function commitSha() {
-  if (process.env.PONTIS_RELEASE_COMMIT) return process.env.PONTIS_RELEASE_COMMIT;
-  try {
-    return execSync('git rev-parse HEAD', { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] })
-      .toString()
-      .trim();
-  } catch {
-    return '';
-  }
 }
 
 // --- ZIP reading -------------------------------------------------------------

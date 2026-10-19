@@ -91,6 +91,7 @@ export default function ExtensionInstall() {
         <PackageRow
           key={artifact.variant}
           artifact={artifact}
+          release={data?.release ?? ''}
           builtAt={builtAt}
           commit={commit}
         />
@@ -113,10 +114,12 @@ export default function ExtensionInstall() {
 
 function PackageRow({
   artifact,
+  release,
   builtAt,
   commit,
 }: {
   artifact: DistributionArtifact;
+  release: string;
   builtAt: string;
   commit: string;
 }) {
@@ -164,7 +167,7 @@ function PackageRow({
       <DigestRow artifact={artifact} />
 
       <Text fz={12} c="dimmed" mt={6}>
-        {buildLine(builtAt, commit, artifact.min_server_version)}
+        发布批次 {release || '开发构建'} · {buildLine(builtAt, commit, artifact.min_server_version)}
       </Text>
     </div>
   );
