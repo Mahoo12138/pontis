@@ -252,7 +252,7 @@ Extension Core：Vitest + Fake Browser Adapter/Dexie test DB。
 Fake adapter + httptest 两侧都用自己的替身，跨界的形状差异只有真机能看见。这一步是脚本化的：
 
 ```sh
-pnpm build && pnpm e2e:dual-profile        # 需要能开窗口，CI 不跑
+pnpm build && pnpm e2e:dual-profile        # 本地需要显示环境；Linux CI 使用 Xvfb
 ```
 
 `scripts/e2e-dual-profile.mjs` 用 Node 的全局 fetch/WebSocket 直接说 DevTools 协议，
@@ -317,10 +317,12 @@ Dexie"是唯一合法顺序（`remoteChangeApplier` 的 `readOrder()` / `writeOr
 提交。要用 `remoteChangeApplier.test.ts` 里的 `onMacrotasks()` 包一层，把每个 adapter
 方法都推到一个 `setTimeout` 之后——只有这样才能重现真实 Chromium 的时序。
 
-双向收敛现在由 `pnpm e2e-dual-profile` 断言：A、B 各自 active 之后，服务端 4 个节点、
+双向收敛现在由 `pnpm e2e:dual-profile` 断言：A、B 各自 active 之后，服务端 4 个节点、
 两个浏览器都看到 4 个、镜像里 A 有 B 建的 `From B`、B 有 A 建的 `From A`，且没有重复节点。
 注意它是**拉式**的：B 的创建落到 rev 4 之后，A 只有在自己再跑一轮时才会收到，所以脚本在
-服务端确认之后又点了一次"立即同步"——这不是掩盖问题，协议本来就不往设备推。
+服务端确认之后会再次发送手动同步消息。首次触发必须从真实 popup 的「立即同步」按钮进入，
+脚本观察真实 `runtime.sendMessage` 的调用与后台响应，确认一次点击恰好触发一次请求。
+只有树最终收敛不能证明按钮有效：浏览器事件和后续主动同步也可能把树追平。
 
 收敛之后脚本还要再走一遍**发布升级**（扩展分发文档 §10.2、§14.2）：停掉服务端，在 A 的
 书签栏造一条离线改动（确认它进了 outbox），删掉扩展目录重新构建到**同一路径**，重启浏览器
@@ -363,8 +365,8 @@ Release 前至少：
 
 ## 12. 根命令与 CI
 
-CI（`.github/workflows/ci.yml`）不另立一套命令，跑的就是根命令，所以本地绿
-等于 CI 绿。工具版本以 `server/go.mod` 与 `packageManager` 字段为准。
+CI（`.github/workflows/ci.yml`）复用根命令；本地验证与 CI 结果分别记录，避免把不同平台、
+工具链和产物下的结果混为一谈。工具版本以 `server/go.mod` 与 `packageManager` 字段为准。
 
 | 命令 | 内容 |
 | --- | --- |
@@ -398,21 +400,27 @@ CI（`.github/workflows/ci.yml`）不另立一套命令，跑的就是根命令�
   "普通升级开始占用新标签页"，都是没人会立刻发现的错。校验通过后算 SHA-256，把两个 ZIP 与
   `manifest.json` 一起写进 `server/internal/distribution/artifacts/`。任何一项不过即中断构建。
 - 产物按 `platform` + `variant` 两个维度命名：Chromium 下有 `sync` 与 `start-page` 两个变体，
-  下载 URL 为 `/downloads/extensions/<platform>/<variant>/v<version>.zip`。服务端加载清单时会拒绝
+  下载 URL 为 `/downloads/extensions/<platform>/<variant>/v<version>-<sha256>.zip`，摘要来自真实 ZIP
+  字节，客户端只消费清单里的 `file`。服务端加载清单时会拒绝
   两个同 `platform`+`variant` 的条目。标准构建连 `start-page.html` 入口都不含（`wxt.config.ts` 的
   `entrypoints:resolved` 同时摘掉 `newtab` 与 `start-page`），设置页也不出现「起始页」标签。
 - 该目录只提交 `.gitkeep`，ZIP 是构建产物；`go:embed` 需要目录里至少有一个匹配项，
   所以未跑过发布构建的检出会得到「本实例没有内嵌安装包」而不是编译失败。
 - 接口：`GET /api/v1/distribution/extensions` 给清单（服务端自己的
   `server_version`/`http_api_version`/`sync_protocol_versions` 由 Go 注入，不由构建脚本抄），
-  `GET|HEAD /downloads/extensions/<platform>/v<version>.zip` 给字节。两者都要会话，
-  下载 URL 按版本不可变，路径只与编译期清单比对，不拼磁盘路径。
+  `GET|HEAD <清单里的 file>` 给字节。两者都要会话，
+  下载 URL 按内容摘要固定，路径只与编译期清单比对，不拼磁盘路径。
 - 扩展侧另有一条同内容的设备作用域读取 `GET /api/v1/device/extensions`：设备凭据不是
   Web 会话，会话入口它永远到不了。设置页据此在「这台浏览器」里提示本实例有更新版本，
-  只做点分数字的逐段比较，相等或更旧即沉默，任何失败（离线、旧服务端无此路由、响应不合
-  形状）都表现为「没有提示」。它从不下载包体，更不执行包里任何代码。
-- E2E 构建（`Pontis (E2E)`，预授权 origin）与新标签页构建都不是发布产物，
-  staging 的名称与 manifest 断言会把它们挡在 Release 之外。
+  先比较点分数字版本；数字相同时仅在双方具有合法、对应版本的发布 tag 时比较预发布序号。
+  同批次或更旧批次保持沉默，commit、构建时间与 ZIP 摘要不参与先后排序。旧包缺少自身
+  发布身份时保留数字比较，alpha.1/alpha.2 首次换到新包仍需手动升级。任何失败（离线、
+  旧服务端无此路由、响应不合形状）都表现为「没有提示」。它从不下载或执行包体。
+- 构建元数据由 WXT 和 staging 共用：只有干净且 HEAD 精确命中 tag 才自动标成发布，
+  未打 tag/有修改的构建不会冒充最近的旧 tag。Docker 由流水线传入 tag 和完整 commit；
+  ZIP 内的发布标记必须与当前 staging 身份一致。
+- E2E 构建（`Pontis (E2E)`，预授权 origin）不是发布产物，staging 会拒绝它。
+  新标签页构建则是正常发布的第二个变体，与标准包各自校验。
 
 ### 发布：打 tag 出全部产物
 

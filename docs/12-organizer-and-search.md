@@ -77,9 +77,11 @@ checked_at
 `checked_url` 很重要：当前 node.url 改变后，旧 scan 自动判定 stale。这条规则落在两处，缺一不可：
 
 - **读**：`LinkResults` 只回仍成立的结果——节点已不存在、或 url 与 `checked_url` 不再一致的条目都不再列出。`total` / `done` 仍是这一次运行自己的进度，不受影响。
-- **删**：结果分类不是删除指令。`POST .../organizer/link-check/delete` 带 `job_id + node_ids`，服务端逐条复检（该 Job 是否仍是这个 Space 的最新运行；节点是否还在；url 是否还是扫过的那条），通过的才交给普通节点删除，其余带原因退回：`not_in_run` / `node_gone` / `url_changed` / `delete_failed`。响应是 `{deleted[], skipped[]}`，两个数组恒为数组。
+- **删**：结果分类不是删除指令。`POST .../organizer/link-check/delete` 带 `job_id + node_ids`，服务端逐条复检（该 Job 是否仍是这个 Space 的最新运行；节点是否还在；url 是否还是扫过的那条），通过后交给节点域的条件删除，其余带原因退回：`not_in_run` / `node_gone` / `node_changed` / `url_changed` / `delete_failed`。响应是 `{deleted[], skipped[]}`，两个数组恒为数组。
 
-复检与删除之间没有关死的窗口：Organizer 不改树（§1），删除仍走节点域，节点在此期间消失就记为 `node_gone` 而不是谎报成功。整个请求有上限（单批 200 条），空批次是 400，用过期 `job_id` 是 409 `LINK_RUN_STALE`。
+Organizer 仍不改树（§1）。复检产生包含当前 epoch、节点创建修订、URL 与 URL 修订的删除条件；节点域在同一个写事务内读取当前状态、检查条件并记录普通删除 ChangeSet。复检后 URL 被修改（包括改走再改回）返回 `url_changed`；空间恢复或同 UUID 节点被重建返回 `node_changed`；节点已消失返回 `node_gone`。这些拒绝不推进 revision，也不产生删除记录。普通用户主动删除节点的语义不变。
+
+此条件保护复检到删除之间的变化；扫描结果本身尚未保存扫描时的 epoch。若恢复已发生在复检之前且同 UUID 的 URL 恰好相同，仍按现有扫描结果规则处理。整个请求有上限（单批 200 条），空批次是 400，用过期 `job_id` 是 409 `LINK_RUN_STALE`。
 
 这些是 Derived Data，不进入 Bookmark Backup。
 

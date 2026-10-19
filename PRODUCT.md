@@ -97,9 +97,11 @@ Undecided / not yet established:
 
 - No accessibility standard has been committed to in the product docs. docs/23 states density
   intent (compact, low-contrast borders, stable alignment) but no conformance target.
-- No pricing, licensing, distribution channel or public instance policy is decided.
-- Whether Firefox ships in the first public release is not settled; Chrome/Edge are the
-  surfaces in use today.
+- No pricing, licensing or public instance policy is decided. Alpha distribution is
+  established: server binaries on GitHub Releases, images on GHCR, and extension ZIPs
+  downloaded from the authenticated device page of the user's own instance.
+- Firefox has no shipped alpha package. Chrome/Edge are the surfaces in use today;
+  Edge restart persistence remains an acceptance gap (alpha.1 and alpha.2 release notes).
 
 ## Brand Commitments
 
@@ -119,6 +121,13 @@ Undecided / not yet established:
   specified in unusual depth before being widely used.
 - Working code with tests on both sides: Go server suites (`server/internal/**`, including
   `syncsim` and fault injection) and the extension's vitest suites (`extension/src/core/**`).
+- Published alpha baseline: `v0.1.0-alpha.2` at `b8901c5`, with release notes in
+  `docs/releases/v0.1.0-alpha.2.md`. The numeric server/extension version remains `0.1.0`;
+  release tags and package digests distinguish alpha builds.
+- CI includes single-binary/distribution smoke checks and two real Chromium profiles on
+  Linux with Xvfb (`.github/workflows/ci.yml`). The browser test pre-grants its test origin
+  and rebuilds the same code at the same extension path; it does not establish release-ZIP
+  permission UX, cross-version migrations, or Edge/Firefox release support.
 - A real local alpha instance: server on `127.0.0.1:8080` with SQLite at `~/.pontis-alpha`,
   and real Chromium profiles that have completed pairing, initial reconciliation, ambiguity
   resolution, mid-apply crash recovery, unbind/rebind, and two-device convergence.
@@ -126,8 +135,8 @@ Undecided / not yet established:
 
 Absences that future work must not fabricate: no real external users or deployed instances,
 no testimonials, no customer names, no case studies, no benchmarks, no comparative
-performance data, no press, no security audit, no published SLA. This is pre-alpha software
-used only by its author.
+performance data, no press, no security audit, no published SLA. This is published alpha
+software; the evidence above establishes author testing and CI, not external adoption.
 
 ## Product Principles
 

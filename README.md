@@ -3,7 +3,8 @@
 自托管的跨浏览器书签同步平台：Go 服务端 + 嵌入的 Web 控制台 + 浏览器扩展。
 设计与决策记录在 [docs/](./docs/README.md)，界面权威见 [PRODUCT.md](PRODUCT.md) 与 [DESIGN.md](DESIGN.md)。
 
-**当前状态：内部 Alpha。** 单个可执行文件已经可以跑起来（构建与演练见下），
+**当前状态：内部 Alpha，已发布 [v0.1.0-alpha.2](docs/releases/v0.1.0-alpha.2.md)。**
+单个可执行文件已经可以跑起来（构建与演练见下），
 但还没有把真实书签库当作唯一副本的条件；公开注册默认关闭，要由管理员显式开启。
 Firefox 适配排在 Chromium Alpha 之后。
 
@@ -34,13 +35,14 @@ pnpm build          # web 编译 → 扩展打包 → 两份产物暂存进 serv
 ## 部署
 
 打一个 `vX.Y.Z` 的 tag 就会产出全部目标产物（`.github/workflows/release.yml`）：四个平台的
-裸二进制挂到 GitHub Release，多架构镜像推到 `ghcr.io/<owner>/pontis`，两者都带 `latest`
-之外的版本标签。发布说明取自 `docs/releases/<tag>.md`，缺这个文件工作流会直接失败——
+裸二进制挂到 GitHub Release，多架构镜像推到 `ghcr.io/<owner>/pontis`。预发布标记为
+prerelease，镜像只推版本标签；正式版才更新镜像的 `latest`。
+发布说明取自 `docs/releases/<tag>.md`，缺这个文件工作流会直接失败——
 安装方式、已知限制与升级说明是发布的一部分，不是事后补的装饰。
 
 ```sh
 docker run -d --name pontis -p 8080:8080 -v pontis-data:/data \
-  ghcr.io/mahoo12138/pontis:v0.1.0
+  ghcr.io/mahoo12138/pontis:v0.1.0-alpha.2
 ```
 
 镜像的最终层只有服务端二进制、TLS 根证书和一个数据目录，没有 Node.js、pnpm 或 WXT 运行时。
@@ -113,9 +115,10 @@ Origin、会话 Cookie 是否标记 `Secure`，以及密码重置链接里的主
 
 ## 开发命令
 
-CI（[.github/workflows/ci.yml](./.github/workflows/ci.yml)）跑的就是这些，
-所以本地绿灯等于 CI 绿灯。工具版本：Go 以 `server/go.mod` 为准，
-Node 22 + `packageManager` 里钉住的 pnpm。
+CI（[.github/workflows/ci.yml](./.github/workflows/ci.yml)）包括 Go vet/build/race tests、
+客户端类型与单元测试、单二进制和分发冒烟，以及 Linux + Xvfb 下两个真实 Chromium
+Profile 的同步验证。下面列出本地入口；只跑单元测试不能替代构建产物或双 Profile 验收。
+工具版本：Go 以 `server/go.mod` 为准，Node 22 + `packageManager` 里钉住的 pnpm。
 
 | 命令 | 内容 |
 | --- | --- |
@@ -127,6 +130,7 @@ Node 22 + `packageManager` 里钉住的 pnpm。
 | `pnpm dev` | Vite 开发服务器，`/api` 代理到 `:8081` |
 | `pnpm dev:test` | 一键启动独立 Go + Vite 测试环境，关闭 Mock |
 | `pnpm e2e:api` | 对已启动的测试环境执行真实 HTTP API E2E |
+| `pnpm e2e:dual-profile` | 两个真实 Chromium Profile 的同步与同目录重建后状态保留；先执行 `pnpm build` |
 | `pnpm dev:extension` | WXT 扩展开发模式 |
 | `pnpm build:extension` | `wxt build` → `extension/.output/chrome-mv3`（解压目录，开发时手动加载） |
 | `pnpm build:extension:zip` | `wxt zip` → `extension/.output/pontis-chromium-<version>.zip`（标准同步扩展） |
@@ -187,7 +191,8 @@ E2E 直接使用 HTTP 接口初始化、登录和创建数据，不经过页面�
 
 - 失败的文件整体回滚，之前的版本保持不变；服务拒绝启动并打印
   `apply migration 0000NN_xxx.sql: <sqlite 错误>`。
-- 没有 down 迁移。要回到旧 schema 只能恢复备份，或者换一个数据目录。
+- 没有 down 迁移。要保留旧状态并回到旧 schema，需恢复迁移前的整实例离线备份并使用
+  对应旧版本程序；Space 备份不能替代它。也可以另建空数据目录。
 - 反复启动是安全的：已记录的版本会跳过。
 - 排查用 SQLite 客户端打开 `<data_dir>/pontis.db`，读
   `SELECT version, applied_at FROM schema_migrations ORDER BY version;`
@@ -198,21 +203,35 @@ E2E 直接使用 HTTP 接口初始化、登录和创建数据，不经过页面�
 
 ## 备份与恢复演练
 
-备份不是"文件躺在那儿"，它只有在能恢复之后才叫可靠。演练一遍：
+Space 备份与整实例备份用途不同：Space 备份保存该空间的书签树和 Canonical UUID，
+不能恢复账号、设备凭证、任务历史或数据库 schema；整实例离线备份才用于保留这些状态。
+格式与边界见 [导入导出](docs/11-import-export.md) 和 [备份设计](docs/14-backup-retention-gc.md)。
 
-1. 建备份：Web 的 Space → 备份页，或
-   `POST /api/v1/spaces/{spaceID}/backups`（会话 Token）。目录里应出现一个
-   `<Space 名>-<时间>-manual.json`，但**存储键是不可读的 UUID**——文件名只是给人看的。
-2. **先验证它能恢复，再相信它。** 在另一个数据目录起一个实例（或用另一个 Space），
-   调用 `POST /api/v1/spaces/{spaceID}/backups/{backupID}/restore`。恢复会：
-   完整校验备份（格式标记、负载版本、所属 Space、树结构：唯一 id、父可解析、
-   书签带 URL）→ 把导出顺序重排成父先子后 → 分配新的 epoch →
-   把所有绑定退回 `pending_initial`。校验不过就完全不碰现役数据。
-3. 恢复动作自己会先拍一份 *safety* 备份：那是明确的恢复前状态，出错时退回它。
-4. 恢复后的设备必须通过正式的首次对账路径重连（见"首次使用"第 3–4 步）。
-   如果这一步需要手工改数据库才能过，那是缺陷，请当作 bug 记录。
-5. 离线客户端带着待发的 `CREATE`/`DELETE` 回连：应当是服务端规划一次合并，
-   而不是把本地操作抹掉。
+**Space 恢复演练：** 在隔离的测试实例建一个包含多层目录的 Space，按以下流程验证：
+
+1. 在 Web 的 Space → 备份页创建备份，或调用
+   `POST /api/v1/spaces/{spaceID}/backups`（会话 Token），记录备份 ID 与原树。
+   `<Space 名>-<时间>-manual.json` 是展示名称，磁盘对象使用独立的 UUID 存储键。
+2. 修改测试书签后，在**同一个 Space** 调用
+   `POST /api/v1/spaces/{spaceID}/backups/{backupID}/restore`。备份目录记录和负载都绑定原
+   Space；不能拿 backup ID 恢复到另一个 Space，也不能只复制 JSON 到空实例后直接调用。
+   跨空间复制内容应走导入/导出，新增内容会取得新的 UUID。
+3. 核对恢复后的 UUID、标题、URL、父子关系和顺序。恢复会校验负载与树结构、建立新 epoch，
+   将绑定退回 `pending_initial`；返回的 `safety_backup_id` 指向恢复前的 Space 状态。
+   Safety 备份可供后续显式恢复，**不代表发生故障时会自动回退**。
+4. 用隔离的浏览器 Profile 验证恢复后的对账与收敛，再验证离线客户端带着待发的
+   `CREATE`/`DELETE` 回连时的处理。如果需要手工改数据库才能继续，应记录为缺陷，
+   不能把树恢复成功当作设备恢复成功。
+
+**整实例离线备份与演练：** 先停止服务并确认进程退出，再复制整个 `data_dir`
+（包含 `pontis.db`、`backups/` 及目录内其余文件），另存实际配置和对应二进制版本。
+不要在运行时直接复制 SQLite 主文件来代替一致备份。验证现有 Space 备份时，可以从这份
+完整副本启动隔离实例，使用独立监听端口、匹配的 `public_url` 和测试 Profile；它保留原 Space ID 与备份
+目录记录，因此可以按上述原 Space 路径演练。勿让日常浏览器连接演练实例。
+
+迁移只有向前路径。需要退回旧版本时，应停止服务，使用迁移前的完整实例副本与对应旧版本
+程序，并重新验证登录、书签和设备同步；Space 备份不能降级 schema。这里描述的是人工
+恢复演练方法，跨版本迁移失败后的完整回退仍待验收。
 
 同名 Space、同一秒创建的两个备份必须是两个不同的物理对象。删除失败要留下可重试
 的记录，不能把 catalog 删掉却把文件留在磁盘上。
@@ -230,7 +249,10 @@ Alpha 阶段的范围与未完成项记在
   在这套同源拓扑下这比双提交 token 更强，所以那层没做——触发条件记在 docs/09 §8。
   `trusted_proxies` 目前只用于判断"能否相信 `X-Forwarded-Proto`"，
   `X-Forwarded-For` 仍无人消费。
-- 真实浏览器的双端收敛有脚本（`pnpm build && pnpm e2e:dual-profile`，见 docs/21 §10），
-  但它要开窗口、要 macOS 上的 Chrome for Testing，**CI 不跑**：CI 仍然只覆盖
-  假 adapter + httptest + 真浏览器无关的那几层。
+- 真实浏览器双端收敛脚本已进入 CI 的 `Two real profiles converge` job（Linux + Xvfb），
+  本地入口为 `pnpm build && pnpm e2e:dual-profile`，见 docs/21 §10。它使用预授权测试
+  服务端 origin 的专用 E2E 扩展，不能替代发布 ZIP 首装时的真实权限授权验收；同目录
+  重建和重启验证的是同一代码版本的状态保留，不能证明跨版本 IndexedDB/schema 迁移或
+  Server × Extension 兼容矩阵。Edge 重启、Firefox 及失败升级路径的边界仍见
+  [alpha.1 发布说明](docs/releases/v0.1.0-alpha.1.md)。
 - 没有 lint 命令：`eslint` 既不是任何包的依赖，也没有配置文件。

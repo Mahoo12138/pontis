@@ -153,19 +153,19 @@ var artifacts embed.FS
 | 方法 | URL | 用途 |
 |---|---|---|
 | GET | `/api/v1/distribution/extensions` | 当前实例可下载的扩展清单 |
-| GET | `/downloads/extensions/chromium/sync/v0.1.0.zip` | 标准同步扩展，固定版本 |
-| GET | `/downloads/extensions/chromium/start-page/v0.1.0.zip` | 起始页（接管新标签页）扩展，固定版本 |
+| GET | `/downloads/extensions/chromium/sync/v0.1.0-<sha256>.zip` | 标准同步扩展，固定内容摘要 |
+| GET | `/downloads/extensions/chromium/start-page/v0.1.0-<sha256>.zip` | 起始页（接管新标签页）扩展，固定内容摘要 |
 | GET | `/downloads/extensions/firefox/v0.1.0.xpi` | 已签名 Firefox XPI（存在时） |
 | HEAD | 与下载 URL 相同 | 内容长度、ETag、Content-Type 等 |
 
-路由是建议契约，正式实现可使用统一命名规范，但同一版本的下载 URL 必须不可变。所有可下载路径应由编译时清单与服务端白名单映射，不允许把请求 URL 任意拼成磁盘路径或 `embed.FS` 的路径。
+客户端下载路径以清单的 `file` 为准，不自行拼接。当前 Chromium 产物在数字版本后加入完整 SHA-256，避免 alpha.1 与 alpha.2 的 manifest 版本同为 `0.1.0` 时复用同一 URL 却返回不同字节。同一内容 URL 不变；实例升级后不保证保留旧产物。所有可下载路径由编译时清单与服务端白名单映射，不允许把请求 URL 任意拼成磁盘路径或 `embed.FS` 的路径。
 
 下载响应：
 
 - ZIP：`Content-Type: application/zip`。
 - Firefox XPI：`Content-Type: application/x-xpinstall`（用于 Firefox 网站安装）；如果页面明确是“保存文件”，需确认浏览器实际行为。
 - `Content-Length` 与真实嵌入字节一致。
-- `ETag` 可以使用内容摘要；版本 URL 不可变。
+- `ETag` 使用内容摘要；当前下载 URL 同样包含该摘要。
 - `Content-Disposition` 按下载／安装方式选择，Chromium ZIP 使用 `attachment`。
 - 提供 SHA-256 校验值和产物大小；客户端下载后不执行远端代码。
 
@@ -184,7 +184,7 @@ V1 默认可以要求登录后访问安装页面及下载接口；若需支持�
       "platform": "chromium",
       "variant": "sync",
       "version": "0.1.0",
-      "file": "/downloads/extensions/chromium/sync/v0.1.0.zip",
+      "file": "/downloads/extensions/chromium/sync/v0.1.0-<actual-sha256>.zip",
       "sha256": "<actual-sha256>",
       "size_bytes": 0,
       "manifest_version": 3,
@@ -279,7 +279,11 @@ Pontis 扩展不只是 UI：本地 IndexedDB 保存 Binding、Mapping、Pending 
 
 扩展可在设置页显示「本实例提供更新版本」，通过 `GET /api/v1/device/extensions` 获取元数据，比较版本和兼容范围。扩展只持有设备凭据、从不持有 Web 会话，因此该清单需要一个设备作用域的读取入口；它与会话入口返回同一份内容，不做任何过滤。V1 只提供下载及升级指导，**不自动拉取 ZIP 中的 JS 作为运行时代码执行**。
 
-版本比较按点分数字逐段进行，不用字符串大小比较；版本相同或更旧时保持沉默。任何失败（离线、旧版服务端没有该路由、响应不合形状）都表现为「没有提示」，而不是错误弹窗。
+先按数字版本逐段比较；数字版本相同时，已安装扩展与实例包都有合法、对应这个数字版本的发布 tag，才按预发布规则比较，例如 `alpha.2 < alpha.10 < beta.1 < rc.1 < 正式版`。同批次重建、构建时间或 ZIP 摘要变化不构成更新，也不按 commit 的字符串大小猜测先后。平台与变体必须匹配，更新包协议不兼容时明确提示。
+
+构建同时把自身 release/commit 写进扩展与 ZIP 元数据。Git 工作区只有干净且 HEAD 精确命中 tag 时才自动标记发布；未打 tag 或有修改的构建显示为开发构建。Docker 没有 `.git` 时由发布流水线显式传入合法 tag 与完整 commit。Staging 必须核对 ZIP 内标记与当前构建身份，不能把旧 ZIP 贴成新批次。
+
+旧包或缺少发布身份时仍退回数字版本比较，不猜测同数字版本的先后。**已经安装的 alpha.1/alpha.2 不含这段新逻辑，首次换到带发布身份的新包仍需手动升级**；后续批次才能使用新提示。任何失败（离线、旧版服务端没有该路由、响应不合形状）都表现为「没有提示」，而不是错误弹窗。扩展从不自动下载或安装代码。
 
 ## 11. Firefox Unlisted 签名分发
 
@@ -338,7 +342,7 @@ ghcr.io/<owner>/pontis:vX.Y.Z
 
 - [x] Chromium ZIP 顶层有有效的 `manifest.json`，不是源码包。（2026-10-14：staging 脚本以此为硬条件，CI 亦断言）
 - [x] Web 下载页面、下载链接、版本、SHA-256、安装说明一致。（2026-10-14：真浏览器点按钮落盘的文件，摘要与页面公布值逐字节一致）
-- [ ] Docker 内下载的字节与 Release 生成文件 SHA-256 完全一致。（裸二进制已验证一致；Docker 镜像尚未构建）
+- [ ] Docker 内下载的字节与另一构建的 Release ZIP SHA-256 完全一致。（alpha.2 发布流水线已构建并验证 Docker 内的清单摘要等于实际下载字节；不同构建 ZIP 的时间戳可能不同，跨构建摘要一致性仍未保证）
 - [x] 新 Chrome Profile 安装、登录、首次绑定、首次同步完整通过。（2026-10-14：`scripts/e2e-dual-profile.mjs`，连跑两次全绿）
 - [ ] 新 Edge Profile 完成同样操作。（首装、配对、绑定、初始对账、双向收敛、离线排队均通过；重启一步被 Edge 拦下，见 §2 实测结果）
 - [x] 浏览器重启后扩展仍保持正常安装与连接。（Chrome 通过：升级阶段就是离线重启浏览器后继续。Edge 在同一路径下拦截扩展页面）
@@ -364,11 +368,13 @@ ghcr.io/<owner>/pontis:vX.Y.Z
 
 ### 14.4 发布流程
 
-- [ ] Release Build 来自确定 Tag 与依赖锁文件，不含手工覆盖产物。
-- [ ] Tag、Server Binary、Docker、Artifact Manifest 中版本来源一致且可追溯。
-- [ ] 新数据库 Docker 启动、Web 可访问、安装包可下载。
-- [ ] Docker 镜像中无需 Node.js、pnpm 或 WXT 运行时。
-- [ ] Release Notes 记录安装方式、已知限制与升级说明。
+- [x] Release Build 来自确定 Tag 与依赖锁文件，不含手工覆盖产物。（alpha.2 / `b8901c5` 发布流水线通过）
+- [x] Tag、Server Binary、Docker、Artifact Manifest 中版本来源一致且可追溯。（同上，包含 Docker 返回的 release/commit 校验；已安装旧扩展自身的批次识别限制见 §10.3）
+- [x] 新数据库 Docker 启动、Web 可访问、安装包可下载。（同上，使用独立数据卷与动态端口冒烟）
+- [x] Docker 镜像中无需 Node.js、pnpm 或 WXT 运行时。（同上，检查导出的镜像文件）
+- [x] Release Notes 记录安装方式、已知限制与升级说明。（`docs/releases/v0.1.0-alpha.2.md`）
+
+以上发布流程记录对应 [alpha.2 Release run](https://github.com/Mahoo12138/pontis/actions/runs/39086765742)，不代表工作区后续改动已经发布，也不替代 §14.1–§14.2 尚未通过的实机与失败路径验收。
 
 ## 15. 开发实施顺序
 
