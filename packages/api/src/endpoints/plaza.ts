@@ -3,12 +3,14 @@ import {
   checkApplyPublication,
   checkPublicationDetail,
   checkPublicationList,
+  checkPublicationVersions,
 } from '../contract';
 import type {
   ApplyPublicationRequest,
   ApplyPublicationResponse,
   PublicationDetail,
   PublicationListResponse,
+  PublicationVersionListResponse,
   PublishRequest,
   UpdatePublicationRequest,
 } from '../types';
@@ -39,6 +41,23 @@ export function applyPublication(id: string, params: ApplyPublicationRequest) {
     `/publications/${id}/apply`,
     params,
     checkApplyPublication,
+  );
+}
+
+// The preview runs the same copy server-side and rolls it back, so the counts
+// are what an apply would report at this moment.
+export function previewApplyPublication(id: string, params: ApplyPublicationRequest) {
+  return client.post<ApplyPublicationResponse>(
+    `/publications/${id}/apply/preview`,
+    params,
+    checkApplyPublication,
+  );
+}
+
+export function listPublicationVersions(id: string) {
+  return client.get<PublicationVersionListResponse>(
+    `/publications/${id}/versions`,
+    checkPublicationVersions,
   );
 }
 

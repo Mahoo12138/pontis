@@ -56,6 +56,8 @@ import type {
   PublicationListResponse,
   PublicationNodeDTO,
   PublicationSummary,
+  PublicationVersion,
+  PublicationVersionListResponse,
   PublicationVisibility,
   RegisterDeviceResponse,
   RestoreBackupResponse,
@@ -520,6 +522,20 @@ export const checkPublicationList: Checker<PublicationListResponse> =
 
 export const checkApplyPublication: Checker<ApplyPublicationResponse> =
   record<ApplyPublicationResponse>({ created: num, updated: num, kept: num });
+
+const publicationVersionShape = {
+  version: num,
+  bookmark_count: num,
+  folder_count: num,
+  note: str,
+  created_at: str,
+} satisfies { [K in keyof PublicationVersion]-?: Checker<PublicationVersion[K]> };
+
+export const checkPublicationVersion: Checker<PublicationVersion> =
+  record<PublicationVersion>(publicationVersionShape);
+
+export const checkPublicationVersions: Checker<PublicationVersionListResponse> =
+  record<PublicationVersionListResponse>({ versions: arr(checkPublicationVersion) });
 
 // --- import / export ---
 

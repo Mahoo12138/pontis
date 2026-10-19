@@ -49,6 +49,8 @@ export type {
   PublicationImportState,
   PublicationListResponse,
   PublishRequest,
+  PublicationVersion,
+  PublicationVersionListResponse,
   UpdatePublicationRequest,
   ApplyPublicationRequest,
   ApplyPublicationResponse,

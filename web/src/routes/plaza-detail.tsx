@@ -16,6 +16,7 @@ import {
   IconDownload,
   IconGlobe,
   IconLock,
+  IconPencil,
   IconRefresh,
   IconTrash,
 } from '@tabler/icons-react';
@@ -23,10 +24,11 @@ import Header from '../components/app-shell/Header';
 import ErrorState from '../components/common/ErrorState';
 import PublicationTree from '../components/plaza/PublicationTree';
 import ImportModal from '../components/plaza/ImportModal';
+import EditMetaModal from '../components/plaza/EditMetaModal';
 import { contentRegion } from '../styles/app-shell.css';
 import { pagePad } from '../styles/management.css';
 import { tokens } from '../styles/semantic-tokens.css';
-import { usePublication, useUnpublish, useUpdatePublication, useApplyPublication } from '../hooks/use-plaza';
+import { usePublication, usePublicationVersions, useUnpublish, useUpdatePublication, useApplyPublication } from '../hooks/use-plaza';
 import { useSpaces } from '../hooks/use-spaces';
 import { formatRelativeTime } from '../lib/format';
 
@@ -42,11 +44,13 @@ export default function PlazaDetailPage() {
   const { publicationId } = useParams();
   const navigate = useNavigate();
   const { data: pub, isLoading, isError, error, refetch } = usePublication(publicationId);
+  const { data: versionsData } = usePublicationVersions(publicationId);
   const unpublish = useUnpublish();
   const update = useUpdatePublication();
   const apply = useApplyPublication();
   const { data: spacesData } = useSpaces();
   const [importOpen, setImportOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
 
   if (isError) {
@@ -109,6 +113,7 @@ export default function PlazaDetailPage() {
   };
 
   const imported = pub.import;
+  const versions = versionsData?.versions ?? [];
   const importedSpaceName = (spacesData?.spaces ?? []).find((s) => s.id === imported?.space_id)?.name;
 
   const handleUpdateImport = () => {
@@ -199,6 +204,12 @@ export default function PlazaDetailPage() {
                 </Menu.Target>
                 <Menu.Dropdown>
                   <Menu.Item
+                    leftSection={<IconPencil size={14} stroke={1.5} />}
+                    onClick={() => setEditOpen(true)}
+                  >
+                    编辑信息
+                  </Menu.Item>
+                  <Menu.Item
                     leftSection={<IconRefresh size={14} stroke={1.5} />}
                     disabled={update.isPending}
                     onClick={handleSnapshotUpdate}
@@ -263,12 +274,50 @@ export default function PlazaDetailPage() {
         >
           <PublicationTree root={pub.tree} />
         </div>
+
+        {versions.length > 1 && (
+          <div style={{ marginTop: 16 }}>
+            <Text fz={12} fw={600} c="dimmed" mb={6}>
+              版本历史
+            </Text>
+            {versions.map((v) => (
+              <Group
+                key={v.version}
+                gap={10}
+                wrap="nowrap"
+                style={{ height: 24, fontSize: 12, color: tokens.textSecondary }}
+              >
+                <span style={{ width: 30, flexShrink: 0 }}>v{v.version}</span>
+                <span
+                  style={{
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {v.note}
+                </span>
+                <span style={{ flex: 1 }} />
+                <span style={{ flexShrink: 0 }}>
+                  {v.bookmark_count} 个书签 · {v.folder_count} 个文件夹 · {formatRelativeTime(v.created_at)}
+                </span>
+              </Group>
+            ))}
+          </div>
+        )}
       </div>
 
       <ImportModal
         publication={pub}
         opened={importOpen}
         onClose={() => setImportOpen(false)}
+      />
+
+      <EditMetaModal
+        publication={pub}
+        opened={editOpen}
+        onClose={() => setEditOpen(false)}
       />
 
       <Modal

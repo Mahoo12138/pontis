@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   listPlazaPublications,
   getPublication,
+  listPublicationVersions,
   publish,
   updatePublication,
   applyPublication,
@@ -25,6 +26,15 @@ export function usePublication(id: string | undefined) {
   return useQuery({
     queryKey: ['publications', id],
     queryFn: () => getPublication(id!),
+    enabled: !!id,
+    staleTime: 60_000,
+  });
+}
+
+export function usePublicationVersions(id: string | undefined) {
+  return useQuery({
+    queryKey: ['publications', id, 'versions'],
+    queryFn: () => listPublicationVersions(id!),
     enabled: !!id,
     staleTime: 60_000,
   });

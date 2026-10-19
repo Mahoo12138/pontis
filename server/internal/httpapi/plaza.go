@@ -168,9 +168,10 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 }
 
 type updatePublicationRequest struct {
-	Title       *string `json:"title"`
-	Description *string `json:"description"`
-	Visibility  *string `json:"visibility"`
+	Title       *string   `json:"title"`
+	Description *string   `json:"description"`
+	Tags        *[]string `json:"tags"`
+	Visibility  *string   `json:"visibility"`
 	// Snapshot signals a re-capture from the source space.
 	Snapshot bool `json:"snapshot"`
 }
@@ -196,12 +197,47 @@ func (s *Server) handleUpdatePublication(w http.ResponseWriter, r *http.Request)
 		v := plaza.Visibility(*req.Visibility)
 		vis = &v
 	}
-	pub, err := s.Plaza.UpdateMeta(r.Context(), canonical.UserID(u.ID), id, req.Title, req.Description, vis)
+	meta := plaza.MetaParams{
+		Title:       req.Title,
+		Description: req.Description,
+		Tags:        req.Tags,
+		Visibility:  vis,
+	}
+	pub, err := s.Plaza.UpdateMeta(r.Context(), canonical.UserID(u.ID), id, meta)
 	if err != nil {
 		s.writePlazaError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, detailDTO(pub, canonical.UserID(u.ID)))
+}
+
+// publicationVersionDTO is one entry of a publication's snapshot history.
+type publicationVersionDTO struct {
+	Version       int    `json:"version"`
+	BookmarkCount int64  `json:"bookmark_count"`
+	FolderCount   int64  `json:"folder_count"`
+	Note          string `json:"note"`
+	CreatedAt     string `json:"created_at"`
+}
+
+func (s *Server) handleListPublicationVersions(w http.ResponseWriter, r *http.Request) {
+	u, _ := currentUser(r)
+	versions, err := s.Plaza.Versions(r.Context(), canonical.UserID(u.ID), chi.URLParam(r, "publicationID"))
+	if err != nil {
+		s.writePlazaError(w, r, err)
+		return
+	}
+	out := make([]publicationVersionDTO, 0, len(versions))
+	for _, v := range versions {
+		out = append(out, publicationVersionDTO{
+			Version:       v.Version,
+			BookmarkCount: v.BookmarkCount,
+			FolderCount:   v.FolderCount,
+			Note:          v.Note,
+			CreatedAt:     v.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"versions": out})
 }
 
 func (s *Server) handleUnpublish(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +274,27 @@ func (s *Server) handleApplyPublication(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, res)
 }
 
+// handlePreviewApplyPublication answers with the counts an apply would report,
+// without keeping any of them.
+func (s *Server) handlePreviewApplyPublication(w http.ResponseWriter, r *http.Request) {
+	u, _ := currentUser(r)
+	id := chi.URLParam(r, "publicationID")
+	var req applyPublicationRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	res, err := s.Plaza.PreviewApply(r.Context(), canonical.UserID(u.ID), id, plaza.ApplyParams{
+		SpaceID:  canonical.SpaceID(req.SpaceID),
+		Parent:   req.Parent.toDomain(),
+		Strategy: req.Strategy,
+	})
+	if err != nil {
+		s.writePlazaError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (s *Server) writePlazaError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, plaza.ErrNotFound):
@@ -254,6 +311,12 @@ func (s *Server) writePlazaError(w http.ResponseWriter, r *http.Request, err err
 		s.writeError(w, r, http.StatusBadRequest, "INVALID_APPLY", "strategy must be merge or replace")
 	case errors.Is(err, plaza.ErrInvalidVisibility):
 		s.writeError(w, r, http.StatusBadRequest, "INVALID_VISIBILITY", "visibility must be private or plaza")
+	case errors.Is(err, plaza.ErrTitleTooLong):
+		s.writeError(w, r, http.StatusBadRequest, "TITLE_TOO_LONG", "title must be at most 255 characters")
+	case errors.Is(err, plaza.ErrTooManyTags):
+		s.writeError(w, r, http.StatusBadRequest, "TOO_MANY_TAGS", "at most 10 tags")
+	case errors.Is(err, plaza.ErrTagTooLong):
+		s.writeError(w, r, http.StatusBadRequest, "TAG_TOO_LONG", "each tag must be at most 32 characters")
 	case errors.Is(err, canonical.ErrSpaceNotFound):
 		s.writeError(w, r, http.StatusNotFound, "SPACE_NOT_FOUND", "unknown space")
 	case errors.Is(err, canonical.ErrParentNotFolder), errors.Is(err, canonical.ErrNodeIsBookmark):

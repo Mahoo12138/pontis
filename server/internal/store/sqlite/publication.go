@@ -47,7 +47,8 @@ func scanPublication(row interface{ Scan(dest ...any) error }) (plaza.Publicatio
 	return p, nil
 }
 
-// Insert writes a new publication with its tree snapshot.
+// Insert writes a new publication with its tree snapshot and its first
+// version row, together in one transaction.
 func (s *PublicationStore) Insert(ctx context.Context, p plaza.Publication) error {
 	tree, err := json.Marshal(p.Tree)
 	if err != nil {
@@ -61,7 +62,13 @@ func (s *PublicationStore) Insert(ctx context.Context, p plaza.Publication) erro
 	if p.RootNodeID != "" {
 		rootNode = p.RootNodeID
 	}
-	_, err = s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO publications (id, slug, owner_user_id, space_id, root_node_id,
 			title, description, tags, version, visibility, tree, bookmark_count, folder_count,
 			created_at, updated_at, node_key)
@@ -69,8 +76,52 @@ func (s *PublicationStore) Insert(ctx context.Context, p plaza.Publication) erro
 		p.ID, p.Slug, p.OwnerUserID, p.SpaceID, rootNode,
 		p.Title, p.Description, string(tags), p.Version, string(p.Visibility), string(tree),
 		p.BookmarkCount, p.FolderCount,
-		formatTime(p.CreatedAt), formatTime(p.UpdatedAt), p.NodeKey)
+		formatTime(p.CreatedAt), formatTime(p.UpdatedAt), p.NodeKey); err != nil {
+		return err
+	}
+	if err := insertVersion(ctx, tx, p.ID, plaza.Version{
+		Version: p.Version, BookmarkCount: p.BookmarkCount, FolderCount: p.FolderCount,
+		Note: "初始发布", CreatedAt: p.CreatedAt,
+	}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// insertVersion appends one version row. It takes the transaction so a
+// publication can never be left pointing at a version nobody recorded.
+func insertVersion(ctx context.Context, tx *sql.Tx, publicationID string, v plaza.Version) error {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO publication_versions (id, publication_id, version, bookmark_count, folder_count, note, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id.String(), publicationID, v.Version, v.BookmarkCount, v.FolderCount, v.Note, formatTime(v.CreatedAt))
 	return err
+}
+
+// ListVersions returns the snapshots a publication has carried, newest first.
+func (s *PublicationStore) ListVersions(ctx context.Context, publicationID string) ([]plaza.Version, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT version, bookmark_count, folder_count, note, created_at
+		FROM publication_versions WHERE publication_id = ? ORDER BY version DESC`, publicationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []plaza.Version
+	for rows.Next() {
+		var v plaza.Version
+		var createdAt string
+		if err := rows.Scan(&v.Version, &v.BookmarkCount, &v.FolderCount, &v.Note, &createdAt); err != nil {
+			return nil, err
+		}
+		v.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 // Get loads one publication.
@@ -128,35 +179,62 @@ func (s *PublicationStore) ListByOwner(ctx context.Context, userID string) ([]pl
 	return out, rows.Err()
 }
 
-// UpdateSnapshot rewrites the tree and bumps the version.
-func (s *PublicationStore) UpdateSnapshot(ctx context.Context, id string, tree plaza.Node, bookmarks, folders int64, version int, at time.Time) error {
+// UpdateSnapshot rewrites the tree and appends the version row it belongs to.
+func (s *PublicationStore) UpdateSnapshot(ctx context.Context, id string, tree plaza.Node,
+	bookmarks, folders int64, version int, note string, at time.Time) error {
 	treeJSON, err := json.Marshal(tree)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE publications SET tree = ?, bookmark_count = ?, folder_count = ?, version = ?, updated_at = ?
-		WHERE id = ?`, string(treeJSON), bookmarks, folders, version, formatTime(at), id)
-	return err
+		WHERE id = ?`, string(treeJSON), bookmarks, folders, version, formatTime(at), id); err != nil {
+		return err
+	}
+	if err := insertVersion(ctx, tx, id, plaza.Version{
+		Version: version, BookmarkCount: bookmarks, FolderCount: folders, Note: note, CreatedAt: at,
+	}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
-// UpdateMeta patches title/description/visibility.
-func (s *PublicationStore) UpdateMeta(ctx context.Context, id string, title, description *string, visibility *plaza.Visibility, at time.Time) error {
-	if title != nil {
-		if _, err := s.db.ExecContext(ctx, `UPDATE publications SET title = ?, updated_at = ? WHERE id = ?`,
-			*title, formatTime(at), id); err != nil {
+// UpdateMeta patches title/description/tags/visibility. Each field is one
+// statement so a nil field stays exactly as stored; the caller runs inside no
+// transaction, and a half-applied patch is corrected by the next one.
+func (s *PublicationStore) UpdateMeta(ctx context.Context, id string, p plaza.MetaParams, at time.Time) error {
+	patch := func(column string, value any) error {
+		_, err := s.db.ExecContext(ctx,
+			`UPDATE publications SET `+column+` = ?, updated_at = ? WHERE id = ?`, value, formatTime(at), id)
+		return err
+	}
+	if p.Title != nil {
+		if err := patch("title", *p.Title); err != nil {
 			return err
 		}
 	}
-	if description != nil {
-		if _, err := s.db.ExecContext(ctx, `UPDATE publications SET description = ?, updated_at = ? WHERE id = ?`,
-			*description, formatTime(at), id); err != nil {
+	if p.Description != nil {
+		if err := patch("description", *p.Description); err != nil {
 			return err
 		}
 	}
-	if visibility != nil {
-		if _, err := s.db.ExecContext(ctx, `UPDATE publications SET visibility = ?, updated_at = ? WHERE id = ?`,
-			string(*visibility), formatTime(at), id); err != nil {
+	if p.Tags != nil {
+		tags, err := json.Marshal(*p.Tags)
+		if err != nil {
+			return err
+		}
+		if err := patch("tags", string(tags)); err != nil {
+			return err
+		}
+	}
+	if p.Visibility != nil {
+		if err := patch("visibility", string(*p.Visibility)); err != nil {
 			return err
 		}
 	}

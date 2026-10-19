@@ -252,9 +252,11 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/v1/plaza/publications", s.handleListPlaza)
 		r.Post("/api/v1/publications", s.handlePublish)
 		r.Get("/api/v1/publications/{publicationID}", s.handleGetPublication)
+		r.Get("/api/v1/publications/{publicationID}/versions", s.handleListPublicationVersions)
 		r.Patch("/api/v1/publications/{publicationID}", s.handleUpdatePublication)
 		r.Delete("/api/v1/publications/{publicationID}", s.handleUnpublish)
 		r.Post("/api/v1/publications/{publicationID}/apply", s.handleApplyPublication)
+		r.Post("/api/v1/publications/{publicationID}/apply/preview", s.handlePreviewApplyPublication)
 	})
 
 	// Device registration (web session): returns the one-time device secret.

@@ -409,6 +409,7 @@ export interface PublishRequest {
 export interface UpdatePublicationRequest {
   title?: string;
   description?: string;
+  tags?: string[];
   visibility?: PublicationVisibility;
   snapshot?: boolean;
 }
@@ -423,6 +424,19 @@ export interface ApplyPublicationResponse {
   created: number;
   updated: number;
   kept: number;
+}
+
+/** One snapshot a publication has carried, newest first. */
+export interface PublicationVersion {
+  version: number;
+  bookmark_count: number;
+  folder_count: number;
+  note: string;
+  created_at: string;
+}
+
+export interface PublicationVersionListResponse {
+  versions: PublicationVersion[];
 }
 
 // ─── Import / Export (pinned by fixtures/api) ──────────────────────────────

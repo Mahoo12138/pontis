@@ -167,6 +167,27 @@ func TestGoldenRESTFixtures(t *testing.T) {
 	if publicationID == "" {
 		t.Fatalf("publish returned no id: %v", publication)
 	}
+	// A folder publication and a private one, in their own space: the whole
+	// -space snapshot above cannot show that a subtree keeps its root node,
+	// and nothing else in the corpus carries visibility `private`. They live
+	// in a third space so the tree the transfer and start-page fixtures read
+	// stays the one they were captured against.
+	collectionSpaceID := restPOST(t, ts, token, "/api/v1/spaces",
+		map[string]string{"name": "Collections"})["id"].(string)
+	shelfNodeId := restPOST(t, ts, token, "/api/v1/spaces/"+collectionSpaceID+"/nodes", map[string]any{
+		"type": "folder", "title": "Shelf", "parent": map[string]string{"type": "root", "key": "main"},
+	})["id"].(string)
+	restPOST(t, ts, token, "/api/v1/spaces/"+collectionSpaceID+"/nodes", map[string]any{
+		"type": "bookmark", "title": "Go", "url": "https://go.dev",
+		"parent": map[string]string{"type": "node", "id": shelfNodeId},
+	})
+	folderPublicationID := restPOST(t, ts, token, "/api/v1/publications", map[string]any{
+		"space_id": collectionSpaceID, "root_node_id": shelfNodeId,
+		"title": "Shelf", "tags": []string{"go"}, "visibility": "plaza",
+	})["id"].(string)
+	privatePublicationID := restPOST(t, ts, token, "/api/v1/publications", map[string]any{
+		"space_id": collectionSpaceID, "title": "Drafts", "visibility": "private",
+	})["id"].(string)
 	exported := restPOST(t, ts, token, "/api/v1/spaces/"+spaceID+"/export",
 		map[string]string{"format": "netscape_html"})
 	content, _ := exported["content"].(string)
@@ -185,6 +206,16 @@ func TestGoldenRESTFixtures(t *testing.T) {
 		restFixture{"reset-link", resetLink},
 		restFixture{"plaza-publications", restGET(t, ts, token, "/api/v1/plaza/publications")},
 		restFixture{"publication-detail", restGET(t, ts, token, "/api/v1/publications/"+publicationID)},
+		// A subtree snapshot: its tree root is the published folder itself,
+		// which is what lets an apply copy the folder rather than only its
+		// contents.
+		restFixture{"publication-detail-folder", restGET(t, ts, token, "/api/v1/publications/"+folderPublicationID)},
+		// The private shape itself: same body, different visibility, and the
+		// only fixture where the plaza index does not carry the row.
+		restFixture{"publication-private", restGET(t, ts, token, "/api/v1/publications/"+privatePublicationID)},
+		// Search that matches only the owner's private publication: the plaza
+		// index excludes it while 我的发布 still answers with it.
+		restFixture{"plaza-search-private", restGET(t, ts, token, "/api/v1/plaza/publications?q=Drafts")},
 		// Applied into the space it came from: the merge path answers with the
 		// counts the UI reports after a plaza import.
 		restFixture{"publication-apply", restPOST(t, ts, token,

@@ -10,7 +10,8 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconAlertTriangle } from '@tabler/icons-react';
-import type { PublicationSummary } from '@pontis/api';
+import type { ApplyPublicationRequest, ApplyPublicationResponse, PublicationSummary } from '@pontis/api';
+import { previewApplyPublication } from '@pontis/api/endpoints/plaza';
 import { useApplyPublication } from '../../hooks/use-plaza';
 import { useNodes, useRootSlots } from '../../hooks/use-nodes';
 import { useSpaces } from '../../hooks/use-spaces';
@@ -18,7 +19,9 @@ import { tokens } from '../../styles/semantic-tokens.css';
 
 /**
  * Consumer apply flow: choose target space + location + strategy, then copy
- * the publication snapshot into the space. Replace states its impact up front.
+ * the publication snapshot into the space. The impact is previewable because
+ * the server runs the real copy and rolls it back, so the counts are not a
+ * second guess at what the apply will do.
  */
 export default function ImportModal({
   publication,
@@ -36,6 +39,9 @@ export default function ImportModal({
   const [spaceId, setSpaceId] = useState('');
   const [location, setLocation] = useState<string>('root:');
   const [strategy, setStrategy] = useState<'merge' | 'replace'>('merge');
+  const [preview, setPreview] = useState<ApplyPublicationResponse | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   useEffect(() => {
     if (opened) {
@@ -72,28 +78,51 @@ export default function ImportModal({
     }
   }, [locationOptions, location]);
 
+  // Any change to where or how the copy would land invalidates a preview that
+  // described a different target.
+  useEffect(() => {
+    setPreview(null);
+    setPreviewError(null);
+  }, [spaceId, location, strategy]);
+
   if (!publication) return null;
 
   const targetLabel =
     locationOptions.find((o) => o.value === location)?.label ?? '所选位置';
 
+  const requestParams = (): ApplyPublicationRequest => {
+    const [type, key] = location.split(':');
+    return {
+      space_id: spaceId,
+      parent: type === 'node' ? { type: 'node', id: key } : { type: 'root', key: key || undefined },
+      strategy,
+    };
+  };
+
+  const handlePreview = () => {
+    if (!spaceId) return;
+    setPreviewing(true);
+    setPreviewError(null);
+    previewApplyPublication(publication.id, requestParams())
+      .then(setPreview)
+      .catch((e: unknown) =>
+        setPreviewError(e instanceof Error ? e.message : '预览失败'),
+      )
+      .finally(() => setPreviewing(false));
+  };
+
   const handleApply = () => {
     if (!spaceId) return;
-    const [type, key] = location.split(':');
     apply.mutate(
       {
         id: publication.id,
-        params: {
-          space_id: spaceId,
-          parent: type === 'node' ? { type: 'node', id: key } : { type: 'root', key: key || undefined },
-          strategy,
-        },
+        params: requestParams(),
       },
       {
         onSuccess: (res) => {
           notifications.show({
             title: `已导入「${publication.title}」`,
-            message: `新建 ${res.created} 项 · 保留 ${res.kept} 项`,
+            message: `新建 ${res.created} 项 · 更新 ${res.updated} 项 · 保留 ${res.kept} 项`,
             color: 'coolGray',
           });
           onClose();
@@ -140,7 +169,7 @@ export default function ImportModal({
         </Radio.Group>
         {strategy === 'merge' ? (
           <Text fz={12} c="dimmed">
-            已存在的同名内容将被保留,仅新建缺失的条目。
+            之前从这里导入过的内容会被认出来:缺失的新建,发布里改过标题或链接的会更新,其余保持不动。
           </Text>
         ) : (
           <Group gap={6} align="flex-start" wrap="nowrap"
@@ -156,6 +185,23 @@ export default function ImportModal({
             </Text>
           </Group>
         )}
+        <Group gap="sm" align="center" wrap="nowrap">
+          <Button
+            size="compact-xs"
+            variant="default"
+            onClick={handlePreview}
+            loading={previewing}
+            disabled={locationOptions.length === 0}
+          >
+            预览影响
+          </Button>
+          {previewError && <Text fz={12} c="errorRed">{previewError}</Text>}
+          {preview && (
+            <Text fz={12} c="dimmed">
+              预计新建 {preview.created} 项 · 更新 {preview.updated} 项 · 保留 {preview.kept} 项
+            </Text>
+          )}
+        </Group>
         <Group justify="flex-end" mt="xs">
           <Button variant="subtle" color="coolGray" onClick={onClose}>
             取消

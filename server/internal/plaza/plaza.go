@@ -45,10 +45,13 @@ var (
 	ErrNotFound          = errors.New("plaza: publication not found")
 	ErrNotOwner          = errors.New("plaza: not the publication owner")
 	ErrTitleRequired     = errors.New("plaza: title must not be empty")
+	ErrTitleTooLong      = errors.New("plaza: title is too long")
 	ErrSourceNotFound    = errors.New("plaza: source node not found")
 	ErrSpaceForbidden    = errors.New("plaza: target space is not yours")
 	ErrInvalidApply      = errors.New("plaza: invalid apply request")
 	ErrInvalidVisibility = errors.New("plaza: visibility must be private or plaza")
+	ErrTooManyTags       = errors.New("plaza: too many tags")
+	ErrTagTooLong        = errors.New("plaza: tag is too long")
 )
 
 // Node is one node of the published tree.
@@ -127,14 +130,27 @@ type Import struct {
 	UpdatedAt     time.Time
 }
 
+// Version is one snapshot a publication has carried.
+type Version struct {
+	Version       int
+	BookmarkCount int64
+	FolderCount   int64
+	Note          string
+	CreatedAt     time.Time
+}
+
 // Store is the persistence contract.
 type Store interface {
 	Insert(ctx context.Context, p Publication) error
 	Get(ctx context.Context, id string) (Publication, error)
 	ListPlaza(ctx context.Context) ([]Publication, error)
 	ListByOwner(ctx context.Context, userID string) ([]Publication, error)
-	UpdateSnapshot(ctx context.Context, id string, tree Node, bookmarks, folders int64, version int, at time.Time) error
-	UpdateMeta(ctx context.Context, id string, title, description *string, visibility *Visibility, at time.Time) error
+	// UpdateSnapshot rewrites the current tree and appends the version row in
+	// one transaction, so a publication never exists on a version nobody
+	// recorded.
+	UpdateSnapshot(ctx context.Context, id string, tree Node, bookmarks, folders int64, version int, note string, at time.Time) error
+	UpdateMeta(ctx context.Context, id string, p MetaParams, at time.Time) error
+	ListVersions(ctx context.Context, publicationID string) ([]Version, error)
 	Delete(ctx context.Context, id string) error
 
 	// LatestImport returns the consumer's most recent apply of a publication
@@ -171,14 +187,30 @@ type PublishParams struct {
 	Visibility Visibility
 }
 
+// MetaParams carries a metadata patch. A nil field stays as it is.
+type MetaParams struct {
+	Title       *string
+	Description *string
+	Tags        *[]string
+	Visibility  *Visibility
+}
+
 // Publish captures a versioned snapshot.
 func (s *Service) Publish(ctx context.Context, user canonical.UserID, p PublishParams) (Publication, error) {
 	if p.Title == "" {
 		return Publication{}, ErrTitleRequired
 	}
+	if len([]rune(p.Title)) > maxTitleLength {
+		return Publication{}, ErrTitleTooLong
+	}
 	if err := validateVisibility(p.Visibility); err != nil {
 		return Publication{}, err
 	}
+	tags, err := normalizeTags(p.Tags)
+	if err != nil {
+		return Publication{}, err
+	}
+	p.Tags = tags
 	sp, err := s.library.Space(ctx, p.SpaceID)
 	if err != nil {
 		return Publication{}, err
@@ -285,29 +317,77 @@ func (s *Service) UpdateSnapshot(ctx context.Context, user canonical.UserID, id 
 		return Publication{}, ErrSourceNotFound
 	}
 	tree = renameRoot(tree, pub.Title)
-	if err := s.store.UpdateSnapshot(ctx, id, tree, bookmarks, folders, pub.Version+1, time.Now().UTC()); err != nil {
+	if err := s.store.UpdateSnapshot(ctx, id, tree, bookmarks, folders, pub.Version+1,
+		"从空间更新快照", time.Now().UTC()); err != nil {
 		return Publication{}, err
 	}
 	return s.load(ctx, id)
 }
 
-// UpdateMeta changes title/description/visibility.
-func (s *Service) UpdateMeta(ctx context.Context, user canonical.UserID, id string, title, desc *string, vis *Visibility) (Publication, error) {
+// Versions lists the snapshots a publication has carried, newest first. The
+// caller must be able to read the publication itself.
+func (s *Service) Versions(ctx context.Context, user canonical.UserID, id string) ([]Version, error) {
+	if _, err := s.Get(ctx, user, id); err != nil {
+		return nil, err
+	}
+	return s.store.ListVersions(ctx, id)
+}
+
+// UpdateMeta changes title/description/tags/visibility.
+func (s *Service) UpdateMeta(ctx context.Context, user canonical.UserID, id string, p MetaParams) (Publication, error) {
 	if _, err := s.owned(ctx, user, id); err != nil {
 		return Publication{}, err
 	}
-	if title != nil && *title == "" {
+	if p.Title != nil && *p.Title == "" {
 		return Publication{}, ErrTitleRequired
 	}
-	if vis != nil {
-		if err := validateVisibility(*vis); err != nil {
+	if p.Title != nil && len([]rune(*p.Title)) > maxTitleLength {
+		return Publication{}, ErrTitleTooLong
+	}
+	if p.Visibility != nil {
+		if err := validateVisibility(*p.Visibility); err != nil {
 			return Publication{}, err
 		}
 	}
-	if err := s.store.UpdateMeta(ctx, id, title, desc, vis, time.Now().UTC()); err != nil {
+	if p.Tags != nil {
+		tags, err := normalizeTags(*p.Tags)
+		if err != nil {
+			return Publication{}, err
+		}
+		p.Tags = &tags
+	}
+	if err := s.store.UpdateMeta(ctx, id, p, time.Now().UTC()); err != nil {
 		return Publication{}, err
 	}
 	return s.load(ctx, id)
+}
+
+const (
+	maxTags        = 10
+	maxTagLength   = 32
+	maxTitleLength = 255
+)
+
+// normalizeTags trims and deduplicates publisher tags, then refuses an
+// oversized set rather than silently dropping what the author typed.
+func normalizeTags(in []string) ([]string, error) {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		tag := strings.TrimSpace(raw)
+		if tag == "" || seen[tag] {
+			continue
+		}
+		if len([]rune(tag)) > maxTagLength {
+			return nil, ErrTagTooLong
+		}
+		seen[tag] = true
+		out = append(out, tag)
+	}
+	if len(out) > maxTags {
+		return nil, ErrTooManyTags
+	}
+	return out, nil
 }
 
 // Unpublish removes the publication; imported copies in other spaces are
@@ -401,6 +481,19 @@ type ApplyResult struct {
 // clears the target's children first. Both run as one atomic domain
 // transaction and one undoable ChangeSet.
 func (s *Service) Apply(ctx context.Context, user canonical.UserID, id string, p ApplyParams) (ApplyResult, error) {
+	return s.apply(ctx, user, id, p, false)
+}
+
+// PreviewApply runs the same copy inside a transaction that is then rolled
+// back. A second implementation of the matching rules would be free to
+// disagree with what an apply really does, so the preview borrows the only one
+// there is; its counts describe this moment, and a concurrent edit can still
+// change what the apply itself does.
+func (s *Service) PreviewApply(ctx context.Context, user canonical.UserID, id string, p ApplyParams) (ApplyResult, error) {
+	return s.apply(ctx, user, id, p, true)
+}
+
+func (s *Service) apply(ctx context.Context, user canonical.UserID, id string, p ApplyParams, dryRun bool) (ApplyResult, error) {
 	pub, err := s.Get(ctx, user, id)
 	if err != nil {
 		return ApplyResult{}, err
@@ -482,6 +575,10 @@ func (s *Service) Apply(ctx context.Context, user canonical.UserID, id string, p
 		return ApplyResult{}, err
 	}
 	res := ApplyResult{Created: m.created, Updated: m.updated, Kept: m.kept}
+	if dryRun {
+		// Nothing below runs: the deferred rollback is what ends the walk.
+		return res, nil
+	}
 
 	imported.PublicationID = id
 	imported.UserID = string(user)

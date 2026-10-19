@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button, Group, Modal, NativeSelect, Stack, Switch, Text, TextInput } from '@mantine/core';
+import { Button, Group, Modal, NativeSelect, Stack, Text, TextInput } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import type { PublicationVisibility, Space } from '@pontis/api';
 import { usePublish } from '../../hooks/use-plaza';
 import { useNodes } from '../../hooks/use-nodes';
 
+/** The three things a user can publish (doc 10 §3), all stored as one tree. */
+type SourceKind = 'space' | 'folder' | 'bookmark';
+
 /**
- * Publisher flow: pick a space (or a folder inside it) and describe the
- * publication. The published snapshot is independent from later edits.
+ * Publisher flow: pick a space, one folder inside it, or a single bookmark,
+ * and describe the publication. The published snapshot is independent from
+ * later edits.
  */
 export default function PublishModal({
   opened,
@@ -23,7 +27,7 @@ export default function PublishModal({
   const publish = usePublish();
   const [spaceId, setSpaceId] = useState('');
   const [source, setSource] = useState('');
-  const [wholeSpace, setWholeSpace] = useState(true);
+  const [sourceKind, setSourceKind] = useState<SourceKind>('space');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [tags, setTags] = useState('');
@@ -34,7 +38,7 @@ export default function PublishModal({
     if (opened) {
       setSpaceId(spaces[0]?.id ?? '');
       setSource('');
-      setWholeSpace(true);
+      setSourceKind('space');
       setTitle('');
       setDescription('');
       setTags('');
@@ -44,10 +48,13 @@ export default function PublishModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opened]);
 
-  const { data: nodesData } = useNodes(wholeSpace ? undefined : spaceId || undefined);
-  const folderOptions = useMemo(
-    () => (nodesData?.nodes ?? []).filter((n) => n.type === 'folder'),
-    [nodesData],
+  const { data: nodesData } = useNodes(sourceKind === 'space' ? undefined : spaceId || undefined);
+  const sourceOptions = useMemo(
+    () =>
+      (nodesData?.nodes ?? [])
+        .filter((n) => (sourceKind === 'space' ? false : n.type === sourceKind))
+        .map((n) => ({ value: n.id, label: n.title })),
+    [nodesData, sourceKind],
   );
 
   const handlePublish = () => {
@@ -56,15 +63,15 @@ export default function PublishModal({
       setError('标题不能为空');
       return;
     }
-    if (!wholeSpace && !source) {
-      setError('请选择要发布的文件夹');
+    if (sourceKind !== 'space' && !source) {
+      setError(sourceKind === 'folder' ? '请选择要发布的文件夹' : '请选择要发布的书签');
       return;
     }
     setError(null);
     publish.mutate(
       {
         space_id: spaceId,
-        root_node_id: wholeSpace ? undefined : source,
+        root_node_id: sourceKind === 'space' ? undefined : source,
         title: trimmed,
         description: description.trim() || undefined,
         visibility,
@@ -109,18 +116,25 @@ export default function PublishModal({
             setSource('');
           }}
         />
-        <Switch
-          label="发布整个空间"
-          description="关闭后可以选择空间中的一个文件夹"
-          checked={wholeSpace}
-          onChange={(e) => setWholeSpace(e.currentTarget.checked)}
+        <NativeSelect
+          label="发布范围"
+          data={[
+            { value: 'space', label: '整个空间' },
+            { value: 'folder', label: '空间里的一个文件夹' },
+            { value: 'bookmark', label: '单个书签' },
+          ]}
+          value={sourceKind}
+          onChange={(e) => {
+            setSourceKind(e.currentTarget.value as SourceKind);
+            setSource('');
+          }}
         />
-        {!wholeSpace && (
+        {sourceKind !== 'space' && (
           <NativeSelect
-            label="发布内容"
+            label={sourceKind === 'folder' ? '发布内容' : '发布书签'}
             data={[
-              { value: '', label: '选择文件夹…', disabled: true },
-              ...folderOptions.map((f) => ({ value: f.id, label: f.title })),
+              { value: '', label: sourceKind === 'folder' ? '选择文件夹…' : '选择书签…', disabled: true },
+              ...sourceOptions,
             ]}
             value={source}
             onChange={(e) => setSource(e.currentTarget.value)}

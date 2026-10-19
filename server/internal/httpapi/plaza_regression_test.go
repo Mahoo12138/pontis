@@ -194,6 +194,98 @@ func TestPlazaSingleBookmarkPublication(t *testing.T) {
 	}
 }
 
+// A snapshot update leaves a trail, and a preview answers with the counts an
+// apply would report without keeping any of them.
+func TestPlazaVersionHistoryAndPreview(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	bob := plazaAuth(f.bobToken)
+	alice := plazaAuth(f.sessionToken)
+	bobSpace := plazaCreateSpace(t, f, f.bobToken, "Bob versions")
+
+	folder := plazaCreateNode(t, f, f.bobToken, bobSpace, map[string]any{
+		"type": "folder", "title": "版本集", "parent": plazaMain,
+	})
+	first := plazaCreateNode(t, f, f.bobToken, bobSpace, map[string]any{
+		"type": "bookmark", "title": "一", "url": "https://one.example",
+		"parent": plazaNodeParent(folder),
+	})
+
+	code, pub := doJSON(t, "POST", f.ts.URL+"/api/v1/publications", bob,
+		map[string]any{"space_id": bobSpace, "root_node_id": folder, "title": "版本集"})
+	if code != http.StatusCreated {
+		t.Fatalf("publish = %d %v", code, pub)
+	}
+	pubID := pub["id"].(string)
+	applyBody := map[string]any{"space_id": f.spaceID, "parent": plazaMain, "strategy": "merge"}
+
+	countBefore := len(plazaNodes(t, f, f.sessionToken, f.spaceID))
+	code, prev := doJSON(t, "POST", f.ts.URL+"/api/v1/publications/"+pubID+"/apply/preview",
+		alice, applyBody)
+	if code != http.StatusOK {
+		t.Fatalf("preview = %d %v", code, prev)
+	}
+	if prev["created"].(float64) != 2 || prev["updated"].(float64) != 0 || prev["kept"].(float64) != 0 {
+		t.Fatalf("preview counts = %v, want created=2", prev)
+	}
+	if got := len(plazaNodes(t, f, f.sessionToken, f.spaceID)); got != countBefore {
+		t.Fatalf("preview wrote %d nodes, want the tree untouched", got-countBefore)
+	}
+
+	if c, _ := doJSON(t, "POST", f.ts.URL+"/api/v1/publications/"+pubID+"/apply", alice, applyBody); c != http.StatusOK {
+		t.Fatalf("apply = %d", c)
+	}
+
+	if c, body := doJSON(t, "PATCH", f.ts.URL+"/api/v1/spaces/"+bobSpace+"/nodes/"+first, bob,
+		map[string]any{"title": "一改"}); c != http.StatusOK {
+		t.Fatalf("rename = %d %v", c, body)
+	}
+	plazaCreateNode(t, f, f.bobToken, bobSpace, map[string]any{
+		"type": "bookmark", "title": "二", "url": "https://two.example",
+		"parent": plazaNodeParent(folder),
+	})
+	if c, body := doJSON(t, "PATCH", f.ts.URL+"/api/v1/publications/"+pubID, bob,
+		map[string]any{"snapshot": true}); c != http.StatusOK || body["version"].(float64) != 2 {
+		t.Fatalf("snapshot = %d %v", c, body)
+	}
+
+	code, list := doJSON(t, "GET", f.ts.URL+"/api/v1/publications/"+pubID+"/versions", alice, nil)
+	if code != http.StatusOK {
+		t.Fatalf("versions = %d %v", code, list)
+	}
+	raw, err := json.Marshal(list["versions"])
+	if err != nil {
+		t.Fatalf("marshal versions: %v", err)
+	}
+	var versions []map[string]any
+	if err := json.Unmarshal(raw, &versions); err != nil {
+		t.Fatalf("unmarshal versions: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("version history = %v, want two entries", versions)
+	}
+	if versions[0]["version"].(float64) != 2 || versions[1]["version"].(float64) != 1 {
+		t.Fatalf("versions not newest first: %v", versions)
+	}
+	if versions[1]["note"] != "初始发布" {
+		t.Fatalf("first version note = %v", versions[1]["note"])
+	}
+
+	// The update preview sees the rename and the new entry, and still writes
+	// nothing.
+	countMid := len(plazaNodes(t, f, f.sessionToken, f.spaceID))
+	code, prev = doJSON(t, "POST", f.ts.URL+"/api/v1/publications/"+pubID+"/apply/preview",
+		alice, applyBody)
+	if code != http.StatusOK {
+		t.Fatalf("update preview = %d %v", code, prev)
+	}
+	if prev["created"].(float64) != 1 || prev["updated"].(float64) != 1 || prev["kept"].(float64) != 1 {
+		t.Fatalf("update preview counts = %v, want created=1 updated=1 kept=1", prev)
+	}
+	if got := len(plazaNodes(t, f, f.sessionToken, f.spaceID)); got != countMid {
+		t.Fatalf("update preview changed the tree: %d -> %d", countMid, got)
+	}
+}
+
 // A consumer who applied a publication updates the same nodes when the
 // publisher releases a new version — not a second copy beside them.
 func TestPlazaReApplyUpdatesMappedNodes(t *testing.T) {
