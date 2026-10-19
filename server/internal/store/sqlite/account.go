@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"pontis/internal/auth"
@@ -129,7 +130,9 @@ type DeviceBindingRow struct {
 
 // ListOwnerDeviceBindings returns the owner's devices joined with their
 // bindings and space names; devices without bindings appear with empty
-// binding fields. Revoked devices are excluded.
+// binding fields. Revoked devices are included and sorted last: a revoked
+// device is the one state the account owner still has an action to take
+// (delete it), and hiding it is what made "revoke" an unrecoverable move.
 func (s *AccountStore) ListOwnerDeviceBindings(ctx context.Context, owner canonical.UserID) ([]DeviceBindingRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT d.id, d.name, d.client_type, d.browser, d.platform,
@@ -141,8 +144,8 @@ func (s *AccountStore) ListOwnerDeviceBindings(ctx context.Context, owner canoni
 		FROM devices d
 		LEFT JOIN device_space_bindings b ON b.device_id = d.id
 		LEFT JOIN sync_spaces sp ON sp.id = b.space_id
-		WHERE d.owner_user_id = ? AND d.revoked_at IS NULL
-		ORDER BY d.created_at, d.id`, string(owner))
+		WHERE d.owner_user_id = ?
+		ORDER BY (d.revoked_at IS NOT NULL), d.created_at, d.id`, string(owner))
 	if err != nil {
 		return nil, err
 	}
@@ -192,4 +195,20 @@ func (s *AccountStore) DeleteDeviceChildren(ctx context.Context, deviceID string
 		}
 	}
 	return nil
+}
+
+// DeviceRevokedAt reports when the device was revoked, or nil while it is still
+// live — including for a device that no longer exists, which the caller answers
+// 404 for on its own ownership check. The delete endpoint needs it to refuse a
+// device nobody has revoked yet.
+func (s *AccountStore) DeviceRevokedAt(ctx context.Context, deviceID string) (*string, error) {
+	var revoked *string
+	err := s.db.QueryRowContext(ctx, `SELECT revoked_at FROM devices WHERE id = ?`, deviceID).Scan(&revoked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return revoked, nil
 }

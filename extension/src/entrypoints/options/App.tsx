@@ -8,7 +8,7 @@
 // this page still has to offer cold is the unpaired account tab, because
 // re-pairing after a server move is an edit here, not a trip back to the guide.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Alert,
@@ -30,12 +30,6 @@ import { ResyncIntents } from '../../ui/ResyncIntents';
 import { SyncTab } from '../../ui/SyncTab';
 import { useSyncState } from '../../ui/useSyncState';
 import { countScopeBookmarks } from '../../core/browser/scopeCount';
-import {
-  offerUpdate,
-  platformForBuild,
-  variantForBuild,
-  type UpdateOffer,
-} from '../../core/update/release';
 import type { ReconciliationIssueWire } from '../../core/protocol/types';
 
 import type { IntentDecision } from '../../core/sync/resync';
@@ -94,50 +88,17 @@ export function App() {
   const [unpairOpen, setUnpairOpen] = useState(false);
   /** Pairing collapses into the header once it is done; the form is for setup. */
   const [editPairing, setEditPairing] = useState(false);
-  /** A newer package this instance carries, if it carries one. See below. */
-  const [update, setUpdate] = useState<UpdateOffer | null>(null);
-  const [installUrl, setInstallUrl] = useState('');
   /** Which action is running: only its own button spins. */
   const sync = useSyncState();
   const {
     busy, error, setError, run, refresh,
-    paired, serverHost, deviceLabel,
+    paired, serverHost, deviceLabel, update, installUrl,
     spaces, folders, addBinding, setAddBinding,
     bindings, sessions, attention, remountFolders, setRemountFolders, confirmUnbind, setConfirmUnbind,
     diagnostics, intents, intentChoices, setIntentChoice, setIntentChoices, defaultIntentDecision,
     issueChoices, setIssueChoices, counts,
     doBind, doUnbind, toggleSync, answerIssues, resolveIntents, doIntegrityCheck, doRemount,
   } = sync;
-
-  // Ask the instance once whether it carries a newer package — on open, not on
-  // the 2s refresh clock, because this is a page view rather than state that
-  // moves. Every failure is silence: an offline server, an instance that predates
-  // this route, and a body that will not parse all leave the page saying nothing,
-  // which is the correct answer for all three. A missing hint costs nothing; a
-  // wrong one sends someone to upgrade to a version they already have.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const b = await bootstrap.get();
-      if (!b.serverUrl || !b.deviceToken || cancelled) return;
-      setInstallUrl(`${b.serverUrl.replace(/\/+$/, '')}/devices#install-extension`);
-      try {
-        const release = await client.deviceExtensions();
-        const offer = offerUpdate(release, {
-          platform: platformForBuild(),
-          variant: variantForBuild(),
-          version: chrome.runtime.getManifest().version,
-        });
-        if (!cancelled) setUpdate(offer);
-      } catch {
-        if (!cancelled) setUpdate(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const doPair = (params: {
     serverUrl: string;
@@ -169,9 +130,15 @@ export function App() {
     );
 
   const doUnpair = async () => {
+    // The server is told first, while the credential that authorises the call
+    // still exists. If it cannot be reached the local half still goes — and the
+    // account side is told about, because a device nobody revoked stays listed
+    // as bound and keeps holding its space.
+    const notified = await pairing.revokeSelf();
     await bootstrap.clearPairing();
     setEditPairing(true);
     await refresh();
+    if (!notified) setError('没能通知服务器，这台设备在账户里仍显示为已绑定。请到设备页撤销它。');
   };
 
   const unbindTarget = bindings.find((b) => b.id === confirmUnbind);
@@ -313,8 +280,10 @@ export function App() {
       <Modal opened={unpairOpen} onClose={() => setUnpairOpen(false)} title="解除配对">
         <Stack gap="md">
           <Text size="sm">
-            这台设备会向服务器撤销自己的凭据，{bindings.length} 个绑定的本地副本一并清空。
-            服务器上的空间和书签不变，重新登录即可再绑。
+            这台设备会向服务器撤销自己的凭据，{bindings.length} 个绑定在服务器上一并解除；服务器上的空间和书签不变。
+          </Text>
+          <Text size="sm" c="dimmed">
+            本机的副本不会立刻消失：重新配对会换一台设备身份，那时这些副本连同尚未上传的改动一起清除。有没同步上去的编辑，先同步再解除。
           </Text>
           <Group justify="flex-end" mt="lg">
             <Button variant="subtle" color="coolGray" onClick={() => setUnpairOpen(false)}>

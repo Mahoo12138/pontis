@@ -22,6 +22,7 @@
       "last_seen_at": "2026-01-01T00:00:00Z",
       "name": "Chrome@Home",
       "platform": "macos",
+      "revoked_at": null,
       "sync_mode": "partial"
     }
   ]

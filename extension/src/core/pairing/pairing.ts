@@ -147,6 +147,28 @@ export class PairingService {
   }
 
   /**
+   * Unpair: tell the server this device is finished with, so the account side
+   * stops showing a device that will never sync again and the spaces it held
+   * stop being blocked by its binding.
+   *
+   * It reports whether the server was reached rather than throwing. A person
+   * whose server is down must still be able to clear this browser — refusing
+   * the unpair would leave the local replica and the credential in place with
+   * no way out — so the caller keeps the local half unconditional and says out
+   * loud what the server still has.
+   */
+  async revokeSelf(): Promise<boolean> {
+    const { deviceToken } = await this.bootstrap.get();
+    if (!deviceToken) return true;
+    try {
+      await this.client.revokeDevice(deviceToken);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Forget the bindings another device registered with the same profile. Only
    * local state is touched: those server bindings still belong to the old
    * device, and this one cannot revoke them.

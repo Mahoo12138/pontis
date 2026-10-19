@@ -132,6 +132,9 @@ export interface DeviceOverview {
   sync_mode: 'full' | 'partial' | '';
   created_at: string;
   last_seen_at: string | null;
+  /** Set once the device has been revoked. A revoked device stays listed until
+   *  its owner deletes it. */
+  revoked_at: string | null;
   bindings: DeviceBindingView[];
 }
 

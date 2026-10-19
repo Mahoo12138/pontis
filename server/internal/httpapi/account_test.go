@@ -73,30 +73,116 @@ func TestDeviceOverviewAndRevoke(t *testing.T) {
 		t.Fatalf("pending binding health = %v, want warning", b["health"])
 	}
 
-	// Bob cannot revoke alice's device; alice can.
-	code, _ = doJSON(t, "DELETE", f.ts.URL+"/api/v1/devices/"+deviceID,
+	// Bob cannot revoke alice's device; an unknown device and someone else's
+	// look identical.
+	code, _ = doJSON(t, "POST", f.ts.URL+"/api/v1/devices/"+deviceID+"/revoke",
 		map[string]string{"Authorization": "Bearer " + f.bobToken}, nil)
 	if code != http.StatusNotFound {
 		t.Fatalf("bob revoke = %d, want 404", code)
 	}
-	code = doEmpty(t, "DELETE", f.ts.URL+"/api/v1/devices/"+deviceID, h)
-	if code != http.StatusNoContent {
-		t.Fatalf("revoke = %d", code)
+	// Deleting is the step after revoking, not a substitute for it: a live
+	// device cannot be deleted out from under its owner.
+	code, body = doJSON(t, "DELETE", f.ts.URL+"/api/v1/devices/"+deviceID, h, nil)
+	if code != http.StatusConflict {
+		t.Fatalf("delete a live device = %d %v, want 409", code, body)
+	}
+	if err := doEmpty(t, "POST", f.ts.URL+"/api/v1/devices/"+deviceID+"/revoke", h); err != http.StatusNoContent {
+		t.Fatalf("revoke = %d", err)
 	}
 	code, body = doJSON(t, "GET", f.ts.URL+"/api/v1/devices/overview", h, nil)
 	if code != http.StatusOK {
 		t.Fatalf("post-revoke overview = %d %v", code, body)
 	}
-	// Only the bootstrap device remains.
-	if got := len(body["devices"].([]any)); got != 1 {
-		t.Fatalf("post-revoke device count = %d, want 1", got)
+	// The revoked device is still listed — that is the state the owner has to
+	// be able to read before deciding to delete it — with its bindings dropped
+	// and its revoke time set.
+	dev = nil
+	for _, d := range body["devices"].([]any) {
+		if d.(map[string]any)["id"] == deviceID {
+			dev = d.(map[string]any)
+		}
+	}
+	if dev == nil {
+		t.Fatalf("revoked device disappeared from the overview: %v", body["devices"])
+	}
+	if dev["revoked_at"] == nil || dev["revoked_at"] == "" {
+		t.Fatalf("revoked device has no revoked_at: %v", dev)
+	}
+	if got := len(dev["bindings"].([]any)); got != 0 {
+		t.Fatalf("revoked device still reports %d bindings: %v", got, dev)
 	}
 
 	// The revoked device credential no longer authenticates.
 	code, body = doJSON(t, "GET", f.ts.URL+"/api/v1/device/bindings",
 		map[string]string{"Authorization": "Bearer " + deviceSecret}, nil)
+	// The route answers 401 before the revoked device can be read.
 	if code != http.StatusUnauthorized {
 		t.Fatalf("revoked device credential = %d %v", code, body)
+	}
+
+	// Now the record goes.
+	if err := doEmpty(t, "DELETE", f.ts.URL+"/api/v1/devices/"+deviceID, h); err != http.StatusNoContent {
+		t.Fatalf("delete revoked device = %d", err)
+	}
+	code, body = doJSON(t, "GET", f.ts.URL+"/api/v1/devices/overview", h, nil)
+	if got := len(body["devices"].([]any)); got != 1 {
+		t.Fatalf("post-delete device count = %d, want 1 (%v)", got, body["devices"])
+	}
+}
+
+// The extension's 解除配对 dialog promises the device revokes itself on the
+// server. This is that call: one device credential takes its own device out of
+// the account, and the space it was blocking becomes deletable.
+func TestDeviceRevokeSelfUnpairsAndFreesTheSpace(t *testing.T) {
+	f := bootstrapLibraryFlow(t)
+	h := map[string]string{"Authorization": "Bearer " + f.sessionToken}
+
+	deviceID, deviceSecret := registerDeviceFor(t, f.ts.URL, f.sessionToken, "Edge 上的 Pontis")
+	if code, body := doJSON(t, "POST", f.ts.URL+"/api/v1/device/bindings",
+		map[string]string{"Authorization": "Bearer " + deviceSecret},
+		map[string]string{"space_id": f.spaceID}); code != http.StatusCreated {
+		t.Fatalf("bind = %d %v", code, body)
+	}
+
+	// This device's own row, read from the account side. The fixture keeps a
+	// second bound device, so the space's blockers are not the thing to assert
+	// on here — the device's own bindings are.
+	overviewRow := func() map[string]any {
+		code, body := doJSON(t, "GET", f.ts.URL+"/api/v1/devices/overview", h, nil)
+		if code != http.StatusOK {
+			t.Fatalf("overview = %d %v", code, body)
+		}
+		for _, d := range body["devices"].([]any) {
+			if d.(map[string]any)["id"] == deviceID {
+				return d.(map[string]any)
+			}
+		}
+		t.Fatalf("device %s missing from the overview: %v", deviceID, body["devices"])
+		return nil
+	}
+	if got := len(overviewRow()["bindings"].([]any)); got != 1 {
+		t.Fatalf("freshly bound device reports %d bindings, want 1", got)
+	}
+
+	if err := doEmpty(t, "POST", f.ts.URL+"/api/v1/device/revoke",
+		map[string]string{"Authorization": "Bearer " + deviceSecret}); err != http.StatusNoContent {
+		t.Fatalf("self revoke = %d", err)
+	}
+
+	// The credential is dead immediately, so the extension cannot keep syncing.
+	if code, _ := doJSON(t, "GET", f.ts.URL+"/api/v1/device/bindings",
+		map[string]string{"Authorization": "Bearer " + deviceSecret}, nil); code != http.StatusUnauthorized {
+		t.Fatalf("self-revoked credential still works: %d", code)
+	}
+
+	// The account side sees a revoked device with nothing bound to it: the
+	// unpair is visible, and it stops holding the space.
+	row := overviewRow()
+	if row["revoked_at"] == nil {
+		t.Fatalf("device not marked revoked after self-revoke: %v", row)
+	}
+	if got := len(row["bindings"].([]any)); got != 0 {
+		t.Fatalf("self-revoked device still reports %d bindings: %v", got, row)
 	}
 }
 

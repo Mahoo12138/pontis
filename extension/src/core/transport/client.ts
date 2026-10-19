@@ -226,6 +226,15 @@ export class ApiClient
     return this.request(`/api/v1/device/bindings/${bindingId}`, { method: 'DELETE', token: deviceToken });
   }
 
+  /**
+   * Unpair: the device revokes itself. The server marks it revoked and drops
+   * its bindings, so the account side stops showing a device that will never
+   * sync again, and the spaces it held stop being blocked by that binding.
+   */
+  revokeDevice(deviceToken: string): Promise<void> {
+    return this.request('/api/v1/device/revoke', { method: 'POST', token: deviceToken });
+  }
+
   sync(bindingId: string, req: SyncRequestWire): Promise<SyncResponseWire> {
     return this.request<SyncResponseWire>(`/api/v1/sync/bindings/${bindingId}`, {
       method: 'POST',

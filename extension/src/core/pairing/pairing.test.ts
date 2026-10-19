@@ -41,7 +41,11 @@ function stubServer(routes: Record<string, [unknown, number?]>): void {
       const route = routes[`${method} ${new URL(url).pathname}`];
       if (!route) return new Response('', { status: 404 });
       const [body, status = 200] = route;
-      return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+      // A 204 carries no body, and constructing a Response that tries to gives
+      // a TypeError — which the caller would read as "the server was not
+      // reached".
+      const payload = status === 204 || body === null ? null : JSON.stringify(body);
+      return new Response(payload, { status, headers: { 'Content-Type': 'application/json' } });
     }),
   );
 }
@@ -260,6 +264,32 @@ describe('PairingService', () => {
     // which is how one canonical id ends up owning two browser nodes.
     expect(await db.localNodes.count()).toBe(0);
     expect(await db.pendingOps.count()).toBe(0);
+  });
+
+  // Unpairing promises the account side gets told. It is a promise the
+  // extension cannot always keep — the server may be unreachable — and
+  // refusing the unpair then would strand the credential with no way out, so
+  // the call reports the outcome instead of throwing.
+  it('tells the server when unpairing a reachable device', async () => {
+    stubServer({ ...paired, 'POST /api/v1/device/revoke': [null, 204] });
+    await pairing.pair(params);
+
+    expect(await pairing.revokeSelf()).toBe(true);
+    expect(urls).toContain('POST /api/v1/device/revoke');
+  });
+
+  it('says the server was not reached rather than failing the unpair', async () => {
+    await bootstrap.set({ serverUrl: 'http://127.0.0.1:8080', deviceToken: 'device-secret' });
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+
+    expect(await pairing.revokeSelf()).toBe(false);
+  });
+
+  it('has nothing to tell when this browser was never paired', async () => {
+    stubServer(paired);
+
+    expect(await pairing.revokeSelf()).toBe(true);
+    expect(urls).toEqual([]);
   });
 });
 

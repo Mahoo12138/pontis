@@ -36,6 +36,7 @@ type deviceOverviewDTO struct {
 	SyncMode   string               `json:"sync_mode"`
 	CreatedAt  string               `json:"created_at"`
 	LastSeenAt *string              `json:"last_seen_at"`
+	RevokedAt  *string              `json:"revoked_at"`
 	Bindings   []bindingOverviewDTO `json:"bindings"`
 }
 
@@ -61,6 +62,7 @@ func (s *Server) handleDeviceOverview(w http.ResponseWriter, r *http.Request) {
 				SyncMode:   row.SyncMode,
 				CreatedAt:  row.CreatedAt,
 				LastSeenAt: row.LastSeenAt,
+				RevokedAt:  row.RevokedAt,
 				Bindings:   []bindingOverviewDTO{},
 			}
 			byDevice[row.DeviceID] = dev
@@ -108,40 +110,100 @@ func deriveBindingHealth(row sqlite.DeviceBindingRow) string {
 	return "healthy"
 }
 
+// ownsDevice is the overview-join ownership check: an unknown device and
+// someone else's device are indistinguishable (404), which is what the caller
+// wants either way.
+func (s *Server) ownsDevice(ctx context.Context, owner canonical.UserID, deviceID string) (bool, error) {
+	rows, err := s.Accounts.ListOwnerDeviceBindings(ctx, owner)
+	if err != nil {
+		return false, err
+	}
+	for _, row := range rows {
+		if row.DeviceID == deviceID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// revokeDeviceRecord stops a device without erasing it. The row stays so the
+// account owner can see what was revoked and decide when it goes; its bindings
+// and credentials do not, because a binding held by a device that will never
+// sync again keeps blocking its space from being deleted while pointing at a
+// device nobody can see. History rows keep their origin ids for the journal.
+func (s *Server) revokeDeviceRecord(ctx context.Context, deviceID string) error {
+	if err := s.Devices.RevokeDevice(ctx, deviceID); err != nil {
+		return err
+	}
+	return s.Accounts.DeleteDeviceChildren(ctx, deviceID)
+}
+
 func (s *Server) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	u, _ := currentUser(r)
 	deviceID := chi.URLParam(r, "deviceID")
 
-	// Ownership check via the overview join: an unknown or foreign device
-	// is indistinguishable (404).
-	rows, err := s.Accounts.ListOwnerDeviceBindings(r.Context(), canonical.UserID(u.ID))
+	owned, err := s.ownsDevice(r.Context(), canonical.UserID(u.ID), deviceID)
 	if err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
-	}
-	owned := false
-	for _, row := range rows {
-		if row.DeviceID == deviceID {
-			owned = true
-			break
-		}
 	}
 	if !owned {
 		s.writeError(w, r, http.StatusNotFound, "DEVICE_NOT_FOUND", "unknown device")
 		return
 	}
-
-	if err := s.Devices.RevokeDevice(r.Context(), deviceID); err != nil {
+	if err := s.revokeDeviceRecord(r.Context(), deviceID); err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}
-	// Remove bindings and credentials so the device disappears cleanly;
-	// history rows keep their origin ids for the journal.
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDeleteDevice takes the record away. It refuses a live device: revoking
+// is the decision that stops the syncing, deleting is the follow-up that clears
+// the trail once the owner has read it.
+func (s *Server) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
+	u, _ := currentUser(r)
+	deviceID := chi.URLParam(r, "deviceID")
+
+	owned, err := s.ownsDevice(r.Context(), canonical.UserID(u.ID), deviceID)
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	if !owned {
+		s.writeError(w, r, http.StatusNotFound, "DEVICE_NOT_FOUND", "unknown device")
+		return
+	}
+	revoked, err := s.Accounts.DeviceRevokedAt(r.Context(), deviceID)
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	if revoked == nil {
+		s.writeError(w, r, http.StatusConflict, "DEVICE_NOT_REVOKED", "revoke this device before deleting it")
+		return
+	}
 	if err := s.Accounts.DeleteDeviceChildren(r.Context(), deviceID); err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}
 	if err := s.Accounts.DeleteOwnerDevice(r.Context(), canonical.UserID(u.ID), deviceID); err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDeviceRevokeSelf is the extension unpairing itself — the thing its own
+// 解除配对 dialog already promises. The credential the call is authenticated with
+// is revoked by the same call, so nothing survives that could keep syncing.
+func (s *Server) handleDeviceRevokeSelf(w http.ResponseWriter, r *http.Request) {
+	d, ok := currentDevice(r)
+	if !ok {
+		s.writeError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "device credential required")
+		return
+	}
+	if err := s.revokeDeviceRecord(r.Context(), d.ID); err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}

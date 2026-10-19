@@ -47,6 +47,7 @@ import {
   useDeviceOverview,
   useRegisterDevice,
   useRevokeDevice,
+  useDeleteDevice,
 } from '../hooks/use-devices';
 import { formatRelativeTime } from '../lib/format';
 
@@ -88,7 +89,17 @@ function deviceHealth(device: DeviceOverview): BindingHealth | null {
   return worst;
 }
 
-function StatusCell({ health }: { health: BindingHealth | null }) {
+function StatusCell({ health, revokedAt }: { health: BindingHealth | null; revokedAt?: string | null }) {
+  // A revoked device is not "未绑定": it stopped syncing on purpose and is
+  // waiting for the owner to delete the record.
+  if (revokedAt) {
+    return (
+      <Group gap={6} wrap="nowrap">
+        <span className={statusDot} style={{ backgroundColor: tokens.textDisabled }} />
+        <Text fz={13} c="dimmed">已撤销</Text>
+      </Group>
+    );
+  }
   if (!health) {
     return (
       <Group gap={6} wrap="nowrap">
@@ -153,10 +164,12 @@ export default function DevicesPage() {
   const { data, isLoading, isError, error, refetch } = useDeviceOverview();
   const register = useRegisterDevice();
   const revoke = useRevokeDevice();
+  const delDevice = useDeleteDevice();
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [addOpen, setAddOpen] = useState(false);
-  const [revokeTarget, setRevokeTarget] = useState<DeviceOverview | null>(null);
+  /** Which device a confirmation is about, and which of the two steps it is. */
+  const [confirm, setConfirm] = useState<{ device: DeviceOverview; action: 'revoke' | 'delete' } | null>(null);
 
   const devices = data?.devices ?? [];
 
@@ -169,19 +182,24 @@ export default function DevicesPage() {
     });
   };
 
-  const handleRevoke = () => {
-    if (!revokeTarget) return;
-    revoke.mutate(revokeTarget.id, {
+  const handleConfirm = () => {
+    if (!confirm) return;
+    const { device, action } = confirm;
+    const mutation = action === 'revoke' ? revoke : delDevice;
+    mutation.mutate(device.id, {
       onSuccess: () => {
         notifications.show({
-          message: `已撤销「${revokeTarget.name}」,该设备不再同步`,
+          message:
+            action === 'revoke'
+              ? `已撤销「${device.name}」，该设备不再同步；确认后可以删除它的记录`
+              : `已删除「${device.name}」的记录`,
           color: 'coolGray',
         });
-        setRevokeTarget(null);
+        setConfirm(null);
       },
       onError: (e) =>
         notifications.show({
-          message: e instanceof Error ? e.message : '撤销失败',
+          message: e instanceof Error ? e.message : action === 'revoke' ? '撤销失败' : '删除失败',
           color: 'errorRed',
         }),
     });
@@ -236,7 +254,8 @@ export default function DevicesPage() {
                   device={device}
                   expanded={expanded.has(device.id)}
                   onToggle={() => toggleExpand(device.id)}
-                  onRevoke={() => setRevokeTarget(device)}
+                  onRevoke={() => setConfirm({ device, action: 'revoke' })}
+                  onDelete={() => setConfirm({ device, action: 'delete' })}
                 />
               ))}
             </Table.Tbody>
@@ -266,23 +285,33 @@ export default function DevicesPage() {
       />
 
       <Modal
-        opened={revokeTarget !== null}
-        onClose={() => setRevokeTarget(null)}
-        title={revokeTarget ? `撤销「${revokeTarget.name}」？` : ''}
+        opened={confirm !== null}
+        onClose={() => setConfirm(null)}
+        title={
+          confirm
+            ? confirm.action === 'revoke'
+              ? `撤销「${confirm.device.name}」？`
+              : `删除「${confirm.device.name}」的记录？`
+            : ''
+        }
         size={420}
         styles={{ header: { fontSize: 15, fontWeight: 600 } }}
       >
         <Text fz={13}>
-          {revokeTarget?.name} 现在同步 {revokeTarget?.bindings.length ?? 0} 个空间
-          ，撤销后这些空间立即停止同步；其它设备不受影响。
-          设备上的本地书签不会被删除，但它要重新注册才能再拿回同步权限。
+          {confirm?.action === 'revoke'
+            ? `${confirm.device.name} 现在同步 ${confirm.device.bindings.length} 个空间，撤销后这些空间立即停止同步；其它设备不受影响。设备上的本地书签不会被删除，但它要重新注册才能再拿回同步权限。撤销后这条设备记录会留在列表里，等你确认再删。`
+            : `${confirm?.device.name} 已经撤销。删除记录后它不再出现在列表里；服务器上的空间与书签不受影响。这一步没有回退，历史记录仍会保留在日志里。`}
         </Text>
         <Group justify="flex-end" mt="lg">
-          <Button variant="subtle" color="coolGray" onClick={() => setRevokeTarget(null)}>
+          <Button variant="subtle" color="coolGray" onClick={() => setConfirm(null)}>
             取消
           </Button>
-          <Button color="errorRed" loading={revoke.isPending} onClick={handleRevoke}>
-            撤销设备
+          <Button
+            color="errorRed"
+            loading={(confirm?.action === 'revoke' ? revoke : delDevice).isPending}
+            onClick={handleConfirm}
+          >
+            {confirm?.action === 'revoke' ? '撤销设备' : '删除记录'}
           </Button>
         </Group>
       </Modal>
@@ -297,13 +326,16 @@ function DeviceRow({
   expanded,
   onToggle,
   onRevoke,
+  onDelete,
 }: {
   device: DeviceOverview;
   expanded: boolean;
   onToggle: () => void;
   onRevoke: () => void;
+  onDelete: () => void;
 }) {
   const hasBindings = device.bindings.length > 0;
+  const revoked = !!device.revoked_at;
   return (
     <>
       <Table.Tr className={rowHover}>
@@ -347,7 +379,7 @@ function DeviceRow({
             <Text fz={13} c="dimmed">—</Text>
           )}
         </Table.Td>
-        <Table.Td><StatusCell health={deviceHealth(device)} /></Table.Td>
+        <Table.Td><StatusCell health={deviceHealth(device)} revokedAt={device.revoked_at} /></Table.Td>
         <Table.Td c="dimmed" fz={12}>
           {device.last_seen_at ? formatRelativeTime(device.last_seen_at) : '从未连接'}
         </Table.Td>
@@ -362,19 +394,31 @@ function DeviceRow({
               </UnstyledButton>
             </Menu.Target>
             <Menu.Dropdown>
-              <Menu.Item
-                leftSection={<IconShieldOff size={14} stroke={1.5} />}
-                disabled={!hasBindings}
-              >
-                暂停同步
-              </Menu.Item>
-              <Menu.Item
-                color="errorRed"
-                leftSection={<IconTrash size={14} stroke={1.5} />}
-                onClick={onRevoke}
-              >
-                撤销此设备
-              </Menu.Item>
+              {!revoked && (
+                <Menu.Item
+                  leftSection={<IconShieldOff size={14} stroke={1.5} />}
+                  disabled={!hasBindings}
+                >
+                  暂停同步
+                </Menu.Item>
+              )}
+              {revoked ? (
+                <Menu.Item
+                  color="errorRed"
+                  leftSection={<IconTrash size={14} stroke={1.5} />}
+                  onClick={onDelete}
+                >
+                  删除设备记录
+                </Menu.Item>
+              ) : (
+                <Menu.Item
+                  color="errorRed"
+                  leftSection={<IconShieldOff size={14} stroke={1.5} />}
+                  onClick={onRevoke}
+                >
+                  撤销此设备
+                </Menu.Item>
+              )}
             </Menu.Dropdown>
           </Menu>
         </Table.Td>

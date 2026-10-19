@@ -163,7 +163,12 @@ func (s *Server) Router() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireSession)
 		r.Get("/api/v1/devices/overview", s.handleDeviceOverview)
-		r.Delete("/api/v1/devices/{deviceID}", s.handleRevokeDevice)
+		// Revoke stops a device and keeps its record; delete removes the record
+		// and refuses a device nobody has revoked yet. One endpoint used to do
+		// both, so a revoked device vanished and the owner could never see or
+		// finish the decision.
+		r.Post("/api/v1/devices/{deviceID}/revoke", s.handleRevokeDevice)
+		r.Delete("/api/v1/devices/{deviceID}", s.handleDeleteDevice)
 		r.Get("/api/v1/settings", s.handleGetSettings)
 		r.Patch("/api/v1/settings", s.handleUpdateSettings)
 		r.Get("/api/v1/admin/jobs", s.handleListJobs)
@@ -266,6 +271,9 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/v1/device/bindings", s.handleCreateBinding)
 		// Unbind: the device drops its subscription; the space keeps its data.
 		r.Delete("/api/v1/device/bindings/{bindingID}", s.handleDeleteBinding)
+		// Unpair: the device revokes itself, which is what the settings page's
+		// 解除配对 dialog promises and what used to leave the account side bound.
+		r.Post("/api/v1/device/revoke", s.handleDeviceRevokeSelf)
 		r.Post("/api/v1/sync/bindings/{bindingID}", s.handleSync)
 		r.Get("/api/v1/sync/bindings/{bindingID}/snapshot", s.handleSnapshot)
 		r.Post("/api/v1/sync/transfers", s.handleDeviceTransfer)

@@ -258,6 +258,7 @@ export const checkDeviceOverview: Checker<DeviceOverview> = record<DeviceOvervie
   sync_mode: syncMode,
   created_at: str,
   last_seen_at: nullable(str),
+  revoked_at: nullable(str),
   bindings: arr(checkBindingView),
 });
 
