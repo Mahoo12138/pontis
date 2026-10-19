@@ -27,6 +27,7 @@ import {
   checkImportPlan,
   checkJobList,
   checkLinkCheckResults,
+  checkLinkDeletion,
   checkLogin,
   checkMeta,
   checkNodeList,
@@ -69,6 +70,7 @@ import type {
   JobType,
   LoginResponse,
   LinkCheckResultsResponse,
+  LinkDeletionResponse,
   MetaResponse,
   Node,
   NodeListResponse,
@@ -119,6 +121,7 @@ const contract = {
     checkScheduleList(v, 'body'),
   'link-check-results': (v: unknown): LinkCheckResultsResponse =>
     checkLinkCheckResults(v, 'body'),
+  'link-deletion-mixed': (v: unknown): LinkDeletionResponse => checkLinkDeletion(v, 'body'),
   duplicates: (v: unknown): DuplicatesResponse => checkDuplicates(v, 'body'),
   // Start page: the source a device may read, the subtree it resolves to,
   // and the same read as a signed-in account.
