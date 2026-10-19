@@ -85,8 +85,21 @@ func (s *Server) writeSpaceError(w http.ResponseWriter, r *http.Request, err err
 	case errors.Is(err, space.ErrSpaceNotFound):
 		s.writeError(w, r, http.StatusNotFound, "NOT_FOUND", "no such space")
 	case errors.Is(err, space.ErrSpaceNotEmpty):
-		s.writeError(w, r, http.StatusConflict, "SPACE_NOT_EMPTY",
-			"this space still has bookmarks, backups or devices bound to it")
+		// Which of the five it is belongs to the client: the server's English
+		// string is a fallback for whoever reads the log, the blockers array is
+		// what turns "still has bookmarks, backups or devices" into the one
+		// thing this space actually has left.
+		var blockers []string
+		var notEmpty *space.NotEmptyError
+		if errors.As(err, &notEmpty) {
+			blockers = make([]string, 0, len(notEmpty.Blockers))
+			for _, b := range notEmpty.Blockers {
+				blockers = append(blockers, string(b))
+			}
+		}
+		s.writeErrorWithDetails(w, r, http.StatusConflict, "SPACE_NOT_EMPTY",
+			"this space is still referenced and cannot be deleted",
+			map[string]any{"blockers": blockers})
 	default:
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL", "internal error")
 	}

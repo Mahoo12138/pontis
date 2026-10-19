@@ -97,13 +97,18 @@ func (s *SpaceStore) RenameSpace(
 // spaceBlockers count the rows that keep a space from being deleted. Every one
 // of these tables references sync_spaces(id) with no ON DELETE clause, so the
 // database would refuse the delete anyway; counting them first turns that
-// refusal into a reason the client can show.
-var spaceBlockers = []string{
-	`SELECT COUNT(*) FROM nodes WHERE space_id = ?`,
-	`SELECT COUNT(*) FROM device_space_bindings WHERE space_id = ?`,
-	`SELECT COUNT(*) FROM space_backups WHERE space_id = ?`,
-	`SELECT COUNT(*) FROM publications WHERE space_id = ?`,
-	`SELECT COUNT(*) FROM schedules WHERE space_id = ?`,
+// refusal into a reason the client can show. All of them are counted, because
+// the first match is rarely the only one and never the one the reader can act
+// on without also ruling out the rest.
+var spaceBlockers = []struct {
+	reason space.SpaceBlocker
+	query  string
+}{
+	{space.BlockerContent, `SELECT COUNT(*) FROM nodes WHERE space_id = ?`},
+	{space.BlockerBinding, `SELECT COUNT(*) FROM device_space_bindings WHERE space_id = ?`},
+	{space.BlockerBackup, `SELECT COUNT(*) FROM space_backups WHERE space_id = ?`},
+	{space.BlockerPublication, `SELECT COUNT(*) FROM publications WHERE space_id = ?`},
+	{space.BlockerSchedule, `SELECT COUNT(*) FROM schedules WHERE space_id = ?`},
 }
 
 // DeleteSpace removes an empty space and its root slots, clearing it from the
@@ -127,14 +132,18 @@ func (s *SpaceStore) DeleteSpace(ctx context.Context, owner canonical.UserID, id
 		return false, nil
 	}
 
-	for _, query := range spaceBlockers {
+	var found []space.SpaceBlocker
+	for _, blocker := range spaceBlockers {
 		var n int64
-		if err := tx.QueryRowContext(ctx, query, string(id)).Scan(&n); err != nil {
+		if err := tx.QueryRowContext(ctx, blocker.query, string(id)).Scan(&n); err != nil {
 			return false, err
 		}
 		if n > 0 {
-			return false, space.ErrSpaceNotEmpty
+			found = append(found, blocker.reason)
 		}
+	}
+	if len(found) > 0 {
+		return false, &space.NotEmptyError{Blockers: found}
 	}
 
 	if _, err := tx.ExecContext(ctx,

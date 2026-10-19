@@ -32,6 +32,39 @@ var (
 	ErrSpaceNotEmpty = errors.New("space: space still has content or devices bound to it")
 )
 
+// SpaceBlocker names one kind of row that keeps a space from being deleted.
+// The set is the tables that reference sync_spaces(id); see ErrSpaceNotEmpty.
+type SpaceBlocker string
+
+const (
+	BlockerContent     SpaceBlocker = "content"
+	BlockerBinding     SpaceBlocker = "binding"
+	BlockerBackup      SpaceBlocker = "backup"
+	BlockerPublication SpaceBlocker = "publication"
+	BlockerSchedule    SpaceBlocker = "schedule"
+)
+
+// NotEmptyError carries every blocker found in one pass, not just the first.
+// A space emptied of bookmarks but still bound to a device was told it "still
+// has bookmarks, backups or devices" — a sentence that describes three things
+// and rules out none of them, so the reader could not act on it. Reporting the
+// set lets the answer name what is actually left.
+type NotEmptyError struct {
+	Blockers []SpaceBlocker
+}
+
+func (e *NotEmptyError) Error() string {
+	parts := make([]string, 0, len(e.Blockers))
+	for _, b := range e.Blockers {
+		parts = append(parts, string(b))
+	}
+	return "space: still referenced by " + strings.Join(parts, ", ")
+}
+
+// Is keeps `errors.Is(err, ErrSpaceNotEmpty)` working for callers that only
+// need to know that the space was not empty.
+func (e *NotEmptyError) Is(target error) bool { return target == ErrSpaceNotEmpty }
+
 // MaxSpacesPerUser is the V1 soft limit.
 const MaxSpacesPerUser = 16
 

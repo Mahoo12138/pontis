@@ -26,11 +26,12 @@ import {
   IconLogout,
 } from '@tabler/icons-react';
 import { useTranslation } from 'react-i18next';
+import { notifications } from '@mantine/notifications';
 import { useMe, useLogout } from '../../hooks/use-auth';
 import { useSpaces, useCreateSpace, useRenameSpace, useDeleteSpace } from '../../hooks/use-spaces';
 import { useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '@pontis/api';
-import type { Space } from '@pontis/api';
+import type { Space, SpaceListResponse } from '@pontis/api';
 import {
   sidebarLogo,
   sidebarSection,
@@ -68,7 +69,6 @@ export default function Sidebar() {
   const [renameValue, setRenameValue] = useState('');
   const [renameError, setRenameError] = useState<string | null>(null);
   const [deleteFor, setDeleteFor] = useState<Space | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const openRename = (space: Space) => {
     setMenuFor(null);
@@ -79,7 +79,6 @@ export default function Sidebar() {
 
   const openDelete = (space: Space) => {
     setMenuFor(null);
-    setDeleteError(null);
     setDeleteFor(space);
   };
 
@@ -97,18 +96,39 @@ export default function Sidebar() {
 
   const handleDelete = () => {
     if (!deleteFor) return;
-    setDeleteError(null);
     delSpace.mutate(deleteFor.id, {
       onSuccess: () => {
-        // Leave the deleted space's route before the cache refreshes, or the
-        // explorer still mounted there refetches a space that is gone.
-        if (location.pathname.startsWith(`/spaces/${deleteFor.id}`)) navigate('/');
-        // exact: the node queries are keyed ['spaces', id, 'nodes'], so a
-        // prefix match would refetch the space that has just been deleted.
+        const id = deleteFor.id;
+        // The cache has to be wrong-no-more before the route moves: '/' reads
+        // `spaces[0]` from this same query, so a list that still holds the space
+        // that just ceased to exist redirects straight back to it, and the
+        // explorer lands there asking for a space that is gone.
+        qc.setQueryData<SpaceListResponse>(['spaces'], (prev) =>
+          prev ? { ...prev, spaces: prev.spaces.filter((s) => s.id !== id) } : prev,
+        );
+        qc.removeQueries({ queryKey: ['spaces', id] });
+        if (location.pathname.startsWith(`/spaces/${id}`)) navigate('/');
         qc.invalidateQueries({ queryKey: ['spaces'], exact: true });
         setDeleteFor(null);
       },
-      onError: (err) => setDeleteError(spaceErrorText(err, t)),
+      // The refusal names what is still holding the space, and it is worth
+      // reading after the dialog is gone: a reason inside a dialog that stays
+      // open asking for the same click again is not an answer.
+      onError: (err) => {
+        const lines = deleteBlockers(err, t);
+        notifications.show({
+          color: 'errorRed',
+          title: t('sidebar:delete_blocked_title'),
+          message: lines.length
+            ? lines.map((line) => (
+              <Text key={line} fz="sm">
+                {line}
+              </Text>
+            ))
+            : spaceErrorText(err, t),
+          autoClose: 8000,
+        });
+      },
     });
   };
 
@@ -374,11 +394,6 @@ export default function Sidebar() {
             {deleteFor.name}
           </Text>
         )}
-        {deleteError && (
-          <Text fz="sm" c="red" mt="xs">
-            {deleteError}
-          </Text>
-        )}
         <Group justify="flex-end" mt="md">
           <Button variant="subtle" onClick={() => setDeleteFor(null)}>
             {t('sidebar:cancel')}
@@ -390,6 +405,32 @@ export default function Sidebar() {
       </Modal>
     </div>
   );
+}
+
+/**
+ * What actually holds the space, in the reader's language. The server answers
+ * 409 SPACE_NOT_EMPTY with the set of kinds still referencing it, and each one
+ * gets its own line: "bookmarks, backups or devices" is three claims that rule
+ * out none of them, so a space emptied of bookmarks but still bound to a device
+ * left the reader checking things that were already clear. An older server
+ * sends no list, and the generic line stays the fallback.
+ */
+const BLOCKER_KEYS: Record<string, string> = {
+  content: 'sidebar:blocked_content',
+  binding: 'sidebar:blocked_binding',
+  backup: 'sidebar:blocked_backup',
+  publication: 'sidebar:blocked_publication',
+  schedule: 'sidebar:blocked_schedule',
+};
+
+function deleteBlockers(err: unknown, t: (key: string) => string): string[] {
+  if (!(err instanceof ApiError) || err.code !== 'SPACE_NOT_EMPTY') return [];
+  const raw = err.details?.blockers;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((b) => BLOCKER_KEYS[String(b)])
+    .filter((key): key is string => key !== undefined)
+    .map((key) => t(key));
 }
 
 /**
